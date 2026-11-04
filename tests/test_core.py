@@ -398,8 +398,6 @@ class TestClaudeCall(unittest.TestCase):
         self.assertEqual(seen["input"], "PROMPT-TEXT")
         self.assertNotIn("PROMPT-TEXT", seen["cmd"])
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestRealUseBugs(unittest.TestCase):
@@ -669,3 +667,60 @@ class TestRunReviewIncremental(unittest.TestCase):
                     os.environ.pop("CRUCIBLE_CACHE", None)
                 else:
                     os.environ["CRUCIBLE_CACHE"] = olds[3]
+
+
+class TestRerunSameCommit(unittest.TestCase):
+    """Real-use bug i: a rerun on the same commit reused the verdict even when the untracked PR_DRAFT.md (or the
+    base) had changed, and --fresh without --force did too. The verdict is reused only for identical inputs."""
+
+    def test_stale_inputs(self):
+        inp = {"base": "b1", "draft": "/r/PR_DRAFT.md", "draft_sha": "h1"}
+        done = {"status": "done", "inputs": dict(inp)}
+        self.assertIsNone(V.stale_inputs(done, inp))
+        self.assertEqual(V.stale_inputs(None, inp), "")
+        self.assertEqual(V.stale_inputs(dict(done, status="failed"), inp), "")
+        self.assertEqual(V.stale_inputs(done, dict(inp, draft_sha="h2")), "the draft")
+        self.assertEqual(V.stale_inputs(done, dict(inp, base="b2")), "the base")
+        self.assertIn("not recorded", V.stale_inputs({"status": "done"}, inp))   # written before inputs existed
+
+    def test_draft_edit_and_fresh_rereview(self):
+        repo = make_repo({"a.js": "export const a = 1;\n"}, {"a.js": "export const a = 2;\n"})
+        home = tempfile.mkdtemp(prefix="crucible-home-")
+        seen = []
+
+        def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
+            if "findings" in schema["properties"]:
+                seen.append(prompt)
+                return {"summary": "s", "findings": []}, 0.01
+            return {"keep": True, "severity": "low", "method": "read", "actions": "", "evidence": "", "confidence": "high"}, 0
+        draft = os.path.join(repo, "PR_DRAFT.md")
+        olds = (V.HOME, U.HOME, V.claude, os.environ.get("CRUCIBLE_CACHE"))
+        V.HOME = U.HOME = home
+        os.environ["CRUCIBLE_CACHE"] = os.path.join(home, "cache")
+        V.claude = fake
+        run = lambda **kw: V.run_review(repo, "main", offline=True, skip_checks=True, log=lambda *_: None, **kw)
+        try:
+            open(draft, "w").write("Bumps a to 2.\n")
+            d = run()
+            self.assertEqual(U.read_json(os.path.join(d, "review.json"))["status"], "done")
+            self.assertEqual(len(seen), 1)
+            run()                                                   # same inputs: the verdict is reused, no model call
+            self.assertEqual(len(seen), 1)
+            open(draft, "w").write("Bumps a to 2 because the spec says so.\n")
+            run()                                                   # same commit, edited draft: judged again
+            self.assertEqual(len(seen), 2)
+            self.assertIn("because the spec says so", seen[-1])
+            r = U.read_json(os.path.join(d, "review.json"))
+            self.assertEqual(r["inputs"]["draft_sha"], V.review_inputs(repo, r["base"])["draft_sha"])
+            run(fresh=True)                                         # --fresh alone redoes it and skips the cache
+            self.assertEqual(len(seen), 3)
+        finally:
+            V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
+            if olds[3] is None:
+                os.environ.pop("CRUCIBLE_CACHE", None)
+            else:
+                os.environ["CRUCIBLE_CACHE"] = olds[3]
+
+
+if __name__ == "__main__":
+    unittest.main()

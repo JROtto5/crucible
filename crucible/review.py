@@ -293,6 +293,26 @@ def split_prev(findings, ranges, hunks, prev_sha):
     return carried, touched
 
 
+def review_inputs(repo, base, draft=None):
+    """What a verdict depends on besides the commit. PR_DRAFT.md is untracked, so editing it doesn't move HEAD;
+    without this a rerun returned the old verdict for a draft it never read (real-use bug i)."""
+    path, text = readiness.find_draft(repo, draft)
+    return {"base": base, "draft": os.path.abspath(path) if path else None,
+            "draft_sha": hashlib.sha256(text.encode()).hexdigest()[:16] if path else None}
+
+
+def stale_inputs(prev, inputs):
+    """None if `prev` is a finished review of exactly these inputs, else why it can't be reused ("" = no usable review).
+    Reviews written before inputs were recorded can't prove they saw this draft, so they are redone."""
+    if not prev or prev.get("status") != "done":
+        return ""
+    old = prev.get("inputs")
+    if old is None:
+        return "the draft (not recorded by the last review)"
+    why = [n for k, n in (("base", "the base"), ("draft", "the draft path"), ("draft_sha", "the draft")) if old.get(k) != inputs[k]]
+    return " and ".join(why) or None
+
+
 def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, draft=None, base_checks=False,
                offline=False, skip_checks=False, log=print, full=False, fresh=False, no_tiers=False):
     """full: ignore the previous review of this branch (no incremental re-review).
@@ -312,12 +332,18 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         raise Failed("a review of this commit is already running")
-    if os.path.exists(os.path.join(d, "review.json")) and not force:
-        log("already reviewed this commit (use --force to redo)")
-        return d
+    inputs = review_inputs(repo, base, draft)
+    if not (force or fresh):
+        stale = stale_inputs(read_json(os.path.join(d, "review.json")), inputs)
+        if stale is None:
+            log("already reviewed this commit with the same base and draft (use --force to redo)")
+            return d
+        if stale:
+            log(f"  re-reviewing this commit: {stale} changed since its last review")
     started = dt.datetime.now().isoformat(timespec="seconds")
     budget = Budget(budget_usd)
-    record = {"repo": project, "sha": sha, "base": base, "base_ref": base_ref, "started": started, "status": "running"}
+    record = {"repo": project, "sha": sha, "base": base, "base_ref": base_ref, "started": started, "status": "running",
+              "inputs": inputs}
     try:
         diff_text = git(repo, "diff", "--unified=5", "--no-color", f"{base}..HEAD")
         if not diff_text:

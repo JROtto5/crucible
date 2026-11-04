@@ -157,7 +157,7 @@ def main(argv=None):
     r.add_argument("--base-checks", action="store_true", help="re-run failing checks on the base to spot pre-existing failures")
     r.add_argument("--skip-checks", action="store_true"); r.add_argument("--offline", action="store_true")
     r.add_argument("--full", action="store_true", help="review the whole change, not just what changed since the last review")
-    r.add_argument("--fresh", action="store_true", help="bypass the review/verification cache (--force alone reuses it, so verdicts are stable)")
+    r.add_argument("--fresh", action="store_true", help="redo the review and bypass the review/verification cache (--force alone reuses it, so verdicts are stable)")
     r.add_argument("--no-tiers", action="store_true", help="verify every finding with the strong model only")
     st = s.add_parser("status"); st.add_argument("repo", nargs="?", default=".")
     an = s.add_parser("answer"); an.add_argument("id"); an.add_argument("disposition", choices=["fixed", "refuted", "deferred"])
