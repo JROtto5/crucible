@@ -159,9 +159,9 @@ def claude(prompt, model, schema, cwd, budget=None, tools=TOOLS_READ, effort="hi
         cmd += ["--tools", ""]
     if budget and budget.remaining() is not None:
         cmd += ["--max-budget-usd", f"{max(budget.remaining(), 0.01):.2f}"]
-    cmd.append(prompt)
+    # prompt goes on stdin: --allowedTools is variadic and would swallow a trailing positional prompt
     try:
-        r = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=timeout)
+        r = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, input=prompt, timeout=timeout)
     except subprocess.TimeoutExpired:
         raise Failed(f"model call timed out after {timeout}s")
     try:

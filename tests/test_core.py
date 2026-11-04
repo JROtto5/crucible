@@ -251,3 +251,21 @@ class TestWaivers(unittest.TestCase):
         self.assertTrue(ready_after_waivers(ready, {"tests updated for behaviour change": "no WebGPU backend test suite"}))
         ready["items"].append({"item": "no formatting-only churn", "status": "fail"})
         self.assertFalse(ready_after_waivers(ready, {"tests updated for behaviour change": "x"}))
+
+
+class TestClaudeCall(unittest.TestCase):
+    def test_prompt_is_sent_on_stdin_not_argv(self):
+        # --allowedTools is variadic, so a trailing positional prompt was parsed as a tool name
+        import json
+        from unittest import mock
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen["cmd"], seen["input"] = cmd, kw.get("input")
+            return subprocess.CompletedProcess(cmd, 0, json.dumps({"structured_output": {"ok": True}}), "")
+
+        with mock.patch.object(U.subprocess, "run", fake_run):
+            out, _ = U.claude("PROMPT-TEXT", "m", {"type": "object"}, ".")
+        self.assertEqual(out, {"ok": True})
+        self.assertEqual(seen["input"], "PROMPT-TEXT")
+        self.assertNotIn("PROMPT-TEXT", seen["cmd"])
