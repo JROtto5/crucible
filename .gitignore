@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.shifts/
+.improve.lock
+improve.sh
+improve-prompt.md
+.venv/
