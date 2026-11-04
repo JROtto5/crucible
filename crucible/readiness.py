@@ -20,7 +20,7 @@ def find_draft(repo, draft=None):
     return None, ""
 
 
-FENCE_RX = re.compile(r"^\s*(```|~~~)")
+FENCE_RX = re.compile(r"^\s{0,3}(`{3,}|~{3,})(.*)$")
 BODY_HEAD_RX = re.compile(r"^#{1,4}\s+(pr\s+)?body\s*:?\s*$", re.I)
 TITLE_HEAD_RX = re.compile(r"^#{1,4}\s+(pr\s+)?title\s*:?\s*$", re.I)
 # Headings that open the author's own notes. Everything from the first one on is never submitted.
@@ -28,6 +28,22 @@ NOTES_HEAD_RX = re.compile(r"^#{1,4}\s+.*\b(explain it to me|q&a prep|author'?s?
                            r"notes (for|to) (me|myself|the author)|not for (submission|upstream|the pr)|do not submit|"
                            r"issue to file)\b", re.I)
 NOTES_MARKER_RX = re.compile(r"^\s*<!--\s*crucible:\s*notes\s*-->\s*$", re.I)
+NOTES_MARKER = "<!-- crucible: notes -->"
+
+
+def _unfenced(lines):
+    """Indexes of lines outside fenced code blocks (CommonMark: a fence closes on the same char, at least as long)."""
+    out, fence = [], None
+    for i, l in enumerate(lines):
+        m = FENCE_RX.match(l)
+        if fence is None:
+            if m:
+                fence = m.group(1)
+            else:
+                out.append(i)
+        elif m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence) and not m.group(2).strip():
+            fence = None
+    return out
 
 
 def split_draft(text):
@@ -35,34 +51,26 @@ def split_draft(text):
 
     -> {"title", "body", "notes"}. The body starts after a `## Body` heading if there is one (so a metadata preamble
     and a `## Title` section are skipped); otherwise after a leading `# Title` line. It ends at the first notes
-    heading (e.g. "Explain it to me", "Issue to file first") or a `<!-- crucible: notes -->` line, outside code
-    fences. A draft without any of these markers is all body, as before."""
+    heading after that start (e.g. "Explain it to me", "Issue to file first") or a `<!-- crucible: notes -->` line,
+    outside code fences. Notes never include the marker line itself. A draft without markers is all body, as before."""
     lines = (text or "").split("\n")
-    fenced, body_at, title_at, notes_at = False, None, None, None
-    for i, l in enumerate(lines):
-        if FENCE_RX.match(l):
-            fenced = not fenced
-            continue
-        if fenced:
-            continue
-        if NOTES_HEAD_RX.match(l) or NOTES_MARKER_RX.match(l):
-            notes_at = i
-            break
-        if body_at is None and BODY_HEAD_RX.match(l):
-            body_at = i + 1
-        elif title_at is None and body_at is None and TITLE_HEAD_RX.match(l):
-            title_at = i + 1
-    end = len(lines) if notes_at is None else notes_at
+    open_lines = _unfenced(lines)
+    body_at = next((i + 1 for i in open_lines if BODY_HEAD_RX.match(lines[i])), None)
+    has_h1 = bool(lines and re.match(r"^#\s+\S", lines[0]))
+    start = body_at if body_at is not None else (1 if has_h1 else 0)
+    end = next((i for i in open_lines if i >= start and (NOTES_HEAD_RX.match(lines[i]) or NOTES_MARKER_RX.match(lines[i]))),
+               len(lines))
+    title_at = next((i + 1 for i in open_lines if i < start and TITLE_HEAD_RX.match(lines[i])), None)
     title = ""
     if title_at is not None:
-        title = next((l.strip().strip("`").strip() for l in lines[title_at:end] if l.strip()), "")
-    elif lines and re.match(r"^#\s+\S", lines[0]):
+        title = next((l.strip().strip("`").strip() for l in lines[title_at:start] if l.strip() and not l.startswith("#")), "")
+    elif has_h1:
         title = lines[0][1:].strip()
-    start = body_at if body_at is not None else (1 if lines and re.match(r"^#\s+\S", lines[0]) else 0)
     body = "\n".join(lines[start:end])
     # a trailing horizontal rule usually separated the body from the notes
-    body = re.sub(r"(\n\s*(-{3,}|\*{3,}|_{3,})\s*)+\s*$", "", body).strip("\n")
-    return {"title": title, "body": body, "notes": "\n".join(lines[end:]).strip("\n")}
+    body = re.sub(r"(\n\s*(-{3,}|\*{3,}|_{3,})\s*)+\s*$", "", "\n" + body).strip("\n")
+    notes = lines[end + 1:] if end < len(lines) and NOTES_MARKER_RX.match(lines[end]) else lines[end:]
+    return {"title": title, "body": body, "notes": "\n".join(notes).strip("\n")}
 
 
 def submitted_text(text):

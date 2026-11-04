@@ -177,7 +177,8 @@ def ai_tells(text, style=None, allowed_headings=()):
     w = words(text)
     if med and w > max(2.5 * med, med + 150):
         out.append(("length", f"{w} words vs project median {med}"))
-    common = {norm_heading(h) for h in (style.get("body") or {}).get("common_headings") or []} | allowed
+    # only learned measurements can call a heading unusual; the template just exempts its own headings
+    common = {norm_heading(h) for h in (style.get("body") or {}).get("common_headings") or []}
     own = [h for h in HEADING_RX.findall(text) if norm_heading(h) not in allowed]
     if style and (style.get("body") or {}).get("pct_with_headings", 100) < 30:
         if len(own) >= 2:
@@ -242,7 +243,7 @@ POLISH_SCHEMA = {"type": "object", "properties": {"title": {"type": "string"}, "
 
 
 def polish(repo, project, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-opus-5-5"), budget_usd=1.0, log=print):
-    from .readiness import find_draft, split_draft, template_headings
+    from .readiness import NOTES_MARKER, find_draft, split_draft, template_headings
     path, full = find_draft(repo)
     parts = split_draft(full)
     draft = (f"Title: {parts['title']}\n\n" if parts["title"] else "") + parts["body"]
@@ -269,7 +270,7 @@ def polish(repo, project, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-
     newp = os.path.join(repo, "PR_DRAFT.polished.md")
     txt = f"# {out['title']}\n\n{out['body'].strip()}\n"
     # carry the author's notes over, so the polished draft (which review prefers) still has them, marked off
-    open(newp, "w").write(txt + (f"\n<!-- crucible: notes -->\n\n{parts['notes']}\n" if parts["notes"] else ""))
+    open(newp, "w").write(txt + (f"\n{NOTES_MARKER}\n\n{parts['notes']}\n" if parts["notes"] else ""))
     notes = "\n".join(f"- removed: {r}" for r in out["removed"]) or "- nothing removed"
     open(os.path.join(repo, "PR_DRAFT.polish-notes.md"), "w").write(f"# Polish notes\n\n{notes}\n\n## Facts kept\n\n"
                                                                     + "\n".join(f"- {k}" for k in out["kept_facts"]) + "\n")

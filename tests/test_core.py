@@ -174,7 +174,19 @@ class TestDraftSplit(unittest.TestCase):
         self.assertEqual((d["title"], d["notes"]), ("WebGPUBackend: Fix timestamps.", ""))
         self.assertEqual(d["body"], "\n**Description**\n\nFixes #1.\n".strip("\n"))
         self.assertEqual(R.split_draft("just a body\n\n## Out of scope\nfollow-up")["notes"], "")
-        self.assertEqual(R.split_draft("body\n<!-- crucible: notes -->\nmine")["notes"], "<!-- crucible: notes -->\nmine")
+        self.assertEqual(R.split_draft("body\n<!-- crucible: notes -->\nmine")["notes"], "mine")
+
+    def test_nested_fences_and_notes_before_body(self):
+        tilde = "# T\n\n~~~\n```\n~~~\n\n## Explain it to me\nprivate\n"
+        self.assertEqual(R.split_draft(tilde)["notes"], "## Explain it to me\nprivate")
+        four = "# T\n\n````md\n```md\n## Explain it to me\n```\n````\nreal body end\n"
+        d = R.split_draft(four)
+        self.assertEqual(d["notes"], "")
+        self.assertTrue(d["body"].endswith("real body end"))
+        pre = "# Draft\n\n## Notes for me\nfile the issue first\n\n## Body\nFixes #5.\n\n## Explain it to me\nx\n"
+        d = R.split_draft(pre)
+        self.assertEqual(d["body"], "Fixes #5.")
+        self.assertEqual(d["notes"], "## Explain it to me\nx")
 
     def test_notes_dont_drive_findings(self):
         style = {"body": {"median_words": 60, "pct_with_emoji": 50, "pct_with_headings": 60,
@@ -192,6 +204,41 @@ class TestDraftSplit(unittest.TestCase):
         tpl = ["🔍 Description", "📸 Screenshots/Examples", "🔄 Breaking changes", "📋 Checklist", "📝 Additional notes"]
         self.assertEqual(S.ai_tells(body, style, tpl), [])
         self.assertEqual(S.norm_heading("🔄 Breaking changes:"), "breaking changes")
+        # a template alone is no evidence that other headings are unusual
+        self.assertEqual(S.ai_tells("## A\n## B\n## C\n", {}, ["Description"]), [])
+
+    def test_evaluate_reads_only_the_submitted_part(self):
+        d = make_repo({"a.js": "1\n"}, {"a.js": "2\n"})
+        open(os.path.join(d, "PR_DRAFT.md"), "w").write(
+            "# Fix a\n\nShort body, tested with npm test.\n\n## Explain it to me\nsee #77 for history\n")
+        base = U.git(d, "merge-base", "main", "HEAD")
+        files = D.parse(U.git(d, "diff", f"{base}..HEAD"))
+        out = R.evaluate(d, "t__evaluate", base, files, offline=True)
+        self.assertIsNone(out["issue"])  # #77 is in the author's notes, not the PR
+        with open(os.path.join(d, "PR_DRAFT.md"), "w") as fh:
+            fh.write("# Fix a\n\nFixes #12.\n\n## Explain it to me\nsee #77\n")
+        self.assertEqual(R.evaluate(d, "t__evaluate", base, files, offline=True)["issue"], 12)
+
+    def test_polish_keeps_notes_once(self):
+        d = make_repo({"a.js": "1\n"})
+        with open(os.path.join(d, "PR_DRAFT.md"), "w") as fh:
+            fh.write("# Fix a\n\nThis PR introduces a fix.\n\n## Explain it to me\nwhy: because\n")
+        seen, orig = [], S.claude
+
+        def fake(prompt, *a, **k):
+            seen.append(prompt)
+            return {"title": "Fix a", "body": "Fix a.", "removed": [], "kept_facts": []}, 0.0
+        S.claude = fake
+        try:
+            for _ in range(3):  # later runs read PR_DRAFT.polished.md
+                S.polish(d, "t__polish", log=lambda *_: None)
+        finally:
+            S.claude = orig
+        txt = open(os.path.join(d, "PR_DRAFT.polished.md")).read()
+        self.assertEqual(txt.count(R.NOTES_MARKER), 1, txt)
+        self.assertTrue(txt.rstrip().endswith("## Explain it to me\nwhy: because"), txt)
+        self.assertNotIn("why: because", seen[0])  # notes are never sent to be folded into the body
+        self.assertEqual(R.split_draft(txt)["body"], "Fix a.")
 
 
 class TestReviewLogic(unittest.TestCase):
