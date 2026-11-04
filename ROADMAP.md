@@ -7,6 +7,8 @@ Target: about 2027-01-04. 1.0 means a maintainer or a first-time contributor can
 - [x] A labelled fixture eval (`crucible eval`, 16 cases) with recall / false-blocking / cost in the README (v0.3)
 - [ ] A labelled set of at least 20 real merged upstream PRs replayed through `crucible review`, with precision and recall reported in the README
 - [ ] Grow the fixture eval to 30+ cases, including multi-file changes and severity calibration (the refcount case is found but rated medium)
+- [x] A rerun on a reviewed commit re-judges an edited draft or a moved base instead of reusing the verdict (real-use bug i, 2026-11-04)
+- [ ] A carried finding is re-checked when the later changes touch the same file, not only its cited lines (2026-11-04: a "no test for X" finding carried with stale evidence after the test landed lower in the same file)
 - [ ] Each false-positive class seen in real reports gets a regression test (started: author notes counted as the PR body; template headings flagged as unusual)
 - [ ] The verifier can only run `pytest` on Python repos (no `python3 -c` probes), so Python findings are verified by reading far more often than JS ones (seen in crucible's own reviews, 2026-11-04). Decide on a safe probe runner
 - [x] Prefer `Closes/Fixes #N` over a bare `#N` for "issue linked", and reject template placeholders (v0.3)
