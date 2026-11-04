@@ -515,7 +515,8 @@ class TestEvalScoring(unittest.TestCase):
     def test_hits_and_scores(self):
         from crucible import evalrun as E
         exp = {"kind": "bug", "file": "src/a.js", "lines": [10], "keywords": ["off-by-one"]}
-        self.assertTrue(E.hits({"file": "src/a.js", "line": 12, "title": "x", "problem": ""}, exp))
+        self.assertTrue(E.hits({"file": "src/a.js", "line": 11, "title": "x", "problem": ""}, exp))
+        self.assertFalse(E.hits({"file": "src/a.js", "line": 12, "title": "no tests for mean()", "problem": ""}, exp))
         self.assertTrue(E.hits({"file": "src/a.js", "line": 40, "title": "an off-by-one", "problem": ""}, exp))
         self.assertFalse(E.hits({"file": "src/b.js", "line": 10, "title": "off-by-one", "problem": ""}, exp))
         rev = {"status": "done", "cost_usd": 0.2, "dropped": [],
@@ -609,7 +610,8 @@ class TestRunReviewIncremental(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             repo, home = os.path.join(d, "r"), os.path.join(d, "home")
             os.makedirs(os.path.join(repo, "src"))
-            env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+            env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",
+                       GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")   # the user's git config can't change the fixture
             g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True, env=env).stdout.decode().strip()
             w = lambda p, t: open(os.path.join(repo, p), "w").write(t)
             g("init", "-q", "-b", "main"); w("src/a.js", "export const a = 1;\n"); w("src/b.js", "export const b = 1;\n")
