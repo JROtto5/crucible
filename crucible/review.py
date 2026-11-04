@@ -194,9 +194,10 @@ def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, hou
         """)
 
 
-def verify_prompt(f, code):
+def verify_prompt(f, code, since=""):
     return textwrap.dedent(f"""\
         You are verifying ONE claim about a code change in this checkout. Try hard to DISPROVE it.
+        {since}
         Claim: {f['title']} (at {f['file']}:{f['line']}, proposed severity {f['severity']})
         Falsification test: {f['wrong_if']}
 
@@ -233,10 +234,11 @@ def needs_escalation(v):
     return bool(v["keep"]) and v["severity"] in BLOCKING
 
 
-def verify_tiered(f, code, repo, budget, tiers, fresh=False):
-    """-> (verdict, trail). trail lists each tier's model, keep, severity and confidence."""
+def verify_tiered(f, code, repo, budget, tiers, fresh=False, since=""):
+    """-> (verdict, trail). trail lists each tier's model, keep, severity and confidence.
+    `since` describes later commits for a re-check, so it never replays the cached verdict of the earlier round."""
     trail, v = [], None
-    prompt = verify_prompt(f, code)
+    prompt = verify_prompt(f, code, since)
     for i, model in enumerate(tiers):
         key = "v-" + hashlib.sha256((model + prompt).encode()).hexdigest()[:32]
         use_cache = not fresh and os.environ.get("CRUCIBLE_CACHE_VERIFY", "1") != "0"
@@ -431,9 +433,14 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                         dropped.append(f)
         # a carried finding can be fixed by a change elsewhere (a test added in another file): re-check it cheaply
         if carried and len(tiers) > 1:
+            since = (f"This claim was verified on an earlier commit ({prev_sha[:10]}); its cited lines are unchanged, but "
+                     f"these files changed since then: {', '.join(record['incremental']['files']) or '(none)'}. Re-check "
+                     f"whether those later changes resolve it (e.g. a test added elsewhere, a caller fixed).\n"
+                     f"Changes since {prev_sha[:10]} (stat):\n{git(repo, 'diff', '--stat', f'{prev_sha}..HEAD', check=False)[:2000]}")
+
             def recheck(f):
                 try:
-                    v, trail = verify_tiered(f, region(repo, sha, f["file"], f["line"]), repo, budget, tiers[:1], fresh)
+                    v, trail = verify_tiered(f, region(repo, sha, f["file"], f["line"]), repo, budget, tiers[:1], fresh, since)
                     return f, v
                 except Failed:
                     return f, None

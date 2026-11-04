@@ -149,7 +149,7 @@ def resolve_issue(repo, numbers):
         data = gh_json(f"repos/{slug}/issues/{n}")
         if data is None:              # can't tell (rate limit, no network): trust the link
             return n, skipped
-        if data.get("pull_request"):
+        if "pull_request" in data:
             skipped.append(n)
             continue
         return n, skipped
@@ -239,7 +239,7 @@ def unclaimed(repo, issue, me=None):
     if not data:
         return _item("issue still unclaimed", "warn", f"could not read {slug}#{issue}")
     probs = []
-    if data.get("pull_request"):
+    if "pull_request" in data:
         return _item("issue still unclaimed", "warn", f"{slug}#{issue} is a pull request, not an issue")
     if data.get("state") != "open":
         probs.append(f"issue is {data.get('state')}")

@@ -556,3 +556,27 @@ class TestSelfReviewFixes(unittest.TestCase):
 
     def test_linked_issues_order_and_dedupe(self):
         self.assertEqual(R.linked_issues("Refs #2693. Closes #2823. Fixes #2823."), [2693, 2823])
+
+
+class TestResolveIssue(unittest.TestCase):
+    def test_skips_prs_and_trusts_unknown(self):
+        orig = (R.gh_json, R.upstream_slug)
+        data = {2693: {"pull_request": {}}, 2823: {"state": "open"}}
+        R.gh_json = lambda path: data.get(int(path.rsplit("/", 1)[1]))
+        R.upstream_slug = lambda repo: "o/r"
+        try:
+            self.assertEqual(R.resolve_issue(".", [2693, 2823]), (2823, [2693]))
+            self.assertEqual(R.resolve_issue(".", [2693]), (None, [2693]))
+            self.assertEqual(R.resolve_issue(".", [999]), (999, []))      # gh can't tell: trust the link
+            R.upstream_slug = lambda repo: None
+            self.assertEqual(R.resolve_issue(".", [2693]), (2693, []))    # no GitHub remote: first link
+        finally:
+            R.gh_json, R.upstream_slug = orig
+
+    def test_bare_issue_url_line_survives_polish(self):
+        body, restored = S.keep_required_lines("Fix x.\n\nhttps://github.com/o/r/issues/8", "Fix x, tidier.")
+        self.assertEqual(restored, ["https://github.com/o/r/issues/8"])
+
+    def test_recheck_prompt_differs_from_first_verification(self):
+        f = {"title": "t", "file": "a.js", "line": 1, "severity": "low", "wrong_if": "w"}
+        self.assertNotEqual(V.verify_prompt(f, "code"), V.verify_prompt(f, "code", "files changed since: b.js"))

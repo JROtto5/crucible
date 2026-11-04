@@ -242,13 +242,14 @@ POLISH_SCHEMA = {"type": "object", "properties": {"title": {"type": "string"}, "
                  "required": ["title", "body", "removed", "kept_facts"]}
 
 
-REQUIRED_LINE_RX = re.compile(r"^\s*(?:[-*]\s*)?(?:\*\*)?" + ISSUE_KW + r"\b(?:\*\*)?\s*:?\s*(?:\*\*)?\s*(?:#|https?://)", re.I)
+REQUIRED_LINE_RX = re.compile(r"^\s*(?:[-*]\s*)?(?:\*\*)?" + ISSUE_KW + r"\b(?:\*\*)?\s*:?\s*(?:\*\*)?\s*(?:#|https?://)"
+                              r"|github\.com/[^/\s]+/[^/\s]+/issues/\d+", re.I)
 
 
 def keep_required_lines(original, rewritten):
     """Issue-link lines ("Closes #12", "Related issue: #34697") are required by many PR templates and must survive a
     rewrite verbatim. Returns (body, restored lines). A line that was first in the original goes back on top, else at the end."""
-    req = [l.strip() for l in original.split("\n") if REQUIRED_LINE_RX.match(l)]
+    req = [l.strip() for l in original.split("\n") if REQUIRED_LINE_RX.search(l) and (REQUIRED_LINE_RX.match(l) or l.strip().startswith(("http", "<http", "[")))]
     have = {re.sub(r"\s+", " ", l.strip()).lower() for l in rewritten.split("\n")}
     missing = [l for l in req if re.sub(r"\s+", " ", l).lower() not in have]
     if not missing:

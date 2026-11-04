@@ -166,7 +166,7 @@ def write_results(label, settings, summary, results):
          "| case | kind | result | blocking | kept / dropped | cost |", "|---|---|---|---|---|---|"]
     for r in results:
         if not r.get("ok"):
-            L.append(f"| {r['case']} | {r['kind']} | ERROR: {r.get('error', '')[:60]} | | | ${r.get('cost', 0)} |")
+            L.append(f"| {r['case']} | {r['kind']} | ERROR: {r.get('error', '')[:200].replace('|', '/').replace(chr(10), ' ')} | | | ${r.get('cost', 0)} |")
             continue
         res = ("caught" if r["caught"] else "caught (non-blocking)" if r["caught_any_severity"] else "**missed**") \
             if r["kind"] == "bug" else ("clean" if not r["false_blocking"] else f"**{r['false_blocking']} false blocking**")
