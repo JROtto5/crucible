@@ -11,6 +11,7 @@
   crucible vote    ID up|down "reason" [--repo R]                 feedback; down-votes become memory proposals
   crucible remember PROJECT "lesson"                              curated repeat-mistakes memory
   crucible proposals PROJECT [--accept N]                         review proposed memory entries
+  crucible eval    [--cases ...] [--no-tiers] [--label L]         score the reviewer on labelled fixtures (eval/)
 
 crucible never pushes, comments, approves or posts. A human submits."""
 import argparse, datetime as dt, os, sys
@@ -25,7 +26,8 @@ def _p(repo):
 def cmd_review(a):
     from .review import run_review, load, report
     try:
-        run_review(_p(a.repo), a.base, a.force, a.budget, a.author, a.draft, a.base_checks, a.offline, a.skip_checks)
+        run_review(_p(a.repo), a.base, a.force, a.budget, a.author, a.draft, a.base_checks, a.offline, a.skip_checks,
+                   full=a.full, fresh=a.fresh, no_tiers=a.no_tiers)
     except Failed as e:
         sys.exit(f"crucible: {e}")
     return cmd_status(a)
@@ -119,6 +121,11 @@ def cmd_remember(a):
     print("remembered")
 
 
+def cmd_eval(a):
+    from .evalrun import run_eval
+    run_eval(a)
+
+
 def cmd_proposals(a):
     proj = a.project.replace("/", "__")
     p = os.path.join(project_dir(proj), "proposals.md")
@@ -149,6 +156,9 @@ def main(argv=None):
     r.add_argument("--draft", help="path to the PR description draft (default PR_DRAFT.md in the repo)")
     r.add_argument("--base-checks", action="store_true", help="re-run failing checks on the base to spot pre-existing failures")
     r.add_argument("--skip-checks", action="store_true"); r.add_argument("--offline", action="store_true")
+    r.add_argument("--full", action="store_true", help="review the whole change, not just what changed since the last review")
+    r.add_argument("--fresh", action="store_true", help="bypass the review/verification cache (--force alone reuses it, so verdicts are stable)")
+    r.add_argument("--no-tiers", action="store_true", help="verify every finding with the strong model only")
     st = s.add_parser("status"); st.add_argument("repo", nargs="?", default=".")
     an = s.add_parser("answer"); an.add_argument("id"); an.add_argument("disposition", choices=["fixed", "refuted", "deferred"])
     an.add_argument("note"); an.add_argument("--repo", default=".")
@@ -162,9 +172,16 @@ def main(argv=None):
     vo.add_argument("--repo", default=".")
     rm = s.add_parser("remember"); rm.add_argument("project"); rm.add_argument("lesson")
     pp = s.add_parser("proposals"); pp.add_argument("project"); pp.add_argument("--accept", type=int)
+    ev = s.add_parser("eval", help="run the review on labelled fixture changes (eval/cases) and score it")
+    ev.add_argument("--cases", nargs="*", help="substrings of case names to run (default: all)")
+    ev.add_argument("--review-model"); ev.add_argument("--verify-model"); ev.add_argument("--cheap-model")
+    ev.add_argument("--no-tiers", action="store_true"); ev.add_argument("--budget", type=float, default=1.5)
+    ev.add_argument("--jobs", type=int, default=4); ev.add_argument("--label")
+    ev.add_argument("--cache", help="shared review/verification cache dir across cases and runs (default: none)")
+    ev.add_argument("--no-write", action="store_true", help="don't update eval/RESULTS.md and history")
     a = p.parse_args(argv)
     {"review": cmd_review, "status": cmd_status, "answer": cmd_answer, "waive": cmd_waive, "learn": cmd_learn, "prep": cmd_prep,
-     "polish": cmd_polish, "reply": cmd_reply, "vote": cmd_vote, "remember": cmd_remember, "proposals": cmd_proposals}[a.cmd](a)
+     "polish": cmd_polish, "reply": cmd_reply, "vote": cmd_vote, "remember": cmd_remember, "proposals": cmd_proposals, "eval": cmd_eval}[a.cmd](a)
 
 
 if __name__ == "__main__":

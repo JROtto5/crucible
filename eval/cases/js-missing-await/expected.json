@@ -1,0 +1,17 @@
+{
+ "kind": "bug",
+ "message": "store: make save() report success",
+ "file": "src/store.js",
+ "lines": [
+  3,
+  5
+ ],
+ "keywords": [
+  "await",
+  "promise",
+  "before the write",
+  "race",
+  "not awaited",
+  "floating"
+ ]
+}

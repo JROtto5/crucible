@@ -1,0 +1,17 @@
+{
+ "kind": "bug",
+ "message": "format: put locale first in formatDate",
+ "file": "src/index.ts",
+ "lines": [
+  2
+ ],
+ "keywords": [
+  "breaking",
+  "backward",
+  "back-compat",
+  "signature",
+  "callers",
+  "argument order",
+  "semver"
+ ]
+}

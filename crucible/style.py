@@ -242,6 +242,29 @@ POLISH_SCHEMA = {"type": "object", "properties": {"title": {"type": "string"}, "
                  "required": ["title", "body", "removed", "kept_facts"]}
 
 
+REQUIRED_LINE_RX = re.compile(r"^\s*(?:[-*]\s*)?(?:\*\*)?(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?|related issues?|refs?)\b"
+                              r"(?:\*\*)?\s*:?\s*(?:#|https?://)", re.I)
+
+
+def keep_required_lines(original, rewritten):
+    """Issue-link lines ("Closes #12", "Related issue: #34697") are required by many PR templates and must survive a
+    rewrite verbatim. Returns (body, restored lines). A line that was first in the original goes back on top, else at the end."""
+    req = [l.strip() for l in original.split("\n") if REQUIRED_LINE_RX.match(l)]
+    have = {re.sub(r"\s+", " ", l.strip()).lower() for l in rewritten.split("\n")}
+    missing = [l for l in req if re.sub(r"\s+", " ", l).lower() not in have]
+    if not missing:
+        return rewritten, []
+    first = next((l.strip() for l in original.split("\n") if l.strip()), "")
+    top = [l for l in missing if l == first]
+    rest = [l for l in missing if l != first]
+    body = rewritten.strip("\n")
+    if top:
+        body = "\n".join(top) + "\n\n" + body
+    if rest:
+        body = body + "\n\n" + "\n".join(rest)
+    return body, missing
+
+
 def polish(repo, project, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-opus-5-5"), budget_usd=1.0, log=print):
     from .readiness import NOTES_MARKER, find_draft, split_draft, template_headings
     path, full = find_draft(repo)
@@ -268,8 +291,11 @@ def polish(repo, project, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-
         {draft}
         """), model, POLISH_SCHEMA, repo, Budget(budget_usd))
     newp = os.path.join(repo, "PR_DRAFT.polished.md")
-    txt = f"# {out['title']}\n\n{out['body'].strip()}\n"
-    # carry the author's notes over, so the polished draft (which review prefers) still has them, marked off
+    body, restored = keep_required_lines(parts["body"], out["body"])
+    if restored:
+        log(f"  restored required line(s) the rewrite dropped: {restored}")
+    txt = f"# {out['title']}\n\n{body.strip()}\n"
+    # carry the author's notes over, so the polished draft still has them, marked off
     open(newp, "w").write(txt + (f"\n{NOTES_MARKER}\n\n{parts['notes']}\n" if parts["notes"] else ""))
     notes = "\n".join(f"- removed: {r}" for r in out["removed"]) or "- nothing removed"
     open(os.path.join(repo, "PR_DRAFT.polish-notes.md"), "w").write(f"# Polish notes\n\n{notes}\n\n## Facts kept\n\n"

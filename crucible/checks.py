@@ -7,15 +7,53 @@ SCRIPT_ORDER = [("lint", ["lint"]), ("typecheck", ["typecheck", "type-check", "t
 
 
 def runner(repo):
-    if os.path.exists(os.path.join(repo, "pnpm-lock.yaml")):
+    """The repo's package manager, if it is installed; otherwise npm (which runs the same package.json scripts)."""
+    if os.path.exists(os.path.join(repo, "pnpm-lock.yaml")) and shutil.which("pnpm"):
         return "pnpm"
-    if os.path.exists(os.path.join(repo, "yarn.lock")):
+    if os.path.exists(os.path.join(repo, "yarn.lock")) and shutil.which("yarn"):
         return "yarn"
     return "npm"
 
 
-def detect(repo, project):
-    """-> {"checks": [{name, cmd, timeout}], "hints": [ci run lines], "source": "..."}"""
+def is_monorepo(repo):
+    pkg = read_json(os.path.join(repo, "package.json"), {}) or {}
+    return any(os.path.exists(os.path.join(repo, n)) for n in ("nx.json", "pnpm-workspace.yaml", "lerna.json", "turbo.json")) \
+        or bool(pkg.get("workspaces"))
+
+
+def package_dirs(repo, paths):
+    """Nearest package.json (below the repo root) with scripts, for each changed path. -> sorted relative dirs."""
+    out = set()
+    for p in paths or []:
+        d = os.path.dirname(p)
+        while d:
+            pkg = read_json(os.path.join(repo, d, "package.json"))
+            if pkg is not None:
+                if isinstance(pkg.get("scripts"), dict) and pkg["scripts"]:
+                    out.add(d)
+                break
+            d = os.path.dirname(d)
+    return sorted(out)
+
+
+def script_checks(scripts, r, cwd=None, label=""):
+    checks = []
+    for name, keys in SCRIPT_ORDER:
+        for k in keys:
+            if k in scripts:
+                cmd = f"{r} run {k}" if not (k == "test" and r == "npm") else "npm test"
+                c = {"name": (f"{label} " if label else "") + name, "cmd": cmd, "timeout": 900 if name == "test" else 600}
+                if cwd:
+                    c["cwd"] = cwd
+                checks.append(c)
+                break
+    return checks
+
+
+def detect(repo, project, paths=None):
+    """-> {"checks": [{name, cmd, timeout, cwd?}], "hints": [ci run lines], "source": "..."}
+    In a monorepo (nx / pnpm workspaces / lerna / turbo / "workspaces"), the scripts of the packages the change
+    touches are used, run in the package directory; the root scripts only as a fallback."""
     cfg = read_json(os.path.join(project_dir(project), "config.json"), {}) or {}
     hints = []
     for wf in glob.glob(os.path.join(repo, ".github", "workflows", "*.y*ml")):
@@ -27,14 +65,15 @@ def detect(repo, project):
         return {"checks": cfg["checks"], "hints": hints[:20], "source": "config.json"}
     checks = []
     pkg = read_json(os.path.join(repo, "package.json"))
-    if pkg and isinstance(pkg.get("scripts"), dict):
+    if pkg and is_monorepo(repo):
         r = runner(repo)
-        for name, keys in SCRIPT_ORDER:
-            for k in keys:
-                if k in pkg["scripts"]:
-                    cmd = f"{r} run {k}" if not (k == "test" and r == "npm") else "npm test"
-                    checks.append({"name": name, "cmd": cmd, "timeout": 900 if name == "test" else 600})
-                    break
+        for d in package_dirs(repo, paths):
+            sub = read_json(os.path.join(repo, d, "package.json"), {}) or {}
+            checks += script_checks(sub.get("scripts") or {}, r, cwd=d, label=os.path.basename(d))
+        if checks:
+            return {"checks": checks, "hints": hints[:20], "source": "monorepo packages: " + ", ".join(package_dirs(repo, paths))}
+    if pkg and isinstance(pkg.get("scripts"), dict):
+        checks = script_checks(pkg["scripts"], runner(repo))
     elif os.path.exists(os.path.join(repo, "pyproject.toml")) or os.path.exists(os.path.join(repo, "setup.py")):
         if shutil.which("ruff"):
             checks.append({"name": "lint", "cmd": "ruff check .", "timeout": 300})
@@ -56,8 +95,8 @@ def deps_present(repo):
     return not os.path.exists(os.path.join(repo, "package.json")) or os.path.isdir(os.path.join(repo, "node_modules"))
 
 
-def run_all(repo, project, base_sha=None, on_base=False, log=print):
-    det = detect(repo, project)
+def run_all(repo, project, base_sha=None, on_base=False, log=print, paths=None):
+    det = detect(repo, project, paths)
     results = []
     if not det["checks"]:
         return {"detected": det, "results": [], "note": "no checks detected; add ~/.crucible/projects/%s/config.json" % project}
@@ -66,8 +105,8 @@ def run_all(repo, project, base_sha=None, on_base=False, log=print):
                                                "tail": "dependencies not installed (no node_modules)"} for c in det["checks"]],
                 "note": "install dependencies to enable checks"}
     for c in det["checks"]:
-        log(f"  check {c['name']}: {c['cmd']}")
-        res = dict(c, **_run(c["cmd"], repo, c.get("timeout", 600)))
+        log(f"  check {c['name']}: {c['cmd']}" + (f" (in {c['cwd']})" if c.get("cwd") else ""))
+        res = dict(c, **_run(c["cmd"], os.path.join(repo, c.get("cwd") or ""), c.get("timeout", 600)))
         if on_base and base_sha and res["status"] in ("fail", "timeout"):
             res["on_base"] = run_on_base(repo, base_sha, c)
         results.append(res)
@@ -82,7 +121,7 @@ def run_on_base(repo, base_sha, check):
         nm = os.path.join(repo, "node_modules")
         if os.path.isdir(nm):
             os.symlink(nm, os.path.join(wt, "node_modules"))
-        return _run(check["cmd"], wt, check.get("timeout", 600))["status"]
+        return _run(check["cmd"], os.path.join(wt, check.get("cwd") or ""), check.get("timeout", 600))["status"]
     except Exception as e:  # noqa: BLE001 - recorded, not fatal
         return f"error: {e}"
     finally:

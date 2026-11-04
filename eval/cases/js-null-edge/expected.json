@@ -1,0 +1,15 @@
+{
+ "kind": "bug",
+ "message": "profile: simplify displayName",
+ "file": "src/profile.js",
+ "lines": [
+  3
+ ],
+ "keywords": [
+  "null",
+  "undefined",
+  "guest",
+  "profile is optional",
+  "TypeError"
+ ]
+}

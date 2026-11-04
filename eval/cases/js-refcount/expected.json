@@ -1,0 +1,18 @@
+{
+ "kind": "bug",
+ "message": "pool: release connections in bulk",
+ "file": "src/pool.js",
+ "lines": [
+  16,
+  17,
+  18
+ ],
+ "keywords": [
+  "refs",
+  "other users",
+  "still in use",
+  "shared",
+  "closes connections",
+  "reference count"
+ ]
+}

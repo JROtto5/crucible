@@ -1,5 +1,5 @@
 """The review pipeline: checks → scanners → chunked review → per-finding verification → verdict."""
-import concurrent.futures as cf, datetime as dt, fcntl, hashlib, json, os, re, textwrap
+import concurrent.futures as cf, datetime as dt, fcntl, hashlib, json, os, re, subprocess, textwrap
 from . import checks as checks_mod, diff as diff_mod, readiness, style as style_mod
 from .util import (BLOCKING, HOME, MODELS, PREFERENCE, SEV, TOOLS_READ, TOOLS_RUN, Budget, Failed, claude, default_base,
                    exclude_locally, git, is_dirty, norm_words, project_dir, project_key, read_json, review_dir,
@@ -27,8 +27,10 @@ VERIFY_SCHEMA = {"type": "object", "properties": {
     "keep": {"type": "boolean"}, "severity": {"type": "string", "enum": SEV},
     "method": {"type": "string", "enum": ["executed", "read"]},
     "actions": {"type": "string", "description": "exactly what you read or ran (files, commands)"},
-    "evidence": {"type": "string"}},
-    "required": ["keep", "severity", "method", "actions", "evidence"]}
+    "evidence": {"type": "string"},
+    "confidence": {"type": "string", "enum": ["high", "medium", "low"],
+                   "description": "high only if you checked the falsification test directly and the result is unambiguous"}},
+    "required": ["keep", "severity", "method", "actions", "evidence", "confidence"]}
 
 
 # ---------- models ----------
@@ -75,13 +77,19 @@ def memory_text(project, limit=40):
 
 
 # ---------- helpers ----------
+def cache_dir():
+    """Review and verification results, keyed by everything they depend on. CRUCIBLE_CACHE can point several homes
+    (e.g. eval runs) at one shared cache."""
+    return os.environ.get("CRUCIBLE_CACHE") or os.path.join(HOME, "cache")
+
+
 def cache_get(key):
-    return read_json(os.path.join(HOME, "cache", key + ".json"))
+    return read_json(os.path.join(cache_dir(), key + ".json"))
 
 
 def cache_put(key, val):
-    os.makedirs(os.path.join(HOME, "cache"), exist_ok=True)
-    write_json(os.path.join(HOME, "cache", key + ".json"), val)
+    os.makedirs(cache_dir(), exist_ok=True)
+    write_json(os.path.join(cache_dir(), key + ".json"), val)
 
 
 def region(repo, sha, path, line, pad=40):
@@ -203,8 +211,90 @@ def verify_prompt(f, code):
         """)
 
 
+# ---------- stability, tiers, incremental ----------
+def facts_key(chk):
+    """The check results as the review cache sees them: commands and outcomes, not their (timing-dependent) output."""
+    return ";".join(f"{r.get('cmd')}={r.get('status')}/{r.get('on_base', '')}" for r in chk.get("results", []))
+
+
+def verify_tiers(strong, no_tiers=False):
+    """[cheap, strong] or [strong]. CRUCIBLE_VERIFY_CHEAP picks the cheap tier ("none" turns tiering off)."""
+    cheap = os.environ.get("CRUCIBLE_VERIFY_CHEAP", MODELS["haiku"])
+    if no_tiers or not cheap or cheap.lower() == "none" or cheap == strong:
+        return [strong]
+    return [cheap, strong]
+
+
+def needs_escalation(v):
+    """After the cheap tier: escalate when the claim survived at a blocking severity, or the verifier wasn't sure.
+    A confident drop or a confident keep at medium/low is final."""
+    if v.get("confidence") != "high":
+        return True
+    return bool(v["keep"]) and v["severity"] in BLOCKING
+
+
+def verify_tiered(f, code, repo, budget, tiers, fresh=False):
+    """-> (verdict, trail). trail lists each tier's model, keep, severity and confidence."""
+    trail, v = [], None
+    prompt = verify_prompt(f, code)
+    for i, model in enumerate(tiers):
+        key = "v-" + hashlib.sha256((model + prompt).encode()).hexdigest()[:32]
+        use_cache = not fresh and os.environ.get("CRUCIBLE_CACHE_VERIFY", "1") != "0"
+        hit = cache_get(key) if use_cache else None
+        if hit:
+            v = hit
+        else:
+            v, _ = claude(prompt, model, VERIFY_SCHEMA, repo, budget, tools=TOOLS_RUN, effort="high")
+            cache_put(key, v)
+        trail.append({"model": model, "keep": v["keep"], "severity": v["severity"], "confidence": v.get("confidence"),
+                      "cached": bool(hit)})
+        if i < len(tiers) - 1 and not needs_escalation(v):
+            break
+    return v, trail
+
+
+def previous_review(repo, project, sha, base):
+    """The newest complete review of an ancestor commit on this branch with the same merge-base, or (None, None)."""
+    branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD", check=False)
+    hist = (read_json(os.path.join(project_dir(project), "branches.json"), {}) or {}).get(branch, [])
+    for prev in reversed(hist):
+        if prev == sha:
+            continue
+        rev = read_json(os.path.join(HOME, "reviews", project, prev, "review.json"))
+        if not rev or rev.get("status") != "done" or rev.get("base") != base or not rev.get("coverage", {}).get("complete"):
+            continue
+        if rev.get("budget_exhausted"):
+            continue
+        if subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", prev, sha]).returncode != 0:
+            continue
+        return prev, rev
+    return None, None
+
+
+def split_prev(findings, ranges, hunks, prev_sha):
+    """Split a previous review's model findings into (carried, touched). A finding is carried, with its line mapped
+    forward, when its cited region wasn't touched since prev_sha; otherwise it must be verified again.
+    Scanner and style findings are recomputed every time, so they are neither carried nor re-verified."""
+    carried, touched = [], []
+    for f in findings:
+        if f.get("source") != "review":
+            continue
+        rs = ranges.get(f["file"], [])
+        if rs and diff_mod.region_touched(rs, f["line"]):
+            touched.append(dict(f, reverified_from=prev_sha[:10]))
+            continue
+        moved = diff_mod.map_line(hunks.get(f["file"], []), f["line"]) if f["file"] in hunks else f["line"]
+        if moved is None:
+            touched.append(dict(f, reverified_from=prev_sha[:10]))
+        else:
+            carried.append(dict(f, line=moved, carried_from=prev_sha[:10]))
+    return carried, touched
+
+
 def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, draft=None, base_checks=False,
-               offline=False, skip_checks=False, log=print):
+               offline=False, skip_checks=False, log=print, full=False, fresh=False, no_tiers=False):
+    """full: ignore the previous review of this branch (no incremental re-review).
+    fresh: bypass the review/verification cache. no_tiers: verify with the strong model only."""
     repo = os.path.abspath(repo)
     project = project_key(repo)
     if is_dirty(repo):
@@ -236,7 +326,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         log(f"  models: review {review_model}, verify {verify_model} (author: {authors or 'unknown'})")
 
         chk = {"results": [], "note": "skipped by --skip-checks"} if skip_checks else \
-            checks_mod.run_all(repo, project, base, on_base=base_checks, log=log)
+            checks_mod.run_all(repo, project, base, on_base=base_checks, log=log, paths=[f["path"] for f in files])
         record["checks"] = chk
         ready = readiness.evaluate(repo, project, base, files, draft=draft, offline=offline)
         record["readiness"] = ready
@@ -249,23 +339,47 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         house_findings = style_mod.check(repo, base, files, draft_path, draft_text, style_json)
 
         scanner = diff_mod.scan(files)
-        chunks, uncovered = diff_mod.chunk(files)
         rules, mem, facts = project_rules_text(repo, project), memory_text(project), checks_mod.facts(chk)
         clog = git(repo, "log", "--format=%h %s", f"{base}..HEAD")
         all_files = [f["path"] for f in files]
-        cands, chunk_status, summaries = list(scanner) + house_findings, [], []
+        code_files = [f["path"] for f in files if not f["binary"]]
         house = style_text(project)
+
+        # incremental re-review: only what changed since the last complete review of this branch
+        prev_sha, prev_rev = (None, None) if full else previous_review(repo, project, sha, base)
+        carried, carried_dropped, reverify = [], [], []
+        if prev_sha:
+            delta = git(repo, "diff", "--unified=5", "--no-color", f"{prev_sha}..HEAD")
+            dfiles = [f for f in diff_mod.parse(delta) if f["path"] in set(code_files)] if delta else []
+            d0 = git(repo, "diff", "-U0", "--no-color", f"{prev_sha}..HEAD") if delta else ""
+            ranges, hunks = diff_mod.changed_old_ranges(d0), diff_mod.hunks_old_new(d0)
+            carried, reverify = split_prev(prev_rev.get("findings", []), ranges, hunks, prev_sha)
+            carried_dropped, _ = split_prev(prev_rev.get("dropped", []), ranges, hunks, prev_sha)
+            chunks, uncovered = diff_mod.chunk(dfiles)
+            log(f"  incremental: since {prev_sha[:10]} · {len(dfiles)} changed file(s) to review · "
+                f"{len(carried)} finding(s) carried · {len(reverify)} to re-verify (use --full for a full review)")
+            record["incremental"] = {"from": prev_sha, "files": [f["path"] for f in dfiles], "carried": len(carried),
+                                     "reverified": len(reverify)}
+        else:
+            chunks, uncovered = diff_mod.chunk(files)
+        cands, chunk_status, summaries = list(scanner) + house_findings, [], []
+        if prev_sha and prev_rev.get("summary"):
+            summaries.append(prev_rev["summary"][:1500])
+        fkey, review_cost = facts_key(chk), 0.0
         for i, ch in enumerate(chunks, 1):
             prompt = review_prompt(project, sha, base, ch, rules, mem, facts, clog, all_files, house,
                                    draft_text if i == 1 else "(reviewed in pass 1)")
-            key = hashlib.sha256((review_model + prompt).encode()).hexdigest()[:32]
-            hit = cache_get(key)
+            # keyed on what the review depends on, not on volatile check output, so --force on the same commit is stable
+            key = hashlib.sha256("\0".join([review_model, ch["text"], rules, mem, house, fkey, ",".join(all_files),
+                                            draft_text if i == 1 else ""]).encode()).hexdigest()[:32]
+            hit = None if fresh else cache_get(key)
             if hit:
                 out, cost = hit, 0
             else:
                 log(f"  review pass {i}/{len(chunks)}: {', '.join(ch['files'])[:90]}")
                 try:
                     out, cost = claude(prompt, review_model, FINDINGS_SCHEMA, repo, budget)
+                    review_cost += cost or 0
                     cache_put(key, out)
                 except Failed as e:
                     chunk_status.append({"files": ch["files"], "status": "failed", "reason": str(e)})
@@ -275,41 +389,48 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             for f in out["findings"][:10]:
                 cands.append(dict(f, source="review"))
         reviewed = {p for c in chunk_status if c["status"] == "reviewed" for p in c["files"]}
-        code_files = [f["path"] for f in files if not f["binary"]]
+        if prev_sha:                                   # files untouched since the previous complete review stay covered
+            reviewed |= set(code_files) - set(record["incremental"]["files"])
         missing = sorted((set(code_files) - reviewed) | set(uncovered))
         record["coverage"] = {"files": len(code_files), "reviewed": len(set(code_files) & reviewed) - len(set(uncovered) & reviewed),
                               "missing": missing, "complete": not missing, "chunks": chunk_status}
 
-        cands = assign_ids(dedupe([apply_honesty(f) for f in cands]))
-        to_verify = [f for f in cands if f["source"] == "review"]
-        kept, dropped = [f for f in cands if f["source"] in ("scanner", "style")], []
+        new = assign_ids(dedupe([apply_honesty(f) for f in cands]))
+        taken = {f["id"] for f in carried + reverify}
+        new = [f for f in new if not any(similar(f, c) for c in carried + reverify)]   # earlier findings win over re-reports
+        for f in new:
+            if f["id"] in taken:
+                f["id"] += "-n"
+        to_verify = [f for f in new if f["source"] == "review"] + reverify
+        kept, dropped = [f for f in new if f["source"] in ("scanner", "style")] + carried, list(carried_dropped)
+        tiers = verify_tiers(verify_model, no_tiers)
+        record["verify_tiers"] = tiers
 
         def verify(f):
             try:
-                v, _ = claude(verify_prompt(f, region(repo, sha, f["file"], f["line"])), verify_model, VERIFY_SCHEMA,
-                              repo, budget, tools=TOOLS_RUN, effort="high")
-                return f, v, None
+                return (f,) + verify_tiered(f, region(repo, sha, f["file"], f["line"]), repo, budget, tiers, fresh) + (None,)
             except Failed as e:
-                return f, None, str(e)
+                return f, None, [], str(e)
         if to_verify:
-            log(f"  verifying {len(to_verify)} finding(s), one per call")
+            log(f"  verifying {len(to_verify)} finding(s), one per call" + (f" (tiers: {' → '.join(tiers)})" if len(tiers) > 1 else ""))
             with cf.ThreadPoolExecutor(max_workers=4) as ex:
-                for f, v, err in ex.map(verify, to_verify):
+                for f, v, trail, err in ex.map(verify, to_verify):
                     if v is None:                      # fail closed: keep, marked unverified
                         f["verification"] = {"status": "unverified", "reason": err}
                         kept.append(f)
                     elif v["keep"]:
                         f["verification"] = {"status": "verified", "method": v["method"], "actions": v["actions"],
-                                             "evidence": v["evidence"]}
+                                             "evidence": v["evidence"], "confidence": v.get("confidence"), "tiers": trail}
                         f["severity"] = v["severity"]
                         kept.append(apply_honesty(f))
                     else:
                         f["verification"] = {"status": "dropped", "method": v["method"], "actions": v["actions"],
-                                             "evidence": v["evidence"]}
+                                             "evidence": v["evidence"], "confidence": v.get("confidence"), "tiers": trail}
                         dropped.append(f)
         kept.sort(key=lambda f: (SEV.index(f["severity"]), (f.get("verification") or {}).get("method") != "executed"))
         record.update(status="done", summary=" ".join(summaries)[:3000], findings=kept, dropped=dropped,
-                      cost_usd=round(budget.spent, 4), finished=dt.datetime.now().isoformat(timespec="seconds"),
+                      cost_usd=round(budget.spent, 4), cost_review_usd=round(review_cost, 4),
+                      cost_verify_usd=round(budget.spent - review_cost, 4), finished=dt.datetime.now().isoformat(timespec="seconds"),
                       budget_exhausted=budget.exhausted())
         carry_forward(repo, project, sha, record)
     except Failed as e:
@@ -421,9 +542,13 @@ def report(rev, ans, waivers=None):
          f"- {len(rev['findings'])} findings kept · {len(rev['dropped'])} dropped by verification · "
          f"{len(blocking)} blocking open · {len(unanswered)} unanswered",
          f"- coverage: {cov['reviewed']}/{cov['files']} files" + (f" · MISSING {cov['missing']}" if cov["missing"] else ""),
-         f"- models: review `{rev['review_model']}`, verify `{rev['verify_model']}` · author {rev.get('author_models') or 'unknown'}",
+         f"- models: review `{rev['review_model']}`, verify `{' → '.join(rev.get('verify_tiers') or [rev['verify_model']])}`"
+         f" · author {rev.get('author_models') or 'unknown'}",
          f"- base `{rev['base_ref']}` (merge-base {rev['base'][:10]}) · cost ${rev['cost_usd']}"
-         + (" · BUDGET EXHAUSTED" if rev.get("budget_exhausted") else ""), "",
+         + (" · BUDGET EXHAUSTED" if rev.get("budget_exhausted") else ""),
+         *([f"- incremental since `{rev['incremental']['from'][:10]}`: {len(rev['incremental']['files'])} file(s) re-reviewed, "
+            f"{rev['incremental']['carried']} finding(s) carried, {rev['incremental']['reverified']} re-verified"]
+           if rev.get("incremental") else []), "",
          "## Project checks", ""]
     res = rev["checks"].get("results", [])
     L += [f"- {'✅' if c['status'] == 'pass' else '⏭️' if c['status'] == 'skipped' else '❌'} `{c['cmd']}`: {c['status']}"

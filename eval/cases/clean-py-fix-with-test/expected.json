@@ -1,0 +1,4 @@
+{
+ "kind": "clean",
+ "message": "slug: strip leading and trailing dashes"
+}

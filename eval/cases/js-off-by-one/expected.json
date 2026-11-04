@@ -1,0 +1,15 @@
+{
+ "kind": "bug",
+ "message": "stats: add mean() helper",
+ "file": "src/stats.js",
+ "lines": [
+  10
+ ],
+ "keywords": [
+  "off-by-one",
+  "<=",
+  "out of bounds",
+  "undefined",
+  "NaN"
+ ]
+}

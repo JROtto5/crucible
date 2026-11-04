@@ -1,0 +1,573 @@
+[
+ {
+  "ok": true,
+  "cost": 0.3074,
+  "cost_review": 0.0,
+  "cost_verify": 0.3074,
+  "kept": 4,
+  "dropped": 0,
+  "blocking": 3,
+  "caught": true,
+  "caught_any_severity": true,
+  "true_dropped": 0,
+  "extra_blocking": 0,
+  "case": "js-missing-await",
+  "kind": "bug",
+  "secs": 101.7,
+  "findings": [
+   {
+    "severity": "important",
+    "file": "src/store.js",
+    "line": 3,
+    "title": "writeFile is no longer awaited; save() resolves before the data is written, and cli.run exits the process right after"
+   },
+   {
+    "severity": "important",
+    "file": "src/store.js",
+    "line": 3,
+    "title": "Write errors become unhandled rejections and save() still returns true"
+   },
+   {
+    "severity": "important",
+    "file": "src/store.js",
+    "line": 4,
+    "title": "'saved' is logged before the write happens"
+   },
+   {
+    "severity": "medium",
+    "file": "src/store.js",
+    "line": 2,
+    "title": "No test for the new return value or for write completion and errors"
+   }
+  ],
+  "tiers": [
+   "claude-haiku-5-5",
+   "claude-sonnet-5-5"
+  ]
+ },
+ {
+  "ok": true,
+  "cost": 0.1269,
+  "cost_review": 0.0,
+  "cost_verify": 0.1269,
+  "kept": 2,
+  "dropped": 0,
+  "blocking": 2,
+  "caught": true,
+  "caught_any_severity": true,
+  "true_dropped": 0,
+  "extra_blocking": 0,
+  "case": "js-null-edge",
+  "kind": "bug",
+  "secs": 65.1,
+  "findings": [
+   {
+    "severity": "important",
+    "file": "src/profile.js",
+    "line": 3,
+    "title": "displayName crashes for guests (user.profile undefined)"
+   },
+   {
+    "severity": "important",
+    "file": "src/profile.js",
+    "line": 3,
+    "title": "No test for the guest / missing-nickname fallback"
+   }
+  ],
+  "tiers": [
+   "claude-haiku-5-5",
+   "claude-sonnet-5-5"
+  ]
+ },
+ {
+  "ok": true,
+  "cost": 0.1034,
+  "cost_review": 0.0,
+  "cost_verify": 0.1034,
+  "kept": 3,
+  "dropped": 0,
+  "blocking": 2,
+  "caught": true,
+  "caught_any_severity": true,
+  "true_dropped": 0,
+  "extra_blocking": 0,
+  "case": "js-off-by-one",
+  "kind": "bug",
+  "secs": 39.6,
+  "findings": [
+   {
+    "severity": "important",
+    "file": "src/stats.js",
+    "line": 10,
+    "title": "Off-by-one loop bound makes mean() always return NaN"
+   },
+   {
+    "severity": "important",
+    "file": "src/stats.js",
+    "line": 8,
+    "title": "New public export mean() has no tests"
+   },
+   {
+    "severity": "low",
+    "file": "src/stats.js",
+    "line": 9,
+    "title": "Re-implements sum() instead of reusing it"
+   }
+  ],
+  "tiers": [
+   "claude-haiku-5-5",
+   "claude-sonnet-5-5"
+  ]
+ },
+ {
+  "ok": true,
+  "cost": 0.1052,
+  "cost_review": 0.0,
+  "cost_verify": 0.1052,
+  "kept": 3,
+  "dropped": 0,
+  "blocking": 0,
+  "caught": false,
+  "caught_any_severity": true,
+  "true_dropped": 0,
+  "extra_blocking": 0,
+  "case": "js-refcount",
+  "kind": "bug",
+  "secs": 60.4,
+  "findings": [
+   {
+    "severity": "medium",
+    "file": "src/pool.js",
+    "line": 17,
+    "title": "releaseAll closes connections that still have users, so a late release() can close the wrong connection"
+   },
+   {
+    "severity": "low",
+    "file": "src/pool.js",
+    "line": 16,
+    "title": "No test for the new method; the repo has no tests or test script"
+   },
+   {
+    "severity": "low",
+    "file": "src/pool.js",
+    "line": 17,
+    "title": "An exception from close() leaves the pool half-shut and inconsistent"
+   }
+  ],
+  "tiers": [
+   "claude-haiku-5-5",
+   "claude-sonnet-5-5"
+  ]
+ },
+ {
+  "ok": true,
+  "cost": 0.1941,
+  "cost_review": 0.0,
+  "cost_verify": 0.1941,
+  "kept": 4,
+  "dropped": 0,
+  "blocking": 2,
+  "caught": true,
+  "caught_any_severity": true,
+  "true_dropped": 0,
+  "extra_blocking": 0,
+  "case": "js-shell-injection",
+  "kind": "bug",
+  "secs": 67.6,
+  "findings": [
+   {
+    "severity": "important",
+    "file": "src/thumbs.js",
+    "line": 7,
+    "title": "Shell command injection through the upload name in makeThumb"
+   },
+   {
+    "severity": "important",
+    "file": "src/thumbs.js",
+    "line": 7,
+    "title": "Path traversal and ImageMagick option or coder injection through the name"
+   },
+   {
+    "severity": "low",
+    "file": "src/thumbs.js",
+    "line": 6,
+    "title": "New makeThumb has no tests and no tests for hostile names"
+   },
+   {
+    "severity": "low",
+    "file": "src/thumbs.js",
+    "line": 7,
+    "title": "Synchronous ImageMagick call blocks the event loop on the upload path"
+   }
+  ],
+  "tiers": [
+   "claude-haiku-5-5",
+   "claude-sonnet-5-5"
+  ]
+ },
+ {
+  "ok": true,
+  "cost": 0.145,
+  "cost_review": 0.0,
+  "cost_verify": 0.145,
+  "kept": 2,
+  "dropped": 1,
+  "blocking": 2,
+  "caught": true,
+  "caught_any_severity": true,
+  "true_dropped": 1,
+  "extra_blocking": 0,
+  "case": "js-timeout-units",
+  "kind": "bug",
+  "secs": 51.6,
+  "findings": [
+   {
+    "severity": "important",
+    "file": "src/retry.js",
+    "line": 6,
+    "title": "The new seconds value goes to setTimeout without converting to milliseconds"
+   },
+   {
+    "severity": "important",
+    "file": "src/retry.js",
+    "line": 2,
+    "title": "The public `delayMs` option is removed without warning, and its unit changes"
+   }
+  ],
+  "tiers": [
+   "claude-haiku-5-5",
+   "claude-sonnet-5-5"
+  ]
+ },
+ {
+  "ok": true,
+  "cost": 0.0694,
+  "cost_review": 0.0,
+  "cost_verify": 0.0694,
+  "kept": 3,
+  "dropped": 0,
+  "blocking": 1,
+  "caught": true,
+  "caught_any_severity": true,
+  "true_dropped": 0,
+  "extra_blocking": 0,
+  "case": "py-pagination",
+  "kind": "bug",
+  "secs": 35.2,
+  "findings": [
+   {
+    "severity": "important",
+    "file": "api/paging.py",
+    "line": 6,
+    "title": "Off-by-one: each page has size-1 items and one item per page is never returned"
+   },
+   {
+    "severity": "medium",
+    "file": "api/paging.py",
+    "line": 3,
+    "title": "No tests for the new public helper"
+   },
+   {
+    "severity": "medium",
+    "file": "api/paging.py",
+    "line": 5,
+    "title": "n < 1 or size < 1 gives wrong results instead of an error"
+   }
+  ],
+  "tiers": [
+   "claude-haiku-5-5",
+   "claude-sonnet-5-5"
+  ]
+ },
+ {
+  "ok": true,
+  "cost": 0.1922,
+  "cost_review": 0.0,
+  "cost_verify": 0.1922,
+  "kept": 3,
+  "dropped": 0,
+  "blocking": 1,
+  "caught": true,
+  "caught_any_severity": true,
+  "true_dropped": 0,
+  "extra_blocking": 0,
+  "case": "py-race",
+  "kind": "bug",
+  "secs": 53.8,
+  "findings": [
+   {
+    "severity": "important",
+    "file": "metrics/counter.py",
+    "line": 7,
+    "title": "Lock removal makes incr() lose updates under concurrent use"
+   },
+   {
+    "severity": "medium",
+    "file": "metrics/counter.py",
+    "line": 6,
+    "title": "No test for concurrent increments"
+   },
+   {
+    "severity": "low",
+    "file": "PR_DRAFT.md",
+    "line": 1,
+    "title": "No PR description or perf numbers for a concurrency-sensitive change"
+   }
+  ],
+  "tiers": [
+   "claude-haiku-5-5",
+   "claude-sonnet-5-5"
+  ]
+ },
+ {
+  "ok": true,
+  "cost": 0.0561,
+  "cost_review": 0.0,
+  "cost_verify": 0.0561,
+  "kept": 3,
+  "dropped": 0,
+  "blocking": 1,
+  "caught": true,
+  "caught_any_severity": true,
+  "true_dropped": 0,
+  "extra_blocking": 0,
+  "case": "py-secret",
+  "kind": "bug",
+  "secs": 57.3,
+  "findings": [
+   {
+    "severity": "critical",
+    "file": "notify/config.py",
+    "line": 4,
+    "title": "Possible secret in added line"
+   },
+   {
+    "severity": "medium",
+    "file": "notify/config.py",
+    "line": 4,
+    "title": "The change doesn't match its commit message: no Slack client, only an unused AWS constant"
+   },
+   {
+    "severity": "medium",
+    "file": "notify/config.py",
+    "line": 4,
+    "title": "AWS access key ID is hardcoded and committed to source"
+   }
+  ],
+  "tiers": [
+   "claude-haiku-5-5",
+   "claude-sonnet-5-5"
+  ]
+ },
+ {
+  "ok": true,
+  "cost": 0.1349,
+  "cost_review": 0.0,
+  "cost_verify": 0.1349,
+  "kept": 3,
+  "dropped": 1,
+  "blocking": 1,
+  "caught": true,
+  "caught_any_severity": true,
+  "true_dropped": 0,
+  "extra_blocking": 0,
+  "case": "py-sql-injection",
+  "kind": "bug",
+  "secs": 55.1,
+  "findings": [
+   {
+    "severity": "critical",
+    "file": "users/db.py",
+    "line": 8,
+    "title": "SQL injection: user input is pasted into the query with an f-string"
+   },
+   {
+    "severity": "low",
+    "file": "users/db.py",
+    "line": 6,
+    "title": "No tests for the new search function"
+   },
+   {
+    "severity": "low",
+    "file": "users/db.py",
+    "line": 8,
+    "title": "`%` and `_` in the search term act as LIKE wildcards"
+   }
+  ],
+  "tiers": [
+   "claude-haiku-5-5",
+   "claude-sonnet-5-5"
+  ]
+ },
+ {
+  "ok": true,
+  "cost": 0.1063,
+  "cost_review": 0.0,
+  "cost_verify": 0.1063,
+  "kept": 2,
+  "dropped": 0,
+  "blocking": 2,
+  "caught": true,
+  "caught_any_severity": true,
+  "true_dropped": 0,
+  "extra_blocking": 1,
+  "case": "py-test-deleted",
+  "kind": "bug",
+  "secs": 39.5,
+  "findings": [
+   {
+    "severity": "important",
+    "file": "pricing/core.py",
+    "line": 3,
+    "title": "Floor division changes nearest-cent rounding to truncation, contradicting the docstring"
+   },
+   {
+    "severity": "important",
+    "file": "tests/test_core.py",
+    "line": 1,
+    "title": "Only rounding test deleted instead of strengthened; behaviour change is untested"
+   }
+  ],
+  "tiers": [
+   "claude-haiku-5-5",
+   "claude-sonnet-5-5"
+  ]
+ },
+ {
+  "ok": true,
+  "cost": 0.1804,
+  "cost_review": 0.0,
+  "cost_verify": 0.1804,
+  "kept": 5,
+  "dropped": 1,
+  "blocking": 2,
+  "caught": true,
+  "caught_any_severity": true,
+  "true_dropped": 1,
+  "extra_blocking": 1,
+  "case": "ts-api-break",
+  "kind": "bug",
+  "secs": 98.1,
+  "findings": [
+   {
+    "severity": "important",
+    "file": "src/index.ts",
+    "line": 2,
+    "title": "Swapping the parameters of the public formatDate breaks every existing caller"
+   },
+   {
+    "severity": "important",
+    "file": "package.json",
+    "line": 1,
+    "title": "Breaking change shipped without a major version bump"
+   },
+   {
+    "severity": "medium",
+    "file": "src/index.ts",
+    "line": 2,
+    "title": "The default locale is removed, so the one-argument call formatDate(date) crashes"
+   },
+   {
+    "severity": "medium",
+    "file": "README.md",
+    "line": 3,
+    "title": "The README still documents the old signature formatDate(date, locale?)"
+   },
+   {
+    "severity": "low",
+    "file": "PR_DRAFT.md",
+    "line": 1,
+    "title": "There is no PR description for a breaking public-API change"
+   }
+  ],
+  "tiers": [
+   "claude-haiku-5-5",
+   "claude-sonnet-5-5"
+  ]
+ },
+ {
+  "ok": true,
+  "cost": 0.0,
+  "cost_review": 0.0,
+  "cost_verify": 0.0,
+  "kept": 0,
+  "dropped": 0,
+  "blocking": 0,
+  "false_blocking": 0,
+  "case": "clean-js-refactor",
+  "kind": "clean",
+  "secs": 0.1,
+  "findings": [],
+  "tiers": [
+   "claude-haiku-5-5",
+   "claude-sonnet-5-5"
+  ]
+ },
+ {
+  "ok": true,
+  "cost": 0.0,
+  "cost_review": 0.0,
+  "cost_verify": 0.0,
+  "kept": 0,
+  "dropped": 0,
+  "blocking": 0,
+  "false_blocking": 0,
+  "case": "clean-py-docs",
+  "kind": "clean",
+  "secs": 0.1,
+  "findings": [],
+  "tiers": [
+   "claude-haiku-5-5",
+   "claude-sonnet-5-5"
+  ]
+ },
+ {
+  "ok": true,
+  "cost": 0.0,
+  "cost_review": 0.0,
+  "cost_verify": 0.0,
+  "kept": 0,
+  "dropped": 0,
+  "blocking": 0,
+  "false_blocking": 0,
+  "case": "clean-py-fix-with-test",
+  "kind": "clean",
+  "secs": 0.1,
+  "findings": [],
+  "tiers": [
+   "claude-haiku-5-5",
+   "claude-sonnet-5-5"
+  ]
+ },
+ {
+  "ok": true,
+  "cost": 0.0293,
+  "cost_review": 0.0,
+  "cost_verify": 0.0293,
+  "kept": 2,
+  "dropped": 1,
+  "blocking": 0,
+  "false_blocking": 0,
+  "case": "clean-ts-option-with-tests",
+  "kind": "clean",
+  "secs": 74.6,
+  "findings": [
+   {
+    "severity": "low",
+    "file": "src/index.ts",
+    "line": 6,
+    "title": "New second parameter breaks point-free callers like names.map(greet) and JS callers that pass null"
+   },
+   {
+    "severity": "low",
+    "file": "test/greet.test.ts",
+    "line": 3,
+    "title": "Test doesn't cover an explicit undefined, an empty string, or an empty options object"
+   }
+  ],
+  "tiers": [
+   "claude-haiku-5-5",
+   "claude-sonnet-5-5"
+  ]
+ }
+]

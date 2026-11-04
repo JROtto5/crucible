@@ -1,0 +1,15 @@
+{
+ "kind": "bug",
+ "message": "notify: add the Slack webhook client",
+ "file": "notify/config.py",
+ "lines": [
+  4
+ ],
+ "keywords": [
+  "secret",
+  "credential",
+  "key",
+  "hard-coded",
+  "hardcoded"
+ ]
+}

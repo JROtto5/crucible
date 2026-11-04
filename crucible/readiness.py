@@ -6,7 +6,13 @@ from .util import CODE_EXT_RX, TEST_PATH_RX, gh_json, git, project_dir, read_jso
 TEMPLATES = [".github/PULL_REQUEST_TEMPLATE.md", ".github/pull_request_template.md", "PULL_REQUEST_TEMPLATE.md",
              "docs/pull_request_template.md", ".github/PULL_REQUEST_TEMPLATE/pull_request_template.md"]
 CONVENTIONAL_RX = re.compile(r"^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([^)]+\))?!?: .+")
-ISSUE_RX = re.compile(r"(?:(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?|related to|refs?)\s*:?\s*)?(?:#|/issues/)(\d+)", re.I)
+# An issue link needs a linking keyword or an /issues/ URL. A bare "#123" is often a PR reference ("overlaps #2693"),
+# so it does not count.
+ISSUE_RX = re.compile(r"(?:\b(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?|related(?:\s+issues?|\s+to)?|refs?|issues?)\b"
+                      r"\s*:?\s*#(\d+)\b)|(?:github\.com/[^/\s]+/[^/\s]+/issues/(\d+))", re.I)
+# Template placeholders that look like a link but aren't: "Closes #(issue_number)", "Fixes #ISSUE", "#N", "#<n>", "#XXXX".
+PLACEHOLDER_RX = re.compile(r"\b(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?|related(?:\s+issues?)?|issues?)\b\s*:?\s*"
+                            r"#\s*(?:\(|<|\{|\[|ISSUE\b|N\b|X{2,}|_+|issue[_ ]?(?:number|no|id)\b)", re.I)
 
 
 def _item(item, status, evidence):
@@ -14,7 +20,9 @@ def _item(item, status, evidence):
 
 
 def find_draft(repo, draft=None):
-    for p in [draft] if draft else [os.path.join(repo, "PR_DRAFT.polished.md"), os.path.join(repo, "PR_DRAFT.md")]:
+    """The draft to judge: --draft if given, else PR_DRAFT.md. PR_DRAFT.polished.md is a proposal from `polish`
+    that the author hasn't accepted yet (copy it over PR_DRAFT.md to accept), so it is never picked up implicitly."""
+    for p in [draft] if draft else [os.path.join(repo, "PR_DRAFT.md")]:
         if p and os.path.exists(p):
             return p, open(p, errors="replace").read()
     return None, ""
@@ -119,7 +127,12 @@ def check_draft(repo, draft_text):
 
 def linked_issue(draft_text):
     m = ISSUE_RX.search(draft_text or "")
-    return int(m.group(1)) if m else None
+    return int(m.group(1) or m.group(2)) if m else None
+
+
+def issue_placeholder(draft_text):
+    m = PLACEHOLDER_RX.search(draft_text or "")
+    return m.group(0).strip() if m else None
 
 
 def tests_touched(paths):
@@ -200,6 +213,8 @@ def unclaimed(repo, issue, me=None):
     if not data:
         return _item("issue still unclaimed", "warn", f"could not read {slug}#{issue}")
     probs = []
+    if data.get("pull_request"):
+        return _item("issue still unclaimed", "fail", f"{slug}#{issue} is a pull request, not an issue; link the issue with 'Closes #N'")
     if data.get("state") != "open":
         probs.append(f"issue is {data.get('state')}")
     who = [a["login"] for a in data.get("assignees") or [] if a.get("login") != me]
@@ -229,7 +244,9 @@ def evaluate(repo, project, base, files, draft=None, me="JROtto5", offline=False
         check_draft(repo, draft_text) if draft_text.strip() or not full.strip() else
         _item("PR description drafted", "fail", f"{os.path.basename(draft_path)} exists, but nothing is left before the "
               f"author-notes boundary at line {split_draft(full)['notes_line']}; put the body above it or under `## Body`"),
-        _item("issue linked", "pass" if issue else "fail", f"#{issue}" if issue else "no 'Fixes #N' / issue URL in the draft"),
+        _item("issue linked", "pass" if issue else "fail", f"#{issue}" if issue else
+              (f"template placeholder still in the draft: {issue_placeholder(draft_text)!r}" if issue_placeholder(draft_text)
+               else "no 'Fixes #N' / 'Related issue: #N' / issue URL in the draft (a bare #N doesn't count)")),
         tests_touched(paths),
         api_docs_touched(files),
         changelog(repo, paths),

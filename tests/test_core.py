@@ -400,3 +400,148 @@ class TestClaudeCall(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRealUseBugs(unittest.TestCase):
+    """Regression tests for bugs found while reviewing real upstream PRs (BOARD a–e)."""
+
+    def test_a_bare_pr_number_is_not_an_issue_link(self):
+        self.assertIsNone(R.linked_issue("This overlaps #2693 and #2694."))
+        self.assertEqual(R.linked_issue("Closes #2823\n\nOverlaps #2693."), 2823)
+        self.assertEqual(R.linked_issue("Related issue: #34697"), 34697)
+        self.assertEqual(R.linked_issue("see https://github.com/o/r/issues/77"), 77)
+        self.assertIsNone(R.linked_issue("Closes #(issue_number)"))
+
+    def test_a_placeholder_is_reported(self):
+        for t in ("Closes #(issue_number)", "Fixes #ISSUE", "Related issue: #XXXX", "closes #<n>"):
+            self.assertIsNotNone(R.issue_placeholder(t), t)
+        self.assertIsNone(R.issue_placeholder("Closes #12"))
+
+    def test_b_monorepo_checks_use_the_touched_package(self):
+        from crucible import checks as C
+        with tempfile.TemporaryDirectory() as d:
+            open(os.path.join(d, "package.json"), "w").write('{"name":"root","scripts":{"test":"nx run-many -t test"}}')
+            open(os.path.join(d, "nx.json"), "w").write("{}")
+            pk = os.path.join(d, "packages", "core", "postgrest-js")
+            os.makedirs(os.path.join(pk, "src"))
+            open(os.path.join(pk, "package.json"), "w").write('{"name":"pg","scripts":{"test":"jest","lint":"eslint ."}}')
+            det = C.detect(d, "x", ["packages/core/postgrest-js/src/PostgrestClient.ts"])
+            self.assertEqual({c["cwd"] for c in det["checks"]}, {"packages/core/postgrest-js"})
+            self.assertEqual(sorted(c["name"].split()[-1] for c in det["checks"]), ["lint", "test"])
+            self.assertEqual(C.detect(d, "x", ["README.md"])["checks"][0].get("cwd"), None)  # falls back to the root
+
+    def test_c_polish_keeps_issue_link_lines(self):
+        body, restored = S.keep_required_lines("Closes #12\n\nFixes the thing.", "Fixes the thing, cleanly.")
+        self.assertEqual(restored, ["Closes #12"])
+        self.assertTrue(body.startswith("Closes #12\n\n"))
+        body, restored = S.keep_required_lines("Text.\n\nRelated issue: #5", "Text, better.")
+        self.assertTrue(body.endswith("Related issue: #5"))
+        self.assertEqual(S.keep_required_lines("Closes #1\nx", "Closes #1\ny")[1], [])
+
+    def test_d_polished_draft_is_not_judged_implicitly(self):
+        with tempfile.TemporaryDirectory() as d:
+            open(os.path.join(d, "PR_DRAFT.polished.md"), "w").write("# P\n\npolished")
+            self.assertEqual(R.find_draft(d), (None, ""))
+            open(os.path.join(d, "PR_DRAFT.md"), "w").write("# T\n\nmine")
+            self.assertTrue(R.find_draft(d)[0].endswith("PR_DRAFT.md"))
+            self.assertTrue(R.find_draft(d, os.path.join(d, "PR_DRAFT.polished.md"))[0].endswith("polished.md"))
+
+    def test_e_cache_key_ignores_volatile_check_output(self):
+        a = {"results": [{"cmd": "npm test", "status": "pass", "tail": "done in 1.2s"}]}
+        b = {"results": [{"cmd": "npm test", "status": "pass", "tail": "done in 3.9s"}]}
+        self.assertEqual(V.facts_key(a), V.facts_key(b))
+        self.assertNotEqual(V.facts_key(a), V.facts_key({"results": [{"cmd": "npm test", "status": "fail"}]}))
+
+
+class TestTiers(unittest.TestCase):
+    def test_tier_selection(self):
+        os.environ.pop("CRUCIBLE_VERIFY_CHEAP", None)
+        self.assertEqual(V.verify_tiers("claude-sonnet-5-5"), ["claude-haiku-5-5", "claude-sonnet-5-5"])
+        self.assertEqual(V.verify_tiers("claude-sonnet-5-5", no_tiers=True), ["claude-sonnet-5-5"])
+        os.environ["CRUCIBLE_VERIFY_CHEAP"] = "none"
+        try:
+            self.assertEqual(V.verify_tiers("claude-sonnet-5-5"), ["claude-sonnet-5-5"])
+        finally:
+            os.environ.pop("CRUCIBLE_VERIFY_CHEAP")
+
+    def test_escalation_rules(self):
+        self.assertTrue(V.needs_escalation({"keep": True, "severity": "important", "confidence": "high"}))
+        self.assertTrue(V.needs_escalation({"keep": False, "severity": "low", "confidence": "medium"}))
+        self.assertFalse(V.needs_escalation({"keep": False, "severity": "important", "confidence": "high"}))
+        self.assertFalse(V.needs_escalation({"keep": True, "severity": "low", "confidence": "high"}))
+
+
+class TestIncremental(unittest.TestCase):
+    def test_split_prev_carries_untouched_and_reverifies_touched(self):
+        prev = [{"source": "review", "file": "a.js", "line": 6, "title": "off by one"},
+                {"source": "review", "file": "b.js", "line": 5, "title": "lastN(0)"},
+                {"source": "review", "file": "a.js", "line": 40, "title": "far below"},
+                {"source": "style", "file": "PR_DRAFT.md", "line": 1, "title": "length"}]
+        # a.js: lines 6..6 replaced, and 2 lines added at 20 → line 40 moves to 42
+        diff = ("diff --git a/a.js b/a.js\n--- a/a.js\n+++ b/a.js\n@@ -6 +6 @@\n-x\n+y\n@@ -20,0 +21,2 @@\n+p\n+q\n")
+        ranges, hunks = D.changed_old_ranges(diff), D.hunks_old_new(diff)
+        carried, touched = V.split_prev(prev, ranges, hunks, "f" * 40)
+        self.assertEqual([f["title"] for f in touched], ["off by one"])
+        self.assertEqual({f["title"]: f["line"] for f in carried}, {"lastN(0)": 5, "far below": 42})
+        self.assertTrue(all(f["carried_from"] == "f" * 10 for f in carried))
+
+    def test_previous_review_requires_ancestor_same_base_and_complete(self):
+        with tempfile.TemporaryDirectory() as d:
+            home = os.path.join(d, "home"); repo = os.path.join(d, "r"); os.makedirs(repo)
+            g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True,
+                                          env=dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                                                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")).stdout.decode().strip()
+            g("init", "-q", "-b", "main"); open(os.path.join(repo, "f"), "w").write("1"); g("add", "f"); g("commit", "-qm", "b")
+            base = g("rev-parse", "HEAD"); g("checkout", "-qb", "x")
+            open(os.path.join(repo, "f"), "w").write("2"); g("commit", "-qam", "c1"); c1 = g("rev-parse", "HEAD")
+            open(os.path.join(repo, "f"), "w").write("3"); g("commit", "-qam", "c2"); c2 = g("rev-parse", "HEAD")
+            old = (V.HOME, U.HOME)
+            V.HOME = U.HOME = home
+            try:
+                proj = "r"
+                os.makedirs(os.path.join(home, "projects", proj)); os.makedirs(os.path.join(home, "reviews", proj, c1))
+                U.write_json(os.path.join(home, "projects", proj, "branches.json"), {"x": [c1]})
+                rev = {"status": "done", "base": base, "coverage": {"complete": True}}
+                U.write_json(os.path.join(home, "reviews", proj, c1, "review.json"), rev)
+                self.assertEqual(V.previous_review(repo, proj, c2, base)[0], c1)
+                self.assertEqual(V.previous_review(repo, proj, c2, "0" * 40), (None, None))       # base moved
+                U.write_json(os.path.join(home, "reviews", proj, c1, "review.json"), dict(rev, coverage={"complete": False}))
+                self.assertEqual(V.previous_review(repo, proj, c2, base), (None, None))          # incomplete
+            finally:
+                V.HOME, U.HOME = old
+
+
+class TestEvalScoring(unittest.TestCase):
+    def test_hits_and_scores(self):
+        from crucible import evalrun as E
+        exp = {"kind": "bug", "file": "src/a.js", "lines": [10], "keywords": ["off-by-one"]}
+        self.assertTrue(E.hits({"file": "src/a.js", "line": 12, "title": "x", "problem": ""}, exp))
+        self.assertTrue(E.hits({"file": "src/a.js", "line": 40, "title": "an off-by-one", "problem": ""}, exp))
+        self.assertFalse(E.hits({"file": "src/b.js", "line": 10, "title": "off-by-one", "problem": ""}, exp))
+        rev = {"status": "done", "cost_usd": 0.2, "dropped": [],
+               "findings": [{"severity": "medium", "file": "src/a.js", "line": 10, "title": "x", "problem": ""}]}
+        s = E.score_case(rev, exp)
+        self.assertEqual((s["caught"], s["caught_any_severity"]), (False, True))
+        s = E.score_case(dict(rev, findings=[dict(rev["findings"][0], severity="important")]), {"kind": "clean"})
+        self.assertEqual(s["false_blocking"], 1)
+
+    def test_cases_are_well_formed(self):
+        from crucible import evalrun as E
+        cases = E.load_cases()
+        self.assertGreaterEqual(len(cases), 16)
+        for name, d, exp in cases:
+            self.assertIn(exp["kind"], ("bug", "clean"), name)
+            self.assertTrue(os.path.isdir(os.path.join(d, "base")) and os.path.isdir(os.path.join(d, "change")), name)
+            if exp["kind"] == "bug":
+                self.assertTrue(exp["file"] and exp["lines"] and exp["keywords"], name)
+                self.assertTrue(os.path.exists(os.path.join(d, "change", exp["file"])), name)
+
+
+class TestMapLine(unittest.TestCase):
+    def test_insert_delete_and_replace_hunks(self):
+        self.assertEqual(D.map_line([(20, 0, 21, 2)], 20), 20)   # insertion after line 20 leaves line 20 alone
+        self.assertEqual(D.map_line([(20, 0, 21, 2)], 21), 23)
+        self.assertEqual(D.map_line([(6, 2, 5, 0)], 10), 8)      # deleting lines 6-7 moves later lines up by 2
+        self.assertIsNone(D.map_line([(6, 2, 5, 0)], 6))
+        self.assertEqual(D.map_line([(6, 1, 6, 3)], 9), 11)      # 1 line replaced by 3
+        self.assertEqual(D.map_line([(6, 1, 6, 3)], 5), 5)

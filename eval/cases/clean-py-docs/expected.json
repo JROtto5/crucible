@@ -1,0 +1,4 @@
+{
+ "kind": "clean",
+ "message": "docs: explain the retry backoff"
+}

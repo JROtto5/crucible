@@ -155,12 +155,17 @@ def hunks_old_new(diff_text):
 
 
 def map_line(hunks, line):
-    """Old line -> new line for a line outside any hunk (None if inside a changed hunk)."""
+    """Old line -> new line for a line outside any hunk (None if inside a changed hunk).
+
+    A zero-length side of a unified-diff hunk names the line *before* the change ("@@ -20,0 +21,2 @@" inserts after old
+    line 20), so the shift is measured between the last line of each side, not between their starts."""
     shift = 0
     for os_, ol, ns, nl in hunks:
-        if line < os_:
+        if (ol and line < os_) or (not ol and line <= os_):
             break
-        if os_ <= line < os_ + max(ol, 1) and ol:
+        if ol and os_ <= line < os_ + ol:
             return None
-        shift = (ns + nl) - (os_ + ol)
+        old_end = os_ + ol - 1 if ol else os_
+        new_end = ns + nl - 1 if nl else ns
+        shift = new_end - old_end
     return line + shift

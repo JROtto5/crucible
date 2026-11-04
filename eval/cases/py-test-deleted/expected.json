@@ -1,0 +1,17 @@
+{
+ "kind": "bug",
+ "message": "pricing: simplify discount rounding",
+ "file": "pricing/core.py",
+ "lines": [
+  3
+ ],
+ "keywords": [
+  "round",
+  "floor",
+  "truncat",
+  "deleted",
+  "removed test",
+  "849",
+  "nearest"
+ ]
+}
