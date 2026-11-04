@@ -5,3 +5,4 @@ __pycache__/
 improve.sh
 improve-prompt.md
 .venv/
+.building
