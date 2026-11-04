@@ -70,8 +70,11 @@ Learning reads the project's most recent merged PRs through `gh` and writes thre
 
 crucible reads the description from `PR_DRAFT.md` (or `PR_DRAFT.polished.md`) in the repo. Only the part you would paste into GitHub is judged. Your own notes in the same file are excluded from the style checks, the readiness checks (template sections, the linked issue) and the reviewer's description findings:
 
-- a preamble before a `## Body` heading is skipped, and a `## Title` section gives the title (otherwise a leading `# Title` line does);
-- the body ends at the first notes heading (`Explain it to me`, `Issue to file first`, `Author notes`, `Do not submit`, …) or at a `<!-- crucible: notes -->` line.
+- your notes start at the first notes heading (`Explain it to me`, `Issue to file first`, `Author notes`, `Do not submit`, …) or at a `<!-- crucible: notes -->` line, and run to the end of the file;
+- before that point, a `## Body` heading starts the body, and anything above it (a metadata preamble, a `## Title` section) counts as notes;
+- a `## Title` section gives the title; without `## Body`, a leading `# Title` line does.
+
+Markers inside code fences are ignored.
 
 Headings from the repo's own PR template never count as "headings this project rarely uses", even with emoji prefixes.
 

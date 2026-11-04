@@ -166,7 +166,10 @@ class TestDraftSplit(unittest.TestCase):
         self.assertTrue(d["body"].startswith("## 🔍 Description"), d["body"][:40])
         self.assertIn("## Explain it to me\n```", d["body"])  # a heading inside a code fence is not a boundary
         self.assertTrue(d["body"].endswith("Tested with `npm test`."), d["body"][-40:])
-        self.assertTrue(d["notes"].startswith("## Explain it to me (Q&A prep)"))
+        self.assertTrue(d["notes"].startswith("# PR draft (not opened, not pushed)"))  # preamble kept as notes
+        self.assertIn("\n\n## Explain it to me (Q&A prep)", d["notes"])
+        self.assertIn("## Title\n\n`fix(postgrest)", d["notes"])
+        self.assertNotIn("## Body", d["notes"])
         self.assertNotIn("#999", d["body"])
 
     def test_plain_drafts_unchanged(self):
@@ -183,10 +186,20 @@ class TestDraftSplit(unittest.TestCase):
         d = R.split_draft(four)
         self.assertEqual(d["notes"], "")
         self.assertTrue(d["body"].endswith("real body end"))
-        pre = "# Draft\n\n## Notes for me\nfile the issue first\n\n## Body\nFixes #5.\n\n## Explain it to me\nx\n"
+        pre = "# Draft\n\n> file the issue first\n\n## Body\nFixes #5.\n\n## Explain it to me\nx\n"
         d = R.split_draft(pre)
-        self.assertEqual(d["body"], "Fixes #5.")
-        self.assertEqual(d["notes"], "## Explain it to me\nx")
+        self.assertEqual((d["title"], d["body"]), ("", "Fixes #5."))  # an H1 above `## Body` is a label, not the title
+        self.assertEqual(d["notes"], "# Draft\n\n> file the issue first\n\n## Explain it to me\nx")  # preamble kept
+
+    def test_body_heading_inside_notes_is_ignored(self):
+        t = "# T\n\nReal body, Fixes #3.\n\n## Issue to file first\n\n## Title\nbug\n\n## Body\nissue text #9\n"
+        d = R.split_draft(t)
+        self.assertEqual((d["title"], d["body"]), ("T", "Real body, Fixes #3."))
+        self.assertEqual(R.linked_issue(R.submitted_text(t)), 3)
+
+    def test_title_section_without_body_heading(self):
+        d = R.split_draft("## Title\nfix: timestamps\n\n## Summary\nFixes #1.\n")
+        self.assertEqual((d["title"], d["body"]), ("fix: timestamps", "## Summary\nFixes #1."))
 
     def test_notes_dont_drive_findings(self):
         style = {"body": {"median_words": 60, "pct_with_emoji": 50, "pct_with_headings": 60,
@@ -206,6 +219,16 @@ class TestDraftSplit(unittest.TestCase):
         self.assertEqual(S.norm_heading("🔄 Breaking changes:"), "breaking changes")
         # a template alone is no evidence that other headings are unusual
         self.assertEqual(S.ai_tells("## A\n## B\n## C\n", {}, ["Description"]), [])
+
+    def test_style_check_uses_template_and_submitted_part(self):
+        tpl = "## 🔍 Description\n\n## 📸 Screenshots\n\n## 🔄 Breaking changes\n\n## 📋 Checklist\n"
+        d = make_repo({".github/PULL_REQUEST_TEMPLATE.md": tpl})
+        style = {"body": {"median_words": 60, "pct_with_emoji": 50, "pct_with_headings": 60, "common_headings": ["testing"]}}
+        draft = ("# Fix a\n\n## 🔍 Description\nFixes #1, tested with npm test.\n\n## 📸 Screenshots\nnone\n\n"
+                 "## 🔄 Breaking changes\nnone\n\n## 📋 Checklist\n- [x] tests\n\n## Explain it to me\n" + "why " * 500)
+        kinds = {x["title"] for x in S.check(d, "HEAD", [], "PR_DRAFT.md", R.submitted_text(draft), style)}
+        self.assertEqual(kinds, set())
+        self.assertTrue(S.check(d, "HEAD", [], "PR_DRAFT.md", draft, style))  # the raw file would be flagged
 
     def test_evaluate_reads_only_the_submitted_part(self):
         d = make_repo({"a.js": "1\n"}, {"a.js": "2\n"})

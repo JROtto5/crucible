@@ -49,28 +49,38 @@ def _unfenced(lines):
 def split_draft(text):
     """Separate what will be pasted into the PR from the author's private notes in PR_DRAFT.md.
 
-    -> {"title", "body", "notes"}. The body starts after a `## Body` heading if there is one (so a metadata preamble
-    and a `## Title` section are skipped); otherwise after a leading `# Title` line. It ends at the first notes
-    heading after that start (e.g. "Explain it to me", "Issue to file first") or a `<!-- crucible: notes -->` line,
-    outside code fences. Notes never include the marker line itself. A draft without markers is all body, as before."""
+    -> {"title", "body", "notes"}. Lines inside code fences never act as markers.
+    - Notes start at the first notes heading (e.g. "Explain it to me", "Issue to file first") or a
+      `<!-- crucible: notes -->` line (the marker itself is not part of the notes).
+    - Before that boundary, a `## Body` heading starts the body; whatever precedes it (a metadata preamble, a
+      `## Title` section) is kept with the notes. Without `## Body`, a `## Title` section or a leading `# Title`
+      line gives the title and the body follows it.
+    A draft without any markers is all body, as before."""
     lines = (text or "").split("\n")
     open_lines = _unfenced(lines)
-    body_at = next((i + 1 for i in open_lines if BODY_HEAD_RX.match(lines[i])), None)
-    has_h1 = bool(lines and re.match(r"^#\s+\S", lines[0]))
-    start = body_at if body_at is not None else (1 if has_h1 else 0)
-    end = next((i for i in open_lines if i >= start and (NOTES_HEAD_RX.match(lines[i]) or NOTES_MARKER_RX.match(lines[i]))),
-               len(lines))
-    title_at = next((i + 1 for i in open_lines if i < start and TITLE_HEAD_RX.match(lines[i])), None)
-    title = ""
+    end = next((i for i in open_lines if NOTES_HEAD_RX.match(lines[i]) or NOTES_MARKER_RX.match(lines[i])), len(lines))
+    head = [i for i in open_lines if i < end]
+    body_at = next((i for i in head if BODY_HEAD_RX.match(lines[i])), None)
+    title_at = next((i for i in head if TITLE_HEAD_RX.match(lines[i]) and (body_at is None or i < body_at)), None)
+    title, start, preamble = "", 0, []
     if title_at is not None:
-        title = next((l.strip().strip("`").strip() for l in lines[title_at:start] if l.strip() and not l.startswith("#")), "")
-    elif has_h1:
-        title = lines[0][1:].strip()
+        stop = body_at if body_at is not None else end
+        val = next((i for i in range(title_at + 1, stop) if lines[i].strip()), None)
+        if val is not None and not lines[val].startswith("#"):
+            title = lines[val].strip().strip("`").strip()
+            start = val + 1
+        else:
+            start = title_at + 1
+    elif body_at is None and lines and re.match(r"^#\s+\S", lines[0]):
+        title, start = lines[0][1:].strip(), 1
+    if body_at is not None:
+        preamble, start = lines[:body_at], body_at + 1
     body = "\n".join(lines[start:end])
     # a trailing horizontal rule usually separated the body from the notes
     body = re.sub(r"(\n\s*(-{3,}|\*{3,}|_{3,})\s*)+\s*$", "", "\n" + body).strip("\n")
-    notes = lines[end + 1:] if end < len(lines) and NOTES_MARKER_RX.match(lines[end]) else lines[end:]
-    return {"title": title, "body": body, "notes": "\n".join(notes).strip("\n")}
+    rest = lines[end + 1:] if end < len(lines) and NOTES_MARKER_RX.match(lines[end]) else lines[end:]
+    notes = "\n\n".join(x for x in ("\n".join(preamble).strip("\n"), "\n".join(rest).strip("\n")) if x)
+    return {"title": title, "body": body, "notes": notes}
 
 
 def submitted_text(text):
