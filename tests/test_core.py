@@ -580,3 +580,90 @@ class TestResolveIssue(unittest.TestCase):
     def test_recheck_prompt_differs_from_first_verification(self):
         f = {"title": "t", "file": "a.js", "line": 1, "severity": "low", "wrong_if": "w"}
         self.assertNotEqual(V.verify_prompt(f, "code"), V.verify_prompt(f, "code", "files changed since: b.js"))
+
+
+class TestRequiredLinesNegative(unittest.TestCase):
+    def test_prose_mentioning_an_issue_is_not_required(self):
+        self.assertEqual(S.keep_required_lines("As discussed in https://github.com/o/r/issues/8 we fix x.", "We fix x.")[1], [])
+        self.assertEqual(S.keep_required_lines("This overlaps #12.", "Overlap noted.")[1], [])
+
+
+class TestUnclaimedPR(unittest.TestCase):
+    def test_linked_pr_only_warns(self):
+        orig = (R.gh_json, R.upstream_slug)
+        R.gh_json = lambda path: {"pull_request": {"url": "x"}, "state": "open"}
+        R.upstream_slug = lambda repo: "o/r"
+        try:
+            it = R.unclaimed(".", 5, "me")
+            self.assertEqual(it["status"], "warn")
+            self.assertIn("pull request", it["evidence"])
+        finally:
+            R.gh_json, R.upstream_slug = orig
+
+
+class TestRunReviewIncremental(unittest.TestCase):
+    """run_review end to end with a stubbed model: round 1 full, round 2 incremental; a carried finding whose cited
+    lines didn't change is re-checked against the later changes and dropped when the cheap verifier is sure."""
+
+    def test_two_rounds(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo, home = os.path.join(d, "r"), os.path.join(d, "home")
+            os.makedirs(os.path.join(repo, "src"))
+            env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+            g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True, env=env).stdout.decode().strip()
+            w = lambda p, t: open(os.path.join(repo, p), "w").write(t)
+            g("init", "-q", "-b", "main"); w("src/a.js", "export const a = 1;\n"); w("src/b.js", "export const b = 1;\n")
+            g("add", "-A"); g("commit", "-qm", "base"); g("checkout", "-qb", "x")
+            w("src/a.js", "export const a = 1;\nexport function f(xs) { return xs[xs.length]; }\n")
+            w("src/b.js", "export const b = 1;\nexport function g() { return 2; }\n")
+            g("commit", "-qam", "add f and g")
+            calls = []
+
+            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
+                calls.append((model, "findings" in schema["properties"], "changed since then" in prompt))
+                if "findings" in schema["properties"]:
+                    found = [] if "src/a.js" not in prompt else [
+                        {"severity": "important", "file": "src/a.js", "line": 2, "title": "f reads past the end",
+                         "problem": "xs[xs.length]", "caused_by_this_change": True, "reachable_in_real_use": True,
+                         "wrong_if": "index < length", "fix": "length - 1"}]
+                    if "src/b.js" in prompt and "export function g" in prompt:
+                        found.append({"severity": "medium", "file": "src/b.js", "line": 2, "title": "g has no test",
+                                      "problem": "untested", "caused_by_this_change": True, "reachable_in_real_use": True,
+                                      "wrong_if": "a test covers g", "fix": "add a test"})
+                    return {"summary": "s", "findings": found}, 0.01
+                if "changed since then" in prompt:      # the re-check of the carried b.js finding: a test was added
+                    return {"keep": False, "severity": "medium", "method": "read", "actions": "read test",
+                            "evidence": "test/g.test.js covers g", "confidence": "high"}, 0.001
+                return {"keep": True, "severity": "important" if "past the end" in prompt else "medium", "method": "read",
+                        "actions": "read", "evidence": "seen", "confidence": "high"}, 0.001
+
+            olds = (V.HOME, U.HOME, V.claude, os.environ.get("CRUCIBLE_CACHE"))
+            V.HOME = U.HOME = home
+            os.environ["CRUCIBLE_CACHE"] = os.path.join(home, "cache")
+            V.claude = fake
+            try:
+                d1 = V.run_review(repo, "main", offline=True, skip_checks=True, log=lambda *_: None)
+                r1 = U.read_json(os.path.join(d1, "review.json"))
+                self.assertEqual(r1["status"], "done", r1.get("reason"))
+                self.assertEqual(sorted(f["file"] for f in r1["findings"]), ["src/a.js", "src/b.js"])
+                # round 2: fix f in a.js and add a test for g in another file; b.js itself is untouched
+                w("src/a.js", "export const a = 1;\nexport function f(xs) { return xs[xs.length - 1]; }\n")
+                os.makedirs(os.path.join(repo, "test")); w("test/g.test.js", "import { g } from '../src/b.js';\n")
+                g("add", "-A"); g("commit", "-qm", "fix f, test g")
+                calls.clear()
+                d2 = V.run_review(repo, "main", offline=True, skip_checks=True, log=lambda *_: None)
+                r2 = U.read_json(os.path.join(d2, "review.json"))
+                self.assertEqual(r2["status"], "done", r2.get("reason"))
+                self.assertEqual(r2["incremental"]["carried"], 1)            # g has no test (b.js untouched)
+                self.assertEqual(r2["incremental"]["reverified"], 1)         # f reads past the end (a.js touched)
+                self.assertTrue(any(c[2] for c in calls))                    # the re-check saw the later changes
+                kept_titles = {f["title"] for f in r2["findings"]}
+                self.assertNotIn("g has no test", kept_titles)               # dropped by the re-check
+                self.assertIn("g has no test", {f["title"] for f in r2["dropped"]})
+                self.assertTrue(r2["coverage"]["complete"])
+            finally:
+                V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
+                if olds[3] is None:
+                    os.environ.pop("CRUCIBLE_CACHE", None)
+                else:
+                    os.environ["CRUCIBLE_CACHE"] = olds[3]

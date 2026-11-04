@@ -249,7 +249,11 @@ REQUIRED_LINE_RX = re.compile(r"^\s*(?:[-*]\s*)?(?:\*\*)?" + ISSUE_KW + r"\b(?:\
 def keep_required_lines(original, rewritten):
     """Issue-link lines ("Closes #12", "Related issue: #34697") are required by many PR templates and must survive a
     rewrite verbatim. Returns (body, restored lines). A line that was first in the original goes back on top, else at the end."""
-    req = [l.strip() for l in original.split("\n") if REQUIRED_LINE_RX.search(l) and (REQUIRED_LINE_RX.match(l) or l.strip().startswith(("http", "<http", "[")))]
+    def required(line):
+        """A line that IS an issue link: it starts with a linking keyword, or the whole line is an issue URL/link."""
+        t = line.strip()
+        return bool(REQUIRED_LINE_RX.match(t)) or (t.startswith(("http", "<http", "[")) and bool(REQUIRED_LINE_RX.search(t)))
+    req = [l.strip() for l in original.split("\n") if required(l)]
     have = {re.sub(r"\s+", " ", l.strip()).lower() for l in rewritten.split("\n")}
     missing = [l for l in req if re.sub(r"\s+", " ", l).lower() not in have]
     if not missing:
