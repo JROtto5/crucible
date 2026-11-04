@@ -20,6 +20,57 @@ def find_draft(repo, draft=None):
     return None, ""
 
 
+FENCE_RX = re.compile(r"^\s*(```|~~~)")
+BODY_HEAD_RX = re.compile(r"^#{1,4}\s+(pr\s+)?body\s*:?\s*$", re.I)
+TITLE_HEAD_RX = re.compile(r"^#{1,4}\s+(pr\s+)?title\s*:?\s*$", re.I)
+# Headings that open the author's own notes. Everything from the first one on is never submitted.
+NOTES_HEAD_RX = re.compile(r"^#{1,4}\s+.*\b(explain it to me|q&a prep|author'?s? notes|(private|internal) notes|"
+                           r"notes (for|to) (me|myself|the author)|not for (submission|upstream|the pr)|do not submit|"
+                           r"issue to file)\b", re.I)
+NOTES_MARKER_RX = re.compile(r"^\s*<!--\s*crucible:\s*notes\s*-->\s*$", re.I)
+
+
+def split_draft(text):
+    """Separate what will be pasted into the PR from the author's private notes in PR_DRAFT.md.
+
+    -> {"title", "body", "notes"}. The body starts after a `## Body` heading if there is one (so a metadata preamble
+    and a `## Title` section are skipped); otherwise after a leading `# Title` line. It ends at the first notes
+    heading (e.g. "Explain it to me", "Issue to file first") or a `<!-- crucible: notes -->` line, outside code
+    fences. A draft without any of these markers is all body, as before."""
+    lines = (text or "").split("\n")
+    fenced, body_at, title_at, notes_at = False, None, None, None
+    for i, l in enumerate(lines):
+        if FENCE_RX.match(l):
+            fenced = not fenced
+            continue
+        if fenced:
+            continue
+        if NOTES_HEAD_RX.match(l) or NOTES_MARKER_RX.match(l):
+            notes_at = i
+            break
+        if body_at is None and BODY_HEAD_RX.match(l):
+            body_at = i + 1
+        elif title_at is None and body_at is None and TITLE_HEAD_RX.match(l):
+            title_at = i + 1
+    end = len(lines) if notes_at is None else notes_at
+    title = ""
+    if title_at is not None:
+        title = next((l.strip().strip("`").strip() for l in lines[title_at:end] if l.strip()), "")
+    elif lines and re.match(r"^#\s+\S", lines[0]):
+        title = lines[0][1:].strip()
+    start = body_at if body_at is not None else (1 if lines and re.match(r"^#\s+\S", lines[0]) else 0)
+    body = "\n".join(lines[start:end])
+    # a trailing horizontal rule usually separated the body from the notes
+    body = re.sub(r"(\n\s*(-{3,}|\*{3,}|_{3,})\s*)+\s*$", "", body).strip("\n")
+    return {"title": title, "body": body, "notes": "\n".join(lines[end:]).strip("\n")}
+
+
+def submitted_text(text):
+    """The title (as a plain line, so it doesn't count as a body heading) and body as they would be submitted."""
+    d = split_draft(text)
+    return (d["title"] + "\n\n" if d["title"] else "") + d["body"]
+
+
 def template_headings(repo):
     for t in TEMPLATES:
         p = os.path.join(repo, t)
@@ -147,6 +198,7 @@ def unclaimed(repo, issue, me=None):
 def evaluate(repo, project, base, files, draft=None, me="JROtto5", offline=False):
     paths = [f["path"] for f in files]
     draft_path, draft_text = find_draft(repo, draft)
+    draft_text = submitted_text(draft_text)  # author notes in the draft are not part of the PR
     issue = linked_issue(draft_text)
     subjects = [s for s in git(repo, "log", "--format=%s", f"{base}..HEAD").split("\n") if s]
     fmt = formatting_only_hunks(files)

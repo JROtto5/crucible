@@ -66,9 +66,18 @@ Learning reads the project's most recent merged PRs through `gh` and writes thre
   - the voice, comment conventions, how reviewers are called out, and what regulars never do;
   - three real example bodies with links.
 
+## Your PR draft and your notes
+
+crucible reads the description from `PR_DRAFT.md` (or `PR_DRAFT.polished.md`) in the repo. Only the part you would paste into GitHub is judged. Your own notes in the same file are excluded from the style checks, the readiness checks (template sections, the linked issue) and the reviewer's description findings:
+
+- a preamble before a `## Body` heading is skipped, and a `## Title` section gives the title (otherwise a leading `# Title` line does);
+- the body ends at the first notes heading (`Explain it to me`, `Issue to file first`, `Author notes`, `Do not submit`, …) or at a `<!-- crucible: notes -->` line.
+
+Headings from the repo's own PR template never count as "headings this project rarely uses", even with emoji prefixes.
+
 ## Assistants (drafts only)
 
-- `polish` rewrites `PR_DRAFT.md` in the house style. It keeps every fact, number and test result, adds no unprovable claims, lists anything it removed in `PR_DRAFT.polish-notes.md`, and re-scans the result for generated-text tells.
+- `polish` rewrites the body of `PR_DRAFT.md` in the house style and carries your notes over below a `<!-- crucible: notes -->` line. It keeps every fact, number and test result, adds no unprovable claims, lists anything it removed in `PR_DRAFT.polish-notes.md`, and re-scans the result for generated-text tells.
 - `prep` predicts reviewer questions and answers them with file:line and test evidence. It also writes "explain it like you wrote it" notes.
 - `reply` fetches the comments on an open PR and drafts replies that follow [docs/answering-maintainers.md](docs/answering-maintainers.md).
 

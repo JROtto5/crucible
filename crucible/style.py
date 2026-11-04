@@ -152,9 +152,15 @@ def _f(sev, file, line, title, problem, fix, wrong_if):
             "wrong_if": wrong_if, "caused_by_this_change": True, "reachable_in_real_use": True, "source": "style"}
 
 
-def ai_tells(text, style=None):
-    """-> list of (kind, detail) for a PR description."""
+def norm_heading(h):
+    """'🔄 Breaking changes:' -> 'breaking changes', so emoji-prefixed template headings match learned ones."""
+    return re.sub(r"[\s:]+$", "", re.sub(r"^[^\w]+", "", h.strip())).lower()
+
+
+def ai_tells(text, style=None, allowed_headings=()):
+    """-> list of (kind, detail) for a PR description. `allowed_headings` (the repo's PR template) never count."""
     style = style or {}
+    allowed = {norm_heading(h) for h in allowed_headings}
     out = []
     em = EMOJI_RX.findall(text)
     if em and (style.get("body", {}).get("pct_with_emoji", 0) < 10):
@@ -171,13 +177,13 @@ def ai_tells(text, style=None):
     w = words(text)
     if med and w > max(2.5 * med, med + 150):
         out.append(("length", f"{w} words vs project median {med}"))
-    common = set((style.get("body") or {}).get("common_headings") or [])
+    common = {norm_heading(h) for h in (style.get("body") or {}).get("common_headings") or []} | allowed
+    own = [h for h in HEADING_RX.findall(text) if norm_heading(h) not in allowed]
     if style and (style.get("body") or {}).get("pct_with_headings", 100) < 30:
-        hs = HEADING_RX.findall(text)
-        if len(hs) >= 2:
-            out.append(("headings", f"{len(hs)} headings; only {style['body']['pct_with_headings']}% of merged PRs use any"))
+        if len(own) >= 2:
+            out.append(("headings", f"{len(own)} headings; only {style['body']['pct_with_headings']}% of merged PRs use any"))
     elif common:
-        odd = [h for h in HEADING_RX.findall(text) if h.strip().lower() not in common]
+        odd = [h for h in own if norm_heading(h) not in common]
         if len(odd) >= 3:
             out.append(("headings", f"headings this project rarely uses: {odd[:4]}"))
     if text.count("—") >= 4:
@@ -186,9 +192,10 @@ def ai_tells(text, style=None):
 
 
 def check(repo, base, files, draft_path, draft_text, style):
+    from .readiness import template_headings
     out = []
     if draft_text:
-        for kind, detail in ai_tells(draft_text, style):
+        for kind, detail in ai_tells(draft_text, style, template_headings(repo)[1]):
             out.append(_f("medium" if kind in ("length", "boilerplate") else "low", os.path.basename(draft_path or "PR_DRAFT.md"), 1,
                           f"PR description: {kind} reads as generated", detail,
                           "Rewrite in the project's own voice (run `crucible polish`).",
@@ -235,9 +242,11 @@ POLISH_SCHEMA = {"type": "object", "properties": {"title": {"type": "string"}, "
 
 
 def polish(repo, project, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-opus-5-5"), budget_usd=1.0, log=print):
-    from .readiness import find_draft, template_headings
-    path, draft = find_draft(repo)
-    if not draft:
+    from .readiness import find_draft, split_draft, template_headings
+    path, full = find_draft(repo)
+    parts = split_draft(full)
+    draft = (f"Title: {parts['title']}\n\n" if parts["title"] else "") + parts["body"]
+    if not draft.strip():
         raise SystemExit("no PR_DRAFT.md to polish")
     style_md = open(os.path.join(project_dir(project), "STYLE.md")).read() if os.path.exists(os.path.join(project_dir(project), "STYLE.md")) \
         else "(no STYLE.md: run `crucible learn` first; fall back to terse, factual, maintainer-like prose)"
@@ -259,11 +268,12 @@ def polish(repo, project, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-
         """), model, POLISH_SCHEMA, repo, Budget(budget_usd))
     newp = os.path.join(repo, "PR_DRAFT.polished.md")
     txt = f"# {out['title']}\n\n{out['body'].strip()}\n"
-    open(newp, "w").write(txt)
+    # carry the author's notes over, so the polished draft (which review prefers) still has them, marked off
+    open(newp, "w").write(txt + (f"\n<!-- crucible: notes -->\n\n{parts['notes']}\n" if parts["notes"] else ""))
     notes = "\n".join(f"- removed: {r}" for r in out["removed"]) or "- nothing removed"
     open(os.path.join(repo, "PR_DRAFT.polish-notes.md"), "w").write(f"# Polish notes\n\n{notes}\n\n## Facts kept\n\n"
                                                                     + "\n".join(f"- {k}" for k in out["kept_facts"]) + "\n")
-    leftover = ai_tells(txt, read_json(os.path.join(project_dir(project), "style.json"), {}))
+    leftover = ai_tells(out["body"], read_json(os.path.join(project_dir(project), "style.json"), {}), heads)
     log(f"wrote {newp} (original kept) · {len(out['removed'])} removals listed in PR_DRAFT.polish-notes.md · "
         f"remaining tells: {leftover or 'none'} · ${round(cost, 4)}")
     return newp

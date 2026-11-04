@@ -162,7 +162,8 @@ def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, hou
         sounding prose, or length far from the project norm. Use file "PR_DRAFT.md" for description findings.
         {house}
 
-        PR description draft:
+        PR description draft, as it will be submitted (the author's private notes in PR_DRAFT.md are excluded and
+        are not part of the PR, so don't count them toward length or style):
         {draft[:5000] or '(none)'}
 
         Facts from running the project's own checks (treat as true):
@@ -239,7 +240,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         record["checks"] = chk
         ready = readiness.evaluate(repo, project, base, files, draft=draft, offline=offline)
         record["readiness"] = ready
-        draft_path, draft_text = readiness.find_draft(repo, draft)
+        draft_path, draft_full = readiness.find_draft(repo, draft)
+        draft_text = readiness.submitted_text(draft_full)
         style_json = read_json(os.path.join(project_dir(project), "style.json"), {}) or {}
         house_findings = style_mod.check(repo, base, files, draft_path, draft_text, style_json)
 

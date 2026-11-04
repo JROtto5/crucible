@@ -153,6 +153,47 @@ class TestReadiness(unittest.TestCase):
         self.assertEqual(R.check_draft(d, "## Description\nx\n## Testing\nnpm test")["status"], "pass")
 
 
+class TestDraftSplit(unittest.TestCase):
+    # shaped like a real draft: metadata preamble, Title/Body sections, then the author's notes after a rule
+    NOTED = ("# PR draft (not opened, not pushed)\n\n> Before opening, file the issue at the bottom; see #999.\n\n"
+             "## Title\n\n`fix(postgrest): send Date args as ISO 8601`\n\n## Body\n\n## 🔍 Description\n\n"
+             "Fixes #42.\n\n```md\n## Explain it to me\n```\n\nTested with `npm test`.\n\n---\n\n"
+             "## Explain it to me (Q&A prep)\n\n" + "- why? because. " * 300 + "\n\n## Issue to file first\n\nBody #7\n")
+
+    def test_split_noted_draft(self):
+        d = R.split_draft(self.NOTED)
+        self.assertEqual(d["title"], "fix(postgrest): send Date args as ISO 8601")
+        self.assertTrue(d["body"].startswith("## 🔍 Description"), d["body"][:40])
+        self.assertIn("## Explain it to me\n```", d["body"])  # a heading inside a code fence is not a boundary
+        self.assertTrue(d["body"].endswith("Tested with `npm test`."), d["body"][-40:])
+        self.assertTrue(d["notes"].startswith("## Explain it to me (Q&A prep)"))
+        self.assertNotIn("#999", d["body"])
+
+    def test_plain_drafts_unchanged(self):
+        d = R.split_draft("# WebGPUBackend: Fix timestamps.\n\n**Description**\n\nFixes #1.\n")
+        self.assertEqual((d["title"], d["notes"]), ("WebGPUBackend: Fix timestamps.", ""))
+        self.assertEqual(d["body"], "\n**Description**\n\nFixes #1.\n".strip("\n"))
+        self.assertEqual(R.split_draft("just a body\n\n## Out of scope\nfollow-up")["notes"], "")
+        self.assertEqual(R.split_draft("body\n<!-- crucible: notes -->\nmine")["notes"], "<!-- crucible: notes -->\nmine")
+
+    def test_notes_dont_drive_findings(self):
+        style = {"body": {"median_words": 60, "pct_with_emoji": 50, "pct_with_headings": 60,
+                          "common_headings": ["description"]}}
+        self.assertIn("length", {k for k, _ in S.ai_tells(self.NOTED, style)})  # the old behaviour
+        self.assertEqual(S.ai_tells(R.submitted_text(self.NOTED), style), [])
+        self.assertEqual(R.linked_issue(R.submitted_text(self.NOTED)), 42)
+
+    def test_template_headings_allowed(self):
+        style = {"body": {"median_words": 400, "pct_with_emoji": 50, "pct_with_headings": 40,
+                          "common_headings": ["description", "breaking changes"]}}
+        body = "## 🔍 Description\nx\n## 📸 Screenshots/Examples\nx\n## 🔄 Breaking changes\nno\n## 📋 Checklist\n- [x]\n" \
+               "## 📝 Additional notes\nnone\n"
+        self.assertIn("headings", {k for k, _ in S.ai_tells(body, style)})
+        tpl = ["🔍 Description", "📸 Screenshots/Examples", "🔄 Breaking changes", "📋 Checklist", "📝 Additional notes"]
+        self.assertEqual(S.ai_tells(body, style, tpl), [])
+        self.assertEqual(S.norm_heading("🔄 Breaking changes:"), "breaking changes")
+
+
 class TestReviewLogic(unittest.TestCase):
     def test_honesty_caps(self):
         f = V.apply_honesty({"severity": "critical", "caused_by_this_change": False, "reachable_in_real_use": True})
@@ -238,9 +279,6 @@ class TestStyle(unittest.TestCase):
         self.assertFalse(S.OBVIOUS_COMMENT_RX.match("  // must run before the depth prepass: see #2213"))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class TestWaivers(unittest.TestCase):
     def test_waiver_unblocks_only_the_waived_failure(self):
@@ -269,3 +307,6 @@ class TestClaudeCall(unittest.TestCase):
         self.assertEqual(out, {"ok": True})
         self.assertEqual(seen["input"], "PROMPT-TEXT")
         self.assertNotIn("PROMPT-TEXT", seen["cmd"])
+
+if __name__ == "__main__":
+    unittest.main()
