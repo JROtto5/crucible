@@ -6,3 +6,4 @@ improve.sh
 improve-prompt.md
 .venv/
 .building
+eval/last-run.json

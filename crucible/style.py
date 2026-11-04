@@ -4,7 +4,7 @@
 `check` returns deterministic medium/low findings for the diff's comments and the PR draft.
 `polish` rewrites PR_DRAFT.md into PR_DRAFT.polished.md in the project's voice, without inventing claims."""
 import collections, os, re, statistics, textwrap
-from .util import (CODE_EXT_RX, TEST_PATH_RX, Budget, claude, gh_json, git, project_dir, read_json, write_json)
+from .util import (CODE_EXT_RX, ISSUE_KW, TEST_PATH_RX, Budget, claude, gh_json, git, project_dir, read_json, write_json)
 
 EMOJI_RX = re.compile("[\U0001F300-\U0001FAFF\U00002700-\U000027BF\U0001F000-\U0001F2FF☀-⛿⭐✅❌]")
 BOILERPLATE_RX = re.compile(r"^[^\w\n]*(this (pr|pull request|change|commit) (introduces|adds|aims|implements|fixes|addresses)|"
@@ -242,8 +242,7 @@ POLISH_SCHEMA = {"type": "object", "properties": {"title": {"type": "string"}, "
                  "required": ["title", "body", "removed", "kept_facts"]}
 
 
-REQUIRED_LINE_RX = re.compile(r"^\s*(?:[-*]\s*)?(?:\*\*)?(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?|related issues?|refs?)\b"
-                              r"(?:\*\*)?\s*:?\s*(?:#|https?://)", re.I)
+REQUIRED_LINE_RX = re.compile(r"^\s*(?:[-*]\s*)?(?:\*\*)?" + ISSUE_KW + r"\b(?:\*\*)?\s*:?\s*(?:\*\*)?\s*(?:#|https?://)", re.I)
 
 
 def keep_required_lines(original, rewritten):

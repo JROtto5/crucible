@@ -369,9 +369,11 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         for i, ch in enumerate(chunks, 1):
             prompt = review_prompt(project, sha, base, ch, rules, mem, facts, clog, all_files, house,
                                    draft_text if i == 1 else "(reviewed in pass 1)")
-            # keyed on what the review depends on, not on volatile check output, so --force on the same commit is stable
-            key = hashlib.sha256("\0".join([review_model, ch["text"], rules, mem, house, fkey, ",".join(all_files),
-                                            draft_text if i == 1 else ""]).encode()).hexdigest()[:32]
+            # keyed on the prompt with check output reduced to outcomes: a template change invalidates the cache, but
+            # volatile output (timings) doesn't, so --force on the same commit is stable
+            key_prompt = review_prompt(project, sha, base, ch, rules, mem, fkey, clog, all_files, house,
+                                       draft_text if i == 1 else "(reviewed in pass 1)")
+            key = hashlib.sha256((review_model + "\0" + key_prompt).encode()).hexdigest()[:32]
             hit = None if fresh else cache_get(key)
             if hit:
                 out, cost = hit, 0
@@ -427,6 +429,24 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                         f["verification"] = {"status": "dropped", "method": v["method"], "actions": v["actions"],
                                              "evidence": v["evidence"], "confidence": v.get("confidence"), "tiers": trail}
                         dropped.append(f)
+        # a carried finding can be fixed by a change elsewhere (a test added in another file): re-check it cheaply
+        if carried and len(tiers) > 1:
+            def recheck(f):
+                try:
+                    v, trail = verify_tiered(f, region(repo, sha, f["file"], f["line"]), repo, budget, tiers[:1], fresh)
+                    return f, v
+                except Failed:
+                    return f, None
+            with cf.ThreadPoolExecutor(max_workers=4) as ex:
+                for f, v in ex.map(recheck, list(carried)):
+                    if v and not v["keep"] and v.get("confidence") == "high":
+                        kept.remove(f)
+                        f["verification"] = {"status": "dropped", "method": v["method"], "actions": v["actions"],
+                                             "evidence": "re-checked after a later commit: " + v["evidence"],
+                                             "confidence": "high", "tiers": [{"model": tiers[0]}]}
+                        dropped.append(f)
+                    elif v:
+                        f["rechecked"] = tiers[0]
         kept.sort(key=lambda f: (SEV.index(f["severity"]), (f.get("verification") or {}).get("method") != "executed"))
         record.update(status="done", summary=" ".join(summaries)[:3000], findings=kept, dropped=dropped,
                       cost_usd=round(budget.spent, 4), cost_review_usd=round(review_cost, 4),

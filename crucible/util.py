@@ -14,6 +14,10 @@ TEST_PATH_RX = re.compile(r"(^|/)(tests?|__tests__|spec|specs|fixtures?|testdata
 CODE_EXT_RX = re.compile(r"\.(c|cc|cpp|h|hpp|cs|go|java|kt|rs|swift|py|rb|php|[cm]?[jt]sx?|vue|svelte|glsl|wgsl|frag|vert)$")
 
 
+# Words that make "#123" an issue link (shared by readiness and polish, so they always agree).
+ISSUE_KW = r"(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?|related(?:\s+issues?|\s+to)?|refs?|issues?)"
+
+
 class Failed(Exception):
     """A review step failed in a way that must be recorded, not crash."""
 

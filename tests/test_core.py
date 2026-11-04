@@ -273,7 +273,7 @@ class TestDraftSplit(unittest.TestCase):
             return {"title": "Fix a", "body": "Fix a.", "removed": [], "kept_facts": []}, 0.0
         S.claude = fake
         try:
-            for _ in range(3):  # later runs read PR_DRAFT.polished.md
+            for _ in range(3):  # re-polishing must not duplicate the notes marker
                 S.polish(d, "t__polish", log=lambda *_: None)
         finally:
             S.claude = orig
@@ -545,3 +545,14 @@ class TestMapLine(unittest.TestCase):
         self.assertIsNone(D.map_line([(6, 2, 5, 0)], 6))
         self.assertEqual(D.map_line([(6, 1, 6, 3)], 9), 11)      # 1 line replaced by 3
         self.assertEqual(D.map_line([(6, 1, 6, 3)], 5), 5)
+
+
+class TestSelfReviewFixes(unittest.TestCase):
+    def test_issue_and_required_line_patterns_agree(self):
+        for line in ("Closes #12", "Related issue: #34697", "Related to #5", "Refs #9", "Issue: #3", "**Fixes** #4",
+                     "Resolves https://github.com/o/r/issues/8"):
+            self.assertTrue(S.REQUIRED_LINE_RX.match(line), line)
+            self.assertIsNotNone(R.linked_issue(line), line)
+
+    def test_linked_issues_order_and_dedupe(self):
+        self.assertEqual(R.linked_issues("Refs #2693. Closes #2823. Fixes #2823."), [2693, 2823])

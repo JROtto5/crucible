@@ -110,11 +110,13 @@ def run_case(name, case_dir, exp, args, cache_dir):
         if args.no_tiers:
             cmd.append("--no-tiers")
         t0 = time.time()
-        subprocess.run(cmd, env=env, capture_output=True, text=True, cwd=os.path.dirname(EVAL_DIR), timeout=3600)
+        proc = subprocess.run(cmd, env=env, capture_output=True, text=True, cwd=os.path.dirname(EVAL_DIR), timeout=3600)
         secs = round(time.time() - t0, 1)
         revs = glob.glob(os.path.join(home, "reviews", "*", "*", "review.json"))
         rev = json.load(open(revs[0])) if revs else None
         s = score_case(rev, exp)
+        if not rev:
+            s["error"] = f"review exited {proc.returncode} without a review.json: {(proc.stderr or proc.stdout)[-300:]}"
         s.update(case=name, kind=exp["kind"], secs=secs)
         if rev:
             s["findings"] = [{k: f.get(k) for k in ("severity", "file", "line", "title")} for f in rev.get("findings", [])]
@@ -169,11 +171,14 @@ def write_results(label, settings, summary, results):
         res = ("caught" if r["caught"] else "caught (non-blocking)" if r["caught_any_severity"] else "**missed**") \
             if r["kind"] == "bug" else ("clean" if not r["false_blocking"] else f"**{r['false_blocking']} false blocking**")
         L.append(f"| {r['case']} | {r['kind']} | {res} | {r['blocking']} | {r['kept']} / {r['dropped']} | ${r['cost']} |")
-    L += ["", "## History", "", "| when | label | recall | any-sev recall | false blocking | true dropped | cost | verification cost |",
-          "|---|---|---|---|---|---|---|---|"]
+    L += ["", "## History", "",
+          "Compare verification cost across runs: with a shared cache, a later run's review passes are cache hits ($0).", "",
+          "| when | label | recall | any-sev recall | false blocking | true dropped | review cost | verification cost | shared cache |",
+          "|---|---|---|---|---|---|---|---|---|"]
     for h in reversed(hist):
         L.append(f"| {h['at']} | {h['label']} | {h['recall']} | {h['recall_any_severity']} | {h['false_blocking']} | "
-                 f"{h['true_dropped']} | ${h['cost_usd']} | ${h.get('cost_verify_usd', '?')} |")
+                 f"{h['true_dropped']} | ${h.get('cost_review_usd', '?')} | ${h.get('cost_verify_usd', '?')} | "
+                 f"{'yes' if (h.get('settings') or {}).get('shared_cache') else 'no'} |")
     open(os.path.join(EVAL_DIR, "RESULTS.md"), "w").write("\n".join(L) + "\n")
     json.dump(results, open(os.path.join(EVAL_DIR, "last-run.json"), "w"), indent=1)
 

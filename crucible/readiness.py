@@ -1,15 +1,14 @@
 """Deterministic 'ready to submit?' checklist. Each item: {item, status: pass|fail|warn|na, evidence}."""
 import glob, os, re
 from .diff import formatting_only_hunks
-from .util import CODE_EXT_RX, TEST_PATH_RX, gh_json, git, project_dir, read_json, upstream_slug
+from .util import CODE_EXT_RX, ISSUE_KW, TEST_PATH_RX, gh_json, git, project_dir, read_json, upstream_slug
 
 TEMPLATES = [".github/PULL_REQUEST_TEMPLATE.md", ".github/pull_request_template.md", "PULL_REQUEST_TEMPLATE.md",
              "docs/pull_request_template.md", ".github/PULL_REQUEST_TEMPLATE/pull_request_template.md"]
 CONVENTIONAL_RX = re.compile(r"^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([^)]+\))?!?: .+")
 # An issue link needs a linking keyword or an /issues/ URL. A bare "#123" is often a PR reference ("overlaps #2693"),
 # so it does not count.
-ISSUE_RX = re.compile(r"(?:\b(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?|related(?:\s+issues?|\s+to)?|refs?|issues?)\b"
-                      r"\s*:?\s*#(\d+)\b)|(?:github\.com/[^/\s]+/[^/\s]+/issues/(\d+))", re.I)
+ISSUE_RX = re.compile(r"(?:\b" + ISSUE_KW + r"\b(?:\*\*)?\s*:?\s*(?:\*\*)?\s*#(\d+)\b)|(?:github\.com/[^/\s]+/[^/\s]+/issues/(\d+))", re.I)
 # Template placeholders that look like a link but aren't: "Closes #(issue_number)", "Fixes #ISSUE", "#N", "#<n>", "#XXXX".
 PLACEHOLDER_RX = re.compile(r"\b(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?|related(?:\s+issues?)?|issues?)\b\s*:?\s*"
                             r"#\s*(?:\(|<|\{|\[|ISSUE\b|N\b|X{2,}|_+|issue[_ ]?(?:number|no|id)\b)", re.I)
@@ -125,9 +124,36 @@ def check_draft(repo, draft_text):
                  f"{tpl}: missing sections {missing}" if missing else f"{tpl}: all {len(heads)} sections present")
 
 
+def linked_issues(draft_text):
+    """Every number the draft links with a keyword or an issue URL, in order, without duplicates."""
+    out = []
+    for m in ISSUE_RX.finditer(draft_text or ""):
+        n = int(m.group(1) or m.group(2))
+        if n not in out:
+            out.append(n)
+    return out
+
+
 def linked_issue(draft_text):
-    m = ISSUE_RX.search(draft_text or "")
-    return int(m.group(1) or m.group(2)) if m else None
+    found = linked_issues(draft_text)
+    return found[0] if found else None
+
+
+def resolve_issue(repo, numbers):
+    """The first linked number that is an issue, not a PR ("Refs #2693" often names a PR). -> (issue, prs_skipped)."""
+    slug = upstream_slug(repo)
+    if not slug:
+        return (numbers[0] if numbers else None), []
+    skipped = []
+    for n in numbers:
+        data = gh_json(f"repos/{slug}/issues/{n}")
+        if data is None:              # can't tell (rate limit, no network): trust the link
+            return n, skipped
+        if data.get("pull_request"):
+            skipped.append(n)
+            continue
+        return n, skipped
+    return None, skipped
 
 
 def issue_placeholder(draft_text):
@@ -214,7 +240,7 @@ def unclaimed(repo, issue, me=None):
         return _item("issue still unclaimed", "warn", f"could not read {slug}#{issue}")
     probs = []
     if data.get("pull_request"):
-        return _item("issue still unclaimed", "fail", f"{slug}#{issue} is a pull request, not an issue; link the issue with 'Closes #N'")
+        return _item("issue still unclaimed", "warn", f"{slug}#{issue} is a pull request, not an issue")
     if data.get("state") != "open":
         probs.append(f"issue is {data.get('state')}")
     who = [a["login"] for a in data.get("assignees") or [] if a.get("login") != me]
@@ -237,7 +263,8 @@ def evaluate(repo, project, base, files, draft=None, me="JROtto5", offline=False
     paths = [f["path"] for f in files]
     draft_path, full = find_draft(repo, draft)
     draft_text = submitted_text(full)  # author notes in the draft are not part of the PR
-    issue = linked_issue(draft_text)
+    numbers = linked_issues(draft_text)
+    issue, prs = (numbers[0] if numbers else None, []) if offline else resolve_issue(repo, numbers)
     subjects = [s for s in git(repo, "log", "--format=%s", f"{base}..HEAD").split("\n") if s]
     fmt = formatting_only_hunks(files)
     items = [
@@ -246,6 +273,7 @@ def evaluate(repo, project, base, files, draft=None, me="JROtto5", offline=False
               f"author-notes boundary at line {split_draft(full)['notes_line']}; put the body above it or under `## Body`"),
         _item("issue linked", "pass" if issue else "fail", f"#{issue}" if issue else
               (f"template placeholder still in the draft: {issue_placeholder(draft_text)!r}" if issue_placeholder(draft_text)
+               else f"the linked number(s) {['#' + str(n) for n in prs]} are pull requests, not issues" if prs
                else "no 'Fixes #N' / 'Related issue: #N' / issue URL in the draft (a bare #N doesn't count)")),
         tests_touched(paths),
         api_docs_touched(files),

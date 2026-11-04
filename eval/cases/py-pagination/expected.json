@@ -3,7 +3,7 @@
  "message": "api: add page() helper",
  "file": "api/paging.py",
  "lines": [
-  7
+  6
  ],
  "keywords": [
   "off-by-one",
