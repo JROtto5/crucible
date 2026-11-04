@@ -22,7 +22,8 @@ Target: about 2027-01-04. 1.0 means a maintainer or a first-time contributor can
 - [ ] Recorded terminal demo (review → answer → GREEN) on a public repo
 
 ## Clean code
-- [ ] Tests for `review.run_review` with a stubbed model (no network)
+- [x] Tests for `review.run_review` with a stubbed model (no network): two-round incremental test (v0.3)
+- [ ] Stubbed tests for `evalrun.write_results` (NOTES.md splice, history columns)
 - [ ] Lint (ruff) clean and run in CI
 - [x] CI on GitHub Actions for the unit tests (v0.3)
 
