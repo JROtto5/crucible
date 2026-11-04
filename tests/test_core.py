@@ -679,9 +679,24 @@ class TestRerunSameCommit(unittest.TestCase):
         self.assertIsNone(V.stale_inputs(done, inp))
         self.assertEqual(V.stale_inputs(None, inp), "")
         self.assertEqual(V.stale_inputs(dict(done, status="failed"), inp), "")
-        self.assertEqual(V.stale_inputs(done, dict(inp, draft_sha="h2")), "the draft")
-        self.assertEqual(V.stale_inputs(done, dict(inp, base="b2")), "the base")
-        self.assertIn("not recorded", V.stale_inputs({"status": "done"}, inp))   # written before inputs existed
+        self.assertEqual(V.stale_inputs(done, dict(inp, draft_sha="h2")), "the draft changed since its last review")
+        self.assertEqual(V.stale_inputs(done, dict(inp, base="b2")), "the base changed since its last review")
+        self.assertIn("didn't record", V.stale_inputs({"status": "done"}, inp))   # written before inputs existed
+
+    def test_notes_only_edit_keeps_the_hash(self):
+        repo = make_repo({"a.js": "x\n"})
+        p = os.path.join(repo, "PR_DRAFT.md")
+        open(p, "w").write("Body.\n\n<!-- crucible: notes -->\nmine\n")
+        h1 = V.review_inputs(repo, "b")["draft_sha"]
+        open(p, "w").write("Body.\n\n<!-- crucible: notes -->\nmine, edited\n")
+        self.assertEqual(V.review_inputs(repo, "b")["draft_sha"], h1)
+        open(p, "w").write("Body, edited.\n\n<!-- crucible: notes -->\nmine, edited\n")
+        self.assertNotEqual(V.review_inputs(repo, "b")["draft_sha"], h1)
+
+    def test_unreadable_draft_is_a_clean_failure(self):
+        repo = make_repo({"a.js": "x\n"})
+        with self.assertRaises(U.Failed):
+            V.review_inputs(repo, "b", draft=repo)                   # a directory: open() raises IsADirectoryError
 
     def test_draft_edit_and_fresh_rereview(self):
         repo = make_repo({"a.js": "export const a = 1;\n"}, {"a.js": "export const a = 2;\n"})
@@ -714,6 +729,16 @@ class TestRerunSameCommit(unittest.TestCase):
             self.assertEqual(r["inputs"]["draft_sha"], V.review_inputs(repo, r["base"])["draft_sha"])
             run(fresh=True)                                         # --fresh alone redoes it and skips the cache
             self.assertEqual(len(seen), 3)
+            rp = os.path.join(d, "review.json")
+            r = U.read_json(rp); r.pop("inputs"); U.write_json(rp, r)
+            run()                                                   # a review from before inputs were recorded: redone
+            self.assertEqual(U.read_json(rp)["status"], "done")
+            self.assertIn("inputs", U.read_json(rp))
+            r = U.read_json(rp); r["status"] = "failed"; U.write_json(rp, r)
+            n = len(seen)
+            run()                                                   # a failed review is retried, not reused
+            self.assertEqual(U.read_json(rp)["status"], "done")
+            self.assertEqual(len(seen), n)                          # ...from the cache, so no new model call
         finally:
             V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
             if olds[3] is None:

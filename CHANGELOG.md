@@ -2,7 +2,7 @@
 
 One line per change, newest first.
 
-- 2026-11-04: A rerun on an already-reviewed commit re-reviews when `PR_DRAFT.md` (or `--draft`) or the base changed, instead of returning the old verdict for a draft it never read; `--fresh` alone now redoes the review (real-use bug i). Tests run directly (`python tests/test_core.py`) run all 63, not the first 40.
+- 2026-11-04: A rerun on an already-reviewed commit re-reviews when `PR_DRAFT.md` (or `--draft`) or the base changed, instead of returning the old verdict for a draft it never read; `--fresh` alone now redoes the review (real-use bug i). Tests run directly (`python tests/test_core.py`) run all 65, not the first 40.
 - 2026-11-04: **v0.3.0.** `crucible eval`: 16 labelled fixture changes (12 planted bugs, 4 clean) scored for recall, false blocking findings, true findings dropped by verification, and cost; results in eval/RESULTS.md. Baseline: 92% blocking recall, 100% any-severity, 0 false blocking.
 - 2026-11-04: Tiered verification: a cheap model checks each finding first, and the strong model re-checks survivors at blocking severity or low confidence. Same eval recall, 24% lower verification cost ($1.75 vs $2.30 on the eval set). `--no-tiers`, `CRUCIBLE_VERIFY_CHEAP`.
 - 2026-11-04: Incremental re-review: only hunks changed since the branch's last complete review are reviewed; untouched findings are carried with remapped lines, touched ones are re-verified (so fixed bugs drop out). `--full` forces a full review.

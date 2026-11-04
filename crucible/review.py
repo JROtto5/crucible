@@ -296,7 +296,12 @@ def split_prev(findings, ranges, hunks, prev_sha):
 def review_inputs(repo, base, draft=None):
     """What a verdict depends on besides the commit. PR_DRAFT.md is untracked, so editing it doesn't move HEAD;
     without this a rerun returned the old verdict for a draft it never read (real-use bug i)."""
-    path, text = readiness.find_draft(repo, draft)
+    try:
+        path, text = readiness.find_draft(repo, draft)
+    except OSError as e:
+        raise Failed(f"can't read the PR draft: {e}")
+    # only the submitted part is judged, so editing the author's notes alone keeps the verdict
+    text = readiness.submitted_text(text)
     return {"base": base, "draft": os.path.abspath(path) if path else None,
             "draft_sha": hashlib.sha256(text.encode()).hexdigest()[:16] if path else None}
 
@@ -308,9 +313,9 @@ def stale_inputs(prev, inputs):
         return ""
     old = prev.get("inputs")
     if old is None:
-        return "the draft (not recorded by the last review)"
+        return "the last review didn't record which draft it judged"
     why = [n for k, n in (("base", "the base"), ("draft", "the draft path"), ("draft_sha", "the draft")) if old.get(k) != inputs[k]]
-    return " and ".join(why) or None
+    return f"{' and '.join(why)} changed since its last review" if why else None
 
 
 def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, draft=None, base_checks=False,
@@ -339,7 +344,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             log("already reviewed this commit with the same base and draft (use --force to redo)")
             return d
         if stale:
-            log(f"  re-reviewing this commit: {stale} changed since its last review")
+            log(f"  re-reviewing this commit: {stale}")
     started = dt.datetime.now().isoformat(timespec="seconds")
     budget = Budget(budget_usd)
     record = {"repo": project, "sha": sha, "base": base, "base_ref": base_ref, "started": started, "status": "running",
