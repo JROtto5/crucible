@@ -390,7 +390,21 @@ def verdict(rev, ans):
     return ("GREEN" if ok else "NOT_GREEN"), blocking, unanswered
 
 
-def report(rev, ans):
+def ready_after_waivers(ready, waivers):
+    return not any(i["status"] == "fail" and i["item"] not in waivers for i in ready["items"])
+
+
+def waivers_path(project):
+    return os.path.join(project_dir(project), "waivers.json")
+
+
+def load_waivers(project, branch):
+    return (read_json(waivers_path(project), {}) or {}).get(branch, {})
+
+
+def report(rev, ans, waivers=None):
+    """waivers: {readiness item name: reason} for this branch. A waived failing item no longer blocks readiness."""
+    waivers = waivers or {}
     v, blocking, unanswered = verdict(rev, ans)
     proj = rev["repo"].replace("__", "/")
     if rev.get("status") != "done":
@@ -398,7 +412,7 @@ def report(rev, ans):
     ready = rev["readiness"]
     cov = rev["coverage"]
     L = [f"# crucible · {proj} @ {rev['sha'][:10]}", "",
-         f"**Verdict: {v}** · **Ready to submit: {'yes' if v == 'GREEN' and ready['ready'] else 'no'}**", "",
+         f"**Verdict: {v}** · **Ready to submit: {'yes' if v == 'GREEN' and ready_after_waivers(ready, waivers) else 'no'}**", "",
          f"- {len(rev['findings'])} findings kept · {len(rev['dropped'])} dropped by verification · "
          f"{len(blocking)} blocking open · {len(unanswered)} unanswered",
          f"- coverage: {cov['reviewed']}/{cov['files']} files" + (f" · MISSING {cov['missing']}" if cov["missing"] else ""),
@@ -411,7 +425,8 @@ def report(rev, ans):
           + (f" (on base: {c['on_base']})" if c.get("on_base") else "") for c in res] or [f"- {rev['checks'].get('note', 'none')}"]
     L += ["", "## Readiness", ""]
     icon = {"pass": "✅", "fail": "❌", "warn": "⚠️", "na": "·"}
-    L += [f"- {icon[i['status']]} {i['item']}: {i['evidence']}" for i in ready["items"]]
+    L += [f"- ⏭️ {i['item']}: waived ({waivers[i['item']]})" if i["status"] == "fail" and i["item"] in waivers
+          else f"- {icon[i['status']]} {i['item']}: {i['evidence']}" for i in ready["items"]]
     L += ["", "## Summary", "", rev.get("summary", ""), "", "## Findings", ""]
     if not rev["findings"]:
         L.append("None. 🎉")

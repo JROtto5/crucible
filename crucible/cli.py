@@ -32,12 +32,13 @@ def cmd_review(a):
 
 
 def cmd_status(a):
-    from .review import load, report, verdict
+    from .review import load, load_waivers, report, verdict
     project, sha, d, rev, ans = load(_p(a.repo))
     if not rev:
         print(f"NO REVIEW for HEAD {sha[:10]}. Run: crucible review {a.repo}")
         sys.exit(2)
-    txt = report(rev, ans)
+    from .util import git
+    txt = report(rev, ans, load_waivers(project, git(_p(a.repo), "rev-parse", "--abbrev-ref", "HEAD", check=False)))
     open(os.path.join(d, "report.md"), "w").write(txt)
     print(txt)
     print(f"(report: {os.path.join(d, 'report.md')})")
@@ -55,6 +56,24 @@ def cmd_answer(a):
     ans[a.id] = {"disposition": a.disposition, "note": a.note, "at": dt.datetime.now().isoformat(timespec="seconds")}
     write_json(os.path.join(d, "answers.json"), ans)
     print(f"{a.id} → {a.disposition}. Verdict now {verdict(rev, ans)[0]}")
+
+
+def cmd_waive(a):
+    from .review import load, waivers_path
+    from .util import git
+    project, sha, d, rev, ans = load(_p(a.repo))
+    if not rev or rev.get("status") != "done":
+        sys.exit("no completed review for this HEAD")
+    items = {i["item"] for i in rev["readiness"]["items"]}
+    if a.item not in items:
+        sys.exit(f"unknown readiness item {a.item!r}; one of: {sorted(items)}")
+    if len(a.reason.strip()) < 20:
+        sys.exit("give a real reason (20+ characters): it is printed in the report")
+    branch = git(_p(a.repo), "rev-parse", "--abbrev-ref", "HEAD", check=False)
+    allw = read_json(waivers_path(project), {}) or {}
+    allw.setdefault(branch, {})[a.item] = a.reason.strip()
+    write_json(waivers_path(project), allw)
+    print(f"waived {a.item!r} on branch {branch}")
 
 
 def cmd_learn(a):
@@ -133,6 +152,7 @@ def main(argv=None):
     st = s.add_parser("status"); st.add_argument("repo", nargs="?", default=".")
     an = s.add_parser("answer"); an.add_argument("id"); an.add_argument("disposition", choices=["fixed", "refuted", "deferred"])
     an.add_argument("note"); an.add_argument("--repo", default=".")
+    wv = s.add_parser("waive", help="mark a readiness item as not applicable, with a reason shown in the report"); wv.add_argument("item"); wv.add_argument("reason"); wv.add_argument("--repo", default=".")
     le = s.add_parser("learn"); le.add_argument("repo", nargs="?", default="."); le.add_argument("--prs", type=int, default=25)
     le.add_argument("--no-style", action="store_true")
     pr = s.add_parser("prep"); pr.add_argument("repo", nargs="?", default=".")
@@ -143,7 +163,7 @@ def main(argv=None):
     rm = s.add_parser("remember"); rm.add_argument("project"); rm.add_argument("lesson")
     pp = s.add_parser("proposals"); pp.add_argument("project"); pp.add_argument("--accept", type=int)
     a = p.parse_args(argv)
-    {"review": cmd_review, "status": cmd_status, "answer": cmd_answer, "learn": cmd_learn, "prep": cmd_prep,
+    {"review": cmd_review, "status": cmd_status, "answer": cmd_answer, "waive": cmd_waive, "learn": cmd_learn, "prep": cmd_prep,
      "polish": cmd_polish, "reply": cmd_reply, "vote": cmd_vote, "remember": cmd_remember, "proposals": cmd_proposals}[a.cmd](a)
 
 

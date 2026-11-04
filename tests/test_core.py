@@ -240,3 +240,14 @@ class TestStyle(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWaivers(unittest.TestCase):
+    def test_waiver_unblocks_only_the_waived_failure(self):
+        from crucible.review import ready_after_waivers
+        ready = {"items": [{"item": "tests updated for behaviour change", "status": "fail"},
+                           {"item": "issue linked", "status": "pass"}]}
+        self.assertFalse(ready_after_waivers(ready, {}))
+        self.assertTrue(ready_after_waivers(ready, {"tests updated for behaviour change": "no WebGPU backend test suite"}))
+        ready["items"].append({"item": "no formatting-only churn", "status": "fail"})
+        self.assertFalse(ready_after_waivers(ready, {"tests updated for behaviour change": "x"}))
