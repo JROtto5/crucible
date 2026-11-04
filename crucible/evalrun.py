@@ -42,7 +42,8 @@ def _copy_tree(src, dst):
 def _git(repo, *a):
     env = dict(os.environ, GIT_AUTHOR_NAME="eval", GIT_AUTHOR_EMAIL="eval@example.invalid",
                GIT_COMMITTER_NAME="eval", GIT_COMMITTER_EMAIL="eval@example.invalid",
-               GIT_AUTHOR_DATE="2026-01-01T00:00:00Z", GIT_COMMITTER_DATE="2026-01-01T00:00:00Z")
+               GIT_AUTHOR_DATE="2026-01-01T00:00:00Z", GIT_COMMITTER_DATE="2026-01-01T00:00:00Z",
+               GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")   # the user's git config can't change the fixtures
     subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True, env=env)
 
 
@@ -175,6 +176,9 @@ def write_results(label, settings, summary, results):
         res = ("caught" if r["caught"] else "caught (non-blocking)" if r["caught_any_severity"] else "**missed**") \
             if r["kind"] == "bug" else ("clean" if not r["false_blocking"] else f"**{r['false_blocking']} false blocking**")
         L.append(f"| {r['case']} | {r['kind']} | {res} | {r['blocking']} | {r['kept']} / {r['dropped']} | ${r['cost']} |")
+    notes_p = os.path.join(EVAL_DIR, "NOTES.md")       # hand-written context that must survive regeneration
+    if os.path.exists(notes_p):
+        L += ["", open(notes_p).read().strip()]
     L += ["", "## History", "",
           "Compare verification cost across runs: with a shared cache, a later run's review passes are cache hits ($0).", "",
           "| when | label | recall | any-sev recall | false blocking | true dropped | review cost | verification cost | shared cache |",
