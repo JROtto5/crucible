@@ -1,7 +1,7 @@
 """`crucible prep` (likely maintainer questions) and `crucible reply` (draft answers to real review comments).
 Drafts only: nothing is ever posted."""
 import json, os, re, textwrap
-from .readiness import find_draft
+from .readiness import find_draft, split_draft, submitted_text
 from .review import load, project_rules_text
 from .util import Budget, Failed, claude, gh_json, git, project_key
 
@@ -28,7 +28,8 @@ def checklist():
 def run_prep(repo, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-opus-5-5"), budget_usd=2.0, log=print):
     repo = os.path.abspath(repo)
     project, sha, d, rev, ans = load(repo)
-    _, draft = find_draft(repo)
+    _, full = find_draft(repo)
+    draft, notes = submitted_text(full), split_draft(full)["notes"]
     base = rev["base"] if rev else git(repo, "merge-base", "HEAD", "HEAD")
     diff = git(repo, "diff", "--no-color", f"{base}..HEAD")[:80000]
     findings = json.dumps([{k: f[k] for k in ("id", "severity", "title", "problem")} | {"answer": ans.get(f["id"])}
@@ -43,8 +44,11 @@ def run_prep(repo, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-opus-5-
         Project rules:
         {project_rules_text(repo, project)[:8000]}
 
-        PR description draft:
+        PR description draft, as it will be submitted:
         {draft[:6000] or '(none)'}
+
+        The contributor's private notes (not submitted; use them as background, don't repeat them as questions):
+        {notes[:4000] or '(none)'}
 
         Reviewer findings and the contributor's answers:
         {findings}

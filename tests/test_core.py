@@ -197,6 +197,21 @@ class TestDraftSplit(unittest.TestCase):
         self.assertEqual((d["title"], d["body"]), ("T", "Real body, Fixes #3."))
         self.assertEqual(R.linked_issue(R.submitted_text(t)), 3)
 
+    def test_notes_heading_must_open_the_heading(self):
+        body = "# T\n\n## Handling the DO NOT SUBMIT lint marker\nx\n\n### Why not an issue to file later?\ny\n"
+        self.assertEqual(R.split_draft(body)["notes"], "")
+        d = R.split_draft("# T\n\nb\n\n## 📝 Explain it to me\nn\n")
+        self.assertEqual((d["notes"], d["notes_line"]), ("## 📝 Explain it to me\nn", 5))
+
+    def test_inline_triple_backticks_dont_open_a_fence(self):
+        d = R.split_draft("# T\n\n```foo``` is now handled.\n\n## Explain it to me\nprivate\n")
+        self.assertEqual(d["notes"], "## Explain it to me\nprivate")
+
+    def test_preamble_above_title_without_body_heading(self):
+        d = R.split_draft("# PR draft\n\n> file the issue first\n\n## Title\nfix: y\n\nBody.\n")
+        self.assertEqual((d["title"], d["body"]), ("fix: y", "Body."))
+        self.assertEqual(d["notes"], "# PR draft\n\n> file the issue first")
+
     def test_title_section_without_body_heading(self):
         d = R.split_draft("## Title\nfix: timestamps\n\n## Summary\nFixes #1.\n")
         self.assertEqual((d["title"], d["body"]), ("fix: timestamps", "## Summary\nFixes #1."))

@@ -24,7 +24,8 @@ FENCE_RX = re.compile(r"^\s{0,3}(`{3,}|~{3,})(.*)$")
 BODY_HEAD_RX = re.compile(r"^#{1,4}\s+(pr\s+)?body\s*:?\s*$", re.I)
 TITLE_HEAD_RX = re.compile(r"^#{1,4}\s+(pr\s+)?title\s*:?\s*$", re.I)
 # Headings that open the author's own notes. Everything from the first one on is never submitted.
-NOTES_HEAD_RX = re.compile(r"^#{1,4}\s+.*\b(explain it to me|q&a prep|author'?s? notes|(private|internal) notes|"
+# The phrase must open the heading (emoji/punctuation aside), so "## Handling the DO NOT SUBMIT marker" is still body.
+NOTES_HEAD_RX = re.compile(r"^#{1,4}\s+[^\w\n]*(explain it to me|q&a prep|author'?s? notes|(private|internal) notes|"
                            r"notes (for|to) (me|myself|the author)|not for (submission|upstream|the pr)|do not submit|"
                            r"issue to file)\b", re.I)
 NOTES_MARKER_RX = re.compile(r"^\s*<!--\s*crucible:\s*notes\s*-->\s*$", re.I)
@@ -37,7 +38,7 @@ def _unfenced(lines):
     for i, l in enumerate(lines):
         m = FENCE_RX.match(l)
         if fence is None:
-            if m:
+            if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):  # "```x``` ..." is inline code, not a fence
                 fence = m.group(1)
             else:
                 out.append(i)
@@ -71,6 +72,7 @@ def split_draft(text):
             start = val + 1
         else:
             start = title_at + 1
+        preamble = lines[:title_at]
     elif body_at is None and lines and re.match(r"^#\s+\S", lines[0]):
         title, start = lines[0][1:].strip(), 1
     if body_at is not None:
@@ -80,7 +82,7 @@ def split_draft(text):
     body = re.sub(r"(\n\s*(-{3,}|\*{3,}|_{3,})\s*)+\s*$", "", "\n" + body).strip("\n")
     rest = lines[end + 1:] if end < len(lines) and NOTES_MARKER_RX.match(lines[end]) else lines[end:]
     notes = "\n\n".join(x for x in ("\n".join(preamble).strip("\n"), "\n".join(rest).strip("\n")) if x)
-    return {"title": title, "body": body, "notes": notes}
+    return {"title": title, "body": body, "notes": notes, "notes_line": end + 1 if end < len(lines) else None}
 
 
 def submitted_text(text):
