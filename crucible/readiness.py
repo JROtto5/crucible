@@ -33,7 +33,10 @@ NOTES_MARKER = "<!-- crucible: notes -->"
 
 
 def _unfenced(lines):
-    """Indexes of lines outside fenced code blocks (CommonMark: a fence closes on the same char, at least as long)."""
+    """Indexes of lines outside fenced code blocks (CommonMark: a fence closes on the same char, at least as long).
+
+    Deliberately simple: fences indented 4+ spaces (e.g. inside list items) aren't recognised, and an unclosed
+    fence runs to the end of the file, so markers after it are not seen and the draft is judged as all body."""
     out, fence = [], None
     for i, l in enumerate(lines):
         m = FENCE_RX.match(l)
@@ -217,13 +220,15 @@ def unclaimed(repo, issue, me=None):
 
 def evaluate(repo, project, base, files, draft=None, me="JROtto5", offline=False):
     paths = [f["path"] for f in files]
-    draft_path, draft_text = find_draft(repo, draft)
-    draft_text = submitted_text(draft_text)  # author notes in the draft are not part of the PR
+    draft_path, full = find_draft(repo, draft)
+    draft_text = submitted_text(full)  # author notes in the draft are not part of the PR
     issue = linked_issue(draft_text)
     subjects = [s for s in git(repo, "log", "--format=%s", f"{base}..HEAD").split("\n") if s]
     fmt = formatting_only_hunks(files)
     items = [
-        check_draft(repo, draft_text),
+        check_draft(repo, draft_text) if draft_text.strip() or not full.strip() else
+        _item("PR description drafted", "fail", f"{os.path.basename(draft_path)} exists, but nothing is left before the "
+              f"author-notes boundary at line {split_draft(full)['notes_line']}; put the body above it or under `## Body`"),
         _item("issue linked", "pass" if issue else "fail", f"#{issue}" if issue else "no 'Fixes #N' / issue URL in the draft"),
         tests_touched(paths),
         api_docs_touched(files),

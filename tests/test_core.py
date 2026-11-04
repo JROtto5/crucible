@@ -256,6 +256,11 @@ class TestDraftSplit(unittest.TestCase):
         with open(os.path.join(d, "PR_DRAFT.md"), "w") as fh:
             fh.write("# Fix a\n\nFixes #12.\n\n## Explain it to me\nsee #77\n")
         self.assertEqual(R.evaluate(d, "t__evaluate", base, files, offline=True)["issue"], 12)
+        with open(os.path.join(d, "PR_DRAFT.md"), "w") as fh:
+            fh.write("## Author notes\nx\n\n## Body\nFixes #1.\n")
+        item = R.evaluate(d, "t__evaluate", base, files, offline=True)["items"][0]
+        self.assertEqual(item["status"], "fail")
+        self.assertIn("author-notes boundary at line 1", item["evidence"])
 
     def test_polish_keeps_notes_once(self):
         d = make_repo({"a.js": "1\n"})
