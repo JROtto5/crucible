@@ -1,0 +1,22 @@
+name: Missed issue
+description: A maintainer, CI or a user found a problem that crucible's review passed
+labels: [missed-issue]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What was missed
+      description: The problem and where it is (file:line). A link to the public review comment or failing run helps most.
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: What crucible said
+      description: The verdict and any related finding from report.md, or "nothing".
+  - type: input
+    id: version
+    attributes:
+      label: crucible --version
+    validations:
+      required: true

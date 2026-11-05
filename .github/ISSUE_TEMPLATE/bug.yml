@@ -1,0 +1,25 @@
+name: Bug
+description: A command crashed or did the wrong thing
+labels: [bug]
+body:
+  - type: input
+    id: command
+    attributes:
+      label: Command
+      placeholder: crucible review ~/src/project --budget 3
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: What happened
+      description: The last lines of the output (with tokens, hostnames and private paths removed) and what you expected.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: crucible --version, Python version, OS
+    validations:
+      required: true

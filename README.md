@@ -133,4 +133,6 @@ Environment variables:
 
 Run `crucible eval` (about $2–4 for all 16 cases) after changing prompts or models.
 
+Found a wrong finding, a missed bug or a crash? See [CONTRIBUTING.md](CONTRIBUTING.md): issue templates ask for exactly what's needed to turn it into a regression test.
+
 MIT licensed.

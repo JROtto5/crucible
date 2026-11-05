@@ -1,0 +1,30 @@
+name: Wrong finding (false positive)
+description: crucible reported something that isn't a real problem
+labels: [false-positive]
+body:
+  - type: textarea
+    id: finding
+    attributes:
+      label: The finding
+      description: Paste the finding block from report.md (ID, severity, file:line, title, verification). No private code or tokens.
+      render: markdown
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it's wrong
+      description: The line, test or command output that disproves it.
+    validations:
+      required: true
+  - type: input
+    id: pr
+    attributes:
+      label: Public PR or repo (optional)
+      placeholder: https://github.com/owner/repo/pull/123
+  - type: input
+    id: version
+    attributes:
+      label: crucible --version
+    validations:
+      required: true
