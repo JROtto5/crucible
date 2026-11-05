@@ -785,6 +785,9 @@ class TestOverlappingPRs(unittest.TestCase):
         self.stub({None: self.page([(7008, "h", "User", ["src/Library.tsx"])], 1)},
                   {7008: [{"filename": "other.ts", "patch": "@@ -1,3 +1,3 @@"}]})   # path past the REST page
         self.assertIn("couldn't be compared", R.overlapping_prs(".", self.OURS, "me")["evidence"])
+        self.stub({None: self.page([(7009, "i", "User", ["src/Library.tsx"])], 1)},
+                  {7009: [{"filename": "src/Library.tsx", "status": "modified", "changes": 0}]})  # chmod only
+        self.assertEqual(R.overlapping_prs(".", self.OURS, "me")["status"], "pass")
 
     def test_candidates_past_the_cap_are_reported_not_compared(self):
         n = R.OVERLAP_CANDIDATES + 3

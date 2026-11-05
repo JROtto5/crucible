@@ -325,7 +325,10 @@ def _pr_hunks(slug, number):
     out = {}
     for f in data:
         found = HUNK_RX.findall(f.get("patch") or "")
-        out[f.get("filename")] = [(int(a), int(a) + max(int(n) if n else 1, 1) - 1) for a, n in found] if found else None
+        if found or f.get("changes") == 0:                # a mode change or pure rename has no lines to compare
+            out[f.get("filename")] = [(int(a), int(a) + max(int(n) if n else 1, 1) - 1) for a, n in found]
+        else:
+            out[f.get("filename")] = None
     return out
 
 
