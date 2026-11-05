@@ -27,12 +27,20 @@ def words(t):
 
 CHECKBOX_RX = re.compile(r"^([-*+]\s+)\[[ xX]\]")
 # How it was tested: a phrase (prefixes match, as before: "Screenshots", "afterwards"), or a code span that *is* a
-# build/test command with arguments ("Checked with `npm run build-docs`"). A bare tool or file name (`python`,
-# `yarn.lock`, `Cargo.toml`) is not a command, so it doesn't count.
+# build/test command with arguments ("Checked with `npm run build-docs`", "`cd docs && make html`"). A bare tool or
+# file name (`python`, `yarn.lock`, `Cargo.toml`) is not a command, so it doesn't count.
 TESTED_RX = re.compile(r"(?i)\b(tested|test plan|how to test|repro|verified|checked|confirmed|measured|benchmark|ran\b|"
-                       r"npm test|pytest|unittest|screenshot|before|after|tests? pass|passing)|"
-                       r"`\s*(\$\s*)?(npm|pnpm|yarn|npx|bun|deno|make|cargo|go|pytest|python3?|tox|nox|meson|ninja|ctest|"
-                       r"gradle|mvn|dotnet|rake|mix)\s+[^`\n]+`")
+                       r"npm test|pytest|unittest|screenshot|before|after|tests? pass|passing)")
+CODE_SPAN_RX = re.compile(r"`([^`\n]+)`")
+COMMAND_RX = re.compile(r"(?i)^\s*(\$\s*)?(sudo\s+)?(\w+=\S*\s+)*(npm|pnpm|yarn|npx|bun|deno|make|cargo|go|pytest|python3?|"
+                        r"tox|nox|meson|ninja|ctest|gradle|mvn|dotnet|rake|mix)\s+\S")
+
+
+def has_testing_evidence(text):
+    """Code spans are paired left to right, so prose between two spans ("`a` go through `b`") is never a command;
+    each `&&`/`;`/`|` part of a span is tried, so a chained command counts."""
+    return bool(TESTED_RX.search(text or "")) or any(
+        COMMAND_RX.match(part) for span in CODE_SPAN_RX.findall(text or "") for part in re.split(r"&&|\|\||[;|]", span))
 
 
 def _tpl_norm(line):
@@ -228,7 +236,7 @@ def check(repo, base, files, draft_path, draft_text, style, title=""):
                           f"PR description: {kind} reads as generated", detail,
                           "Rewrite in the project's own voice (run `crucible polish`).",
                           "this project's merged PRs commonly do the same (see STYLE.md measurements)"))
-        if not TESTED_RX.search(draft_text):
+        if not has_testing_evidence(draft_text):
             out.append(_f("medium", os.path.basename(draft_path or "PR_DRAFT.md"), 1, "PR description: no testing evidence",
                           "Reviewers can't see how this was tested.", "Add a short 'Tested:' line with the exact commands/results.",
                           "the description already states how it was tested"))

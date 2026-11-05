@@ -1189,11 +1189,13 @@ class TestDescriptionHeuristics(unittest.TestCase):
                      "Reproduced on 5.0.44 and confirmed fixed.",
                      "Screenshots attached.",  # prefixes match, as before the change
                      "`npm run build-docs` shows both entries.",  # only the command branch matches these two
-                     "`$ make check` is green here."):
-            self.assertTrue(S.TESTED_RX.search(line), line)
+                     "`$ make check` is green here.",
+                     "Built with `cd docs && make html`.", "`CI=1 npm run lint` is clean."):  # chained / env prefix
+            self.assertTrue(S.has_testing_evidence(line), line)
         for line in ("Bumps `yarn.lock` for the new dep.", "Updated `Cargo.toml` to pick up the new dep.",
-                     "Adds a `python` binding for the parser.", "The `parse()` helper drops a token."):
-            self.assertFalse(S.TESTED_RX.search(line), line)
+                     "Adds a `python` binding for the parser.", "The `parse()` helper drops a token.",
+                     "Moved `a` go through `b`."):  # prose between two spans is not a command
+            self.assertFalse(S.has_testing_evidence(line), line)
 
     def test_m_no_evidence_is_still_flagged(self):
         d = make_repo({"a.txt": "x"})
