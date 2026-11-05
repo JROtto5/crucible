@@ -111,12 +111,16 @@ def mentioned(output, paths, repo=None, cwd=None):
     """The untracked paths the output names as a whole path: repo-relative, relative to the check's cwd, or
     absolute, bare or as ./path or file://path. "a.cjs" does not match inside "src/a.cjs" or "a.cjs.map".
     The output is normalised once (scheme, repo prefix and ./ removed) and split into path-like tokens, so
-    thousands of untracked files and a long log stay cheap, even when the repo path has a space in it."""
-    edge = r"(?<![\w./-])"
+    thousands of untracked files and a long log stay cheap, even when the repo path has a space in it. A path
+    that can't be one token (a space, brackets) costs a substring search of the output each; there are few.
+    Only called for a failed or timed-out check."""
+    edge = r"(?<![\w./-])"  # a path starts here, not in the middle of a longer one
+    # Each prefix becomes a space, not "", so what follows is a token of its own. Order matters: the repo
+    # prefix goes before "./" (/r/./x -> " ./x" -> " x"), and only a leading "./" goes (dir/./x stays whole).
     text = output.replace("file://", " ")
     if repo:
         text = re.sub(edge + re.escape(repo.rstrip("/")) + "/", " ", text)
-    text = re.sub(r"(?<![\w.])\./", " ", text)
+    text = re.sub(edge + r"\./", " ", text)
     named = {t.rstrip(".") for t in _TOKEN.findall(text)}
     hits = []
     for p in paths:

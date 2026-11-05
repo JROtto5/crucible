@@ -816,6 +816,9 @@ class TestUntrackedScratchFiles(unittest.TestCase):
         self.assertEqual(C.mentioned("at file:///r/my scratch.js:3", ["my scratch.js"], "/r"), ["my scratch.js"])
         self.assertEqual(C.mentioned("/my repo/pk/x.js:1", ["pk/x.js"], "/my repo", "pk"), ["pk/x.js"])
         self.assertEqual(C.mentioned("/other/r/cap.cjs", ["cap.cjs"], "/r"), [])  # another tree's /r/
+        for out in ("/other/./cap.cjs", "../cap.cjs", "/r2/cap.cjs", "src/./cap.cjs"):
+            self.assertEqual(C.mentioned(out, ["cap.cjs"], "/r"), [], out)
+        self.assertEqual(C.mentioned("/r/./cap.cjs: e", ["cap.cjs"], "/r"), ["cap.cjs"])
 
     def test_mentioned_is_linear(self):
         import time
