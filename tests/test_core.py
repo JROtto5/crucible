@@ -1194,9 +1194,10 @@ class TestDescriptionHeuristics(unittest.TestCase):
                      "`make build; make test` is green.", "`cat out.json | python3 -m json.tool` parses.",
                      "`false || cargo build --release` works.", "`sudo make install` works."):
             self.assertTrue(S.has_testing_evidence(line), line)
+        # file and tool names, prose between two spans, and spans whose parts aren't commands
         for line in ("Bumps `yarn.lock` for the new dep.", "Updated `Cargo.toml` to pick up the new dep.",
                      "Adds a `python` binding for the parser.", "The `parse()` helper drops a token.",
-                     "Moved `a` go through `b`.", "`int | None` is accepted.", "`a || b` short-circuits."):  # prose between two spans is not a command
+                     "Moved `a` go through `b`.", "`int | None` is accepted.", "`a || b` short-circuits."):
             self.assertFalse(S.has_testing_evidence(line), line)
 
     def test_m_no_evidence_is_still_flagged(self):
