@@ -22,6 +22,14 @@ class Failed(Exception):
     """A review step failed in a way that must be recorded, not crash."""
 
 
+class NoStructuredOutput(Failed):
+    """The model finished normally but never got a schema-valid StructuredOutput call through (it answered in prose).
+    `text` is that prose answer, so a caller can salvage it."""
+    def __init__(self, msg, text):
+        super().__init__(msg)
+        self.text = text
+
+
 def git(repo, *args, check=True):
     r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
     if check and r.returncode != 0:
@@ -174,6 +182,9 @@ def claude(prompt, model, schema, cwd, budget=None, tools=TOOLS_READ, effort="hi
         raise Failed(f"model call failed: {(r.stderr or r.stdout)[-500:]}")
     if budget:
         budget.add(d.get("total_cost_usd", 0))
+    if not d.get("is_error") and "structured_output" not in d and d.get("subtype") == "success" \
+            and isinstance(d.get("result"), str) and d["result"].strip():
+        raise NoStructuredOutput(f"model call failed (success): {d['result'][:500]}", d["result"])
     if d.get("is_error") or "structured_output" not in d:
         raise Failed(f"model call failed ({d.get('subtype')}): {str(d.get('result'))[:500]}")
     return d["structured_output"], d.get("total_cost_usd", 0)

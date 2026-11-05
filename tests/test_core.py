@@ -399,6 +399,72 @@ class TestClaudeCall(unittest.TestCase):
         self.assertNotIn("PROMPT-TEXT", seen["cmd"])
 
 
+    def test_prose_answer_without_structured_output_is_typed(self):
+        # bug l: the CLI reports subtype "success" with the verdict in `result` when every StructuredOutput call
+        # was rejected; callers need that text, not just a generic failure
+        import json
+        from unittest import mock
+        payload = {"subtype": "success", "is_error": False, "result": "Verdict: the claim does not hold."}
+
+        def fake_run(cmd, **kw):
+            return subprocess.CompletedProcess(cmd, 0, json.dumps(payload), "")
+
+        with mock.patch.object(U.subprocess, "run", fake_run):
+            with self.assertRaises(U.NoStructuredOutput) as cm:
+                U.claude("p", "m", {"type": "object"}, ".")
+        self.assertEqual(cm.exception.text, "Verdict: the claim does not hold.")
+        for bad in ({"subtype": "error_max_turns", "is_error": True, "result": "x"}, {"subtype": "success", "result": ""}):
+            payload = bad
+            with mock.patch.object(U.subprocess, "run", fake_run):
+                with self.assertRaises(U.Failed) as cm:
+                    U.claude("p", "m", {"type": "object"}, ".")
+            self.assertNotIsInstance(cm.exception, U.NoStructuredOutput)
+
+
+class TestVerifierSalvage(unittest.TestCase):
+    """Bug l: the verifier's StructuredOutput call was rejected ("must have required property 'confidence'") and the
+    finding came back unverified although the prose held a clear verdict (5 of 415 verifications, 2026-11-04)."""
+    F = {"title": "off by one", "file": "a.js", "line": 3, "severity": "medium", "wrong_if": "x"}
+
+    def run_tiered(self, fake, tiers):
+        old = (V.claude, os.environ.get("CRUCIBLE_CACHE_VERIFY"))
+        V.claude, os.environ["CRUCIBLE_CACHE_VERIFY"] = fake, "0"
+        try:
+            return V.verify_tiered(self.F, "code", ".", None, tiers)
+        finally:
+            V.claude = old[0]
+            if old[1] is None:
+                os.environ.pop("CRUCIBLE_CACHE_VERIFY")
+            else:
+                os.environ["CRUCIBLE_CACHE_VERIFY"] = old[1]
+
+    def test_prose_verdict_is_transcribed_not_left_unverified(self):
+        calls = []
+
+        def fake(prompt, model, schema, cwd, budget=None, tools=None, **kw):
+            calls.append((model, tools))
+            if model == "strong":
+                raise U.NoStructuredOutput("model call failed (success): ...", "**Verdict: claim falsified.** I ran it.")
+            self.assertIn("claim falsified", prompt)
+            return {"keep": False, "severity": "medium", "confidence": "high", "method": "executed",
+                    "actions": "ran it", "evidence": "falsified"}, 0.001
+        v, trail = self.run_tiered(fake, ["strong"])
+        self.assertFalse(v["keep"])
+        self.assertEqual(calls, [("strong", V.TOOLS_RUN), (V.SALVAGE_MODEL, None)])   # transcription runs no tools
+        self.assertTrue(trail[0]["salvaged"])
+
+    def test_other_failures_still_fail_closed(self):
+        def fake(*a, **kw):
+            raise U.Failed("model call timed out after 1500s")
+        with self.assertRaises(U.Failed):
+            self.run_tiered(fake, ["strong"])
+
+    def test_short_fields_come_before_free_text(self):
+        keys = list(V.VERIFY_SCHEMA["properties"])
+        self.assertLess(keys.index("confidence"), keys.index("evidence"))
+        self.assertEqual(keys[-1], "evidence")
+        self.assertEqual(set(V.VERIFY_SCHEMA["required"]), set(keys))
+
 
 class TestRealUseBugs(unittest.TestCase):
     """Regression tests for bugs found while reviewing real upstream PRs (BOARD a–e)."""
