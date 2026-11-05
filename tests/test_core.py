@@ -1480,15 +1480,35 @@ class TestDescriptionHeuristics(unittest.TestCase):
 
 
 class TestRouting(unittest.TestCase):
-    """Cost routing by change type (ARMOR exchange 2026-11-05) and the offline replay that gates each rule."""
+    """Cost routing by change type and the offline replay that gates each rule."""
 
     def test_change_kind(self):
-        for paths in (["README.md"], ["docs/guide.rst", "CHANGELOG"], ["packages/x/README.md", "LICENSE"], ["notes.txt"]):
+        for paths in (["README.md"], ["docs/guide.rst", "CHANGELOG"], ["packages/x/README.md", "LICENSE"], ["README.txt", "docs/api.adoc"]):
             self.assertEqual(RT.change_kind(paths), "docs", paths)
         # falsifiers: any code file makes it code; nothing changed is not "docs"; docs-looking names that aren't
         for paths in (["README.md", "src/a.js"], [], ["src/docstring.py"], ["docs.js"], ["src/readme_parser.py"],
-                      ["assets/logo.png"]):
+                      ["assets/logo.png"], ["requirements.txt"], ["CMakeLists.txt"], ["docs/conf.py"],
+                      ["docs/examples/demo.py"], ["CLAUDE.md"], ["sub/AGENTS.md"], ["crucible/guides/answering.md"],
+                      ["prompts/review.md"], [".github/copilot-instructions.md"]):
             self.assertEqual(RT.change_kind(paths), "code", paths)
+
+    def test_enabled(self):
+        old = os.environ.get("CRUCIBLE_ROUTE")
+        try:
+            for val, want in (("1", True), ("true", True), ("YES", True), ("", False), ("0", False), ("false", False),
+                              ("off", False), ("no", False)):
+                os.environ["CRUCIBLE_ROUTE"] = val
+                self.assertEqual(RT.enabled(None), want, val)
+            os.environ["CRUCIBLE_ROUTE"] = "1"
+            self.assertFalse(RT.enabled(False))                   # an explicit argument wins
+            os.environ.pop("CRUCIBLE_ROUTE")
+            self.assertFalse(RT.enabled(None))
+            self.assertTrue(RT.enabled(True))
+        finally:
+            if old is None:
+                os.environ.pop("CRUCIBLE_ROUTE", None)
+            else:
+                os.environ["CRUCIBLE_ROUTE"] = old
 
     def test_route(self):
         tiers = ["claude-haiku-5-5", "claude-sonnet-5-5"]
@@ -1612,6 +1632,52 @@ class TestRouting(unittest.TestCase):
                     self.assertEqual(reviewers, ["claude-opus-5-5"])
                     self.assertEqual(verifiers, ["claude-haiku-5-5", "claude-sonnet-5-5"])
 
+
+    def test_routed_docs_round_still_rechecks_carried_findings(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo, home = os.path.join(d, "r"), os.path.join(d, "home")
+            env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
+                       GIT_COMMITTER_EMAIL="t@t", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+            g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True, env=env)
+            w = lambda p, t: open(os.path.join(repo, p), "w").write(t)
+            os.makedirs(os.path.join(repo, "src"))
+            g("init", "-q", "-b", "main"); w("src/a.js", "export const a = 1;\n"); w("README.md", "# r\n")
+            g("add", "-A"); g("commit", "-qm", "base"); g("checkout", "-qb", "x")
+            w("src/a.js", "export const a = 1;\nexport const b = () => 2;\n"); g("commit", "-qam", "add b")
+            calls = []
+
+            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
+                recheck = "changed since then" in prompt
+                calls.append((model, "findings" in schema["properties"], recheck))
+                if "findings" in schema["properties"]:
+                    return {"summary": "s", "findings": [] if "src/a.js" not in prompt else [
+                        {"severity": "medium", "file": "src/a.js", "line": 2, "title": "b is undocumented in the README",
+                         "problem": "p", "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "w",
+                         "fix": "f"}]}, 0.01
+                return {"keep": not recheck, "severity": "medium", "method": "read", "actions": "a",
+                        "evidence": "README now documents b" if recheck else "e", "confidence": "high"}, 0.001
+
+            olds = (V.HOME, U.HOME, V.claude, os.environ.get("CRUCIBLE_CACHE"))
+            V.HOME = U.HOME = home
+            os.environ["CRUCIBLE_CACHE"] = os.path.join(home, "cache")
+            V.claude = fake
+            try:
+                V.run_review(repo, "main", offline=True, skip_checks=True, route=True, log=lambda *_: None)
+                w("README.md", "# r\n\n`b()` returns 2.\n"); g("commit", "-qam", "document b")   # docs-only round
+                calls.clear()
+                r = U.read_json(os.path.join(V.run_review(repo, "main", offline=True, skip_checks=True, route=True,
+                                                          log=lambda *_: None), "review.json"))
+            finally:
+                V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
+                if olds[3] is None:
+                    os.environ.pop("CRUCIBLE_CACHE", None)
+                else:
+                    os.environ["CRUCIBLE_CACHE"] = olds[3]
+            self.assertEqual(r["status"], "done", r.get("reason"))
+            self.assertEqual(r["route"]["kind"], "docs")
+            self.assertEqual(r["incremental"]["carried"], 1)
+            self.assertIn(("claude-haiku-5-5", False, True), calls)            # the carried finding was re-checked
+            self.assertEqual([f["title"] for f in r["dropped"]], ["b is undocumented in the README"])
 
 if __name__ == "__main__":
     unittest.main()

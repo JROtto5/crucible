@@ -420,8 +420,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
     """full: ignore the previous review of this branch (no incremental re-review).
     fresh: bypass the review/verification cache. no_tiers: verify with the strong model only.
     route: route by change type (routing.py); None reads CRUCIBLE_ROUTE."""
-    if route is None:
-        route = os.environ.get("CRUCIBLE_ROUTE", "") not in ("", "0")
+    route = routing.enabled(route)
     repo = os.path.abspath(repo)
     project = project_key(repo)
     if is_dirty(repo):
@@ -500,6 +499,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         else:
             chunks, uncovered = diff_mod.chunk(files)
         tiers = verify_tiers(verify_model, no_tiers)
+        tiered = len(tiers) > 1                        # before routing: a routed round keeps the carried re-check
         if route:
             kind = routing.change_kind([f["path"] for f in (dfiles if prev_sha else files)])
             review_model, tiers = routing.route(kind, review_model, tiers, authors)
@@ -579,7 +579,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                                              "evidence": v["evidence"], "confidence": v.get("confidence"), "tiers": trail}
                         dropped.append(f)
         # a carried finding can be fixed by a change elsewhere (a test added in another file): re-check it cheaply
-        if carried and len(tiers) > 1:
+        if carried and tiered:
             since = (f"This claim was verified on an earlier commit ({prev_sha[:10]}); its cited lines are unchanged, but "
                      f"these files changed since then: {', '.join(record['incremental']['files']) or '(none)'}. Re-check "
                      f"whether those later changes resolve it (e.g. a test added elsewhere, a caller fixed).\n"

@@ -1,26 +1,36 @@
 """Cost routing by change type, and the replay over stored reviews that decides which routing rules may be used.
 
-Routing is off unless asked for (`crucible review --route`, or CRUCIBLE_ROUTE=1). One rule is implemented:
+Routing is off unless asked for (`crucible review --route`, or CRUCIBLE_ROUTE=1/true/yes). One rule is implemented:
 a round whose changed files are all docs/PR text gets one cheaper pass (the mid model reviews, and verification
 stops at the cheap tier). Code changes keep the full pipeline.
 
 `crucible routing-replay` replays the stored reviews (~/.crucible/reviews/*/*/review.json) offline, at no model
 cost, and reports what each candidate rule would have changed: findings lost or downgraded by severity (and
 whether the author later answered them "fixed"), extra findings kept, and the refuted share before and after.
-A rule that would lose an important/critical finding, or a medium, stays off (the same bar as BLAZE's)."""
+A rule that would lose an important/critical finding, or lose or downgrade a medium, stays off."""
 import collections, glob, os, re
 
 from .util import MODELS, SEV, read_json
 
-# docs and PR text: markup/prose files, anything under docs/, and the usual top-level prose files
-DOC_RX = re.compile(r"(\.(?:md|markdown|rst|txt|adoc)$|(?:^|/)docs?/|(?:^|/)(?:README|CHANGELOG|CHANGES|LICENSE|"
-                    r"CONTRIBUTING|AUTHORS|NEWS)(?:\.[^/]*)?$)", re.I)
+# docs and PR text: prose markup files and the usual extension-less top-level prose files. Not .txt (requirements.txt,
+# CMakeLists.txt) and not "anything under docs/" (docs/conf.py runs). Agent instructions and prompt/guide files are
+# prose that changes a tool's behaviour, so they count as code.
+DOC_RX = re.compile(r"(\.(?:md|markdown|rst|adoc)$|(?:^|/)(?:README|CHANGELOG|CHANGES|LICENSE|CONTRIBUTING|AUTHORS|NEWS)"
+                    r"(?:\.txt)?$)", re.I)
+NOT_DOC_RX = re.compile(r"(?:^|/)(?:CLAUDE|AGENTS|GEMINI|copilot-instructions)\.md$|(?:^|/)[^/]*(?:prompt|guide)[^/]*/", re.I)
 
 
 def change_kind(paths):
     """"docs" when every changed path is docs or PR text (and there is at least one), else "code"."""
     paths = [p for p in paths if p]
-    return "docs" if paths and all(DOC_RX.search(p) for p in paths) else "code"
+    return "docs" if paths and all(DOC_RX.search(p) and not NOT_DOC_RX.search(p) for p in paths) else "code"
+
+
+def enabled(flag=None):
+    """--route wins; otherwise CRUCIBLE_ROUTE, where only 1/true/yes turn it on (so "false" or "off" don't)."""
+    if flag is not None:
+        return bool(flag)
+    return os.environ.get("CRUCIBLE_ROUTE", "").strip().lower() in ("1", "true", "yes")
 
 
 def route(kind, review_model, tiers, authors=()):
