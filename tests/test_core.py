@@ -703,9 +703,19 @@ class TestOverlappingPRs(unittest.TestCase):
     """Real-use bug k: the competing-PR check only looked at PRs that reference the linked issue, so it missed
     Heroic #5776, which fixes a neighbouring issue in the same comparators."""
 
-    OURS = [{"path": "src/Library.tsx", "hunks": [{"old_start": 375, "old_len": 11}]},
-            {"path": "src/new_helper.ts", "added": True, "hunks": [{"old_start": 0, "old_len": 0}]},
-            {"path": "pnpm-lock.yaml", "hunks": [{"old_start": 10, "old_len": 6}]}]
+    @staticmethod
+    def our_diff(changed_at=380):
+        """A real --unified=5 diff, as review.py makes it: base lines changed_at..changed_at+1 replaced, a new file,
+        and a lockfile. The hunk header spans 5 context lines each side; only the 2 changed lines may count."""
+        base = [f"l{i}\n" for i in range(1, 501)]
+        new = base[:changed_at - 1] + ["x\n", "y\n", "z\n"] + base[changed_at + 1:]
+        d = make_repo({"src/Library.tsx": "".join(base), "pnpm-lock.yaml": "a\n"},
+                      {"src/Library.tsx": "".join(new), "pnpm-lock.yaml": "b\n", "src/new_helper.ts": "export {}\n"})
+        return D.parse(U.git(d, "diff", "--unified=5", "main..HEAD"))
+
+    def setUp(self):
+        self.OURS = self.our_diff()
+        self.assertEqual(sorted(f["path"] for f in self.OURS), ["pnpm-lock.yaml", "src/Library.tsx", "src/new_helper.ts"])
 
     def stub(self, pages, patches):
         calls = []
@@ -737,7 +747,7 @@ class TestOverlappingPRs(unittest.TestCase):
                                     (7003, "b", "User", ["src/Library.tsx", "x.ts"]),     # same file, far away
                                     (7004, "c", "User", ["pnpm-lock.yaml"])], 105, "c1"),
                    "c1": self.page([(5776, "d", "User", ["src/Library.tsx", "src/Console.tsx"])], 105)},
-                  {6045: [{"filename": "src/Library.tsx", "patch": "@@ -374,6 +374,6 @@ x"}],
+                  {6045: [{"filename": "src/Library.tsx", "patch": "@@ -378,6 +378,6 @@ x"}],
                    7003: [{"filename": "src/Library.tsx", "patch": "@@ -10,7 +10,8 @@ y\n@@ -900,6 +901,6 @@"}],
                    5776: [{"filename": "src/Library.tsx", "patch": "@@ -375,11 +375,12 @@ sort"}]})
         it = R.overlapping_prs(".", self.OURS, "me")
@@ -751,6 +761,49 @@ class TestOverlappingPRs(unittest.TestCase):
         self.assertIn("1 touch the same files elsewhere (#7003)", ev)
         self.assertIn("checked 6 of 105 open PRs", ev)
 
+    def test_margin_is_their_3_context_lines_not_our_unified_5(self):
+        # we change base 380-381; a PR hunk covering 371-376 is 4 lines away. Our --unified=5 header (375-386)
+        # would have met it; only our changed lines may count.
+        self.stub({None: self.page([(7006, "f", "User", ["src/Library.tsx"])], 1)},
+                  {7006: [{"filename": "src/Library.tsx", "patch": "@@ -371,6 +371,6 @@"}]})
+        self.assertEqual(R.overlapping_prs(".", self.OURS, "me")["status"], "pass")
+        self.stub({None: self.page([(7006, "f", "User", ["src/Library.tsx"])], 1)},
+                  {7006: [{"filename": "src/Library.tsx", "patch": "@@ -372,9 +372,9 @@"}]})   # 372-380
+        self.assertEqual(R.overlapping_prs(".", self.OURS, "me")["status"], "warn")
+
+    def test_pure_insertion_anchors_on_the_next_base_line(self):
+        hunk = D.parse("diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -12,0 +13,2 @@\n+a\n+b\n")[0]["hunks"]
+        self.assertEqual(R._changed_old_lines(hunk), {13})
+
+    def test_patchless_shared_file_is_not_compared_not_distant(self):
+        self.stub({None: self.page([(7007, "g", "User", ["src/Library.tsx"])], 1)},
+                  {7007: [{"filename": "src/Library.tsx"}]})                    # too large: GitHub sends no patch
+        it = R.overlapping_prs(".", self.OURS, "me")
+        self.assertEqual(it["status"], "warn")
+        self.assertIn("1 couldn't be compared, no readable patch (#7007)", it["evidence"])
+        self.assertNotIn("elsewhere", it["evidence"])
+        self.stub({None: self.page([(7008, "h", "User", ["src/Library.tsx"])], 1)},
+                  {7008: [{"filename": "other.ts", "patch": "@@ -1,3 +1,3 @@"}]})   # path past the REST page
+        self.assertIn("couldn't be compared", R.overlapping_prs(".", self.OURS, "me")["evidence"])
+
+    def test_candidates_past_the_cap_are_reported_not_compared(self):
+        n = R.OVERLAP_CANDIDATES + 3
+        far = {k: [{"filename": "src/Library.tsx", "patch": "@@ -10,6 +10,6 @@"}] for k in range(1, n + 1)}
+        calls = self.stub({None: self.page([(k, "u", "User", ["src/Library.tsx"]) for k in range(1, n + 1)], n)}, far)
+        it = R.overlapping_prs(".", self.OURS, "me")
+        self.assertEqual(it["status"], "warn")                              # 3 PRs were never compared
+        self.assertIn(f"{R.OVERLAP_CANDIDATES} touch the same files elsewhere", it["evidence"])
+        self.assertIn(f"3 more share a file but weren't compared line by line (#{n - 2}, #{n - 1}, #{n})", it["evidence"])
+        self.assertEqual(sum(1 for c in calls if c[0] != "graphql"), R.OVERLAP_CANDIDATES)
+
+    def test_graphql_variables_are_sent_as_strings(self):
+        calls = self.stub({None: self.page([], 0)}, {})
+        R.open_prs("2048/true")
+        args = calls[0]
+        self.assertIn("owner=2048", args)
+        self.assertEqual(args[args.index("owner=2048") - 1], "-f")
+        self.assertEqual(args[args.index("name=true") - 1], "-f")
+
     def test_pass_when_only_distant_hunks_and_new_file_collision_counts(self):
         self.stub({None: self.page([(7003, "b", "User", ["src/Library.tsx"])], 1)},
                   {7003: [{"filename": "src/Library.tsx", "patch": "@@ -900,6 +901,6 @@"}]})
@@ -762,9 +815,10 @@ class TestOverlappingPRs(unittest.TestCase):
         self.assertIn("#7005", it["evidence"])
 
     def test_unreadable_api_warns_and_pages_are_capped(self):
-        self.stub({}, {})
+        calls = self.stub({}, {})
         it = R.overlapping_prs(".", self.OURS, "me")
         self.assertEqual((it["status"], it["evidence"]), ("warn", "could not list open PRs on o/r"))
+        self.assertEqual(len(calls), 2)                                     # one retry, then give up
         calls = self.stub({None: self.page([], 999, "c1"), "c1": self.page([], 999, "c2"),
                            "c2": self.page([], 999, "c3"), "c3": self.page([], 999, "c4")}, {})
         prs, total = R.open_prs("o/r")
@@ -772,11 +826,12 @@ class TestOverlappingPRs(unittest.TestCase):
         calls = self.stub({None: self.page([(7003, "b", "User", ["src/Library.tsx"])], 1)}, {})  # patch unreadable
         it = R.overlapping_prs(".", self.OURS, "me")
         self.assertEqual(it["status"], "warn")
-        self.assertIn("1 PR diff(s) unreadable", it["evidence"])
+        self.assertIn("1 couldn't be compared, no readable patch (#7003)", it["evidence"])
 
     def test_only_shared_files_is_na(self):
         self.stub({}, {})
-        self.assertEqual(R.overlapping_prs(".", [self.OURS[2]], "me")["status"], "na")
+        lock = [f for f in self.OURS if f["path"] == "pnpm-lock.yaml"]
+        self.assertEqual(R.overlapping_prs(".", lock, "me")["status"], "na")
 
 
 class TestRunReviewIncremental(unittest.TestCase):

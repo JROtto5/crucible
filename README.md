@@ -55,7 +55,7 @@ The one blocking miss is the refcount case: the bug is found, but rated medium. 
    - no whitespace-only churn;
    - size is compared with the project's median merged PR;
    - the issue is still open, unassigned and has no competing open PR (`gh`).
-   - no other open PR changes the same lines, whatever issue it links (`gh`, warn only). Up to the 300 most recently updated open PRs are compared; the most focused ones are listed first, and PRs that share only a file are counted. Bots, your own PRs, lockfiles, changelogs and package.json are ignored.
+   - no other open PR changes the same lines, whatever issue it links (`gh`, warn only). Up to the 300 most recently updated open PRs are read; the 20 most focused that share a file are compared line by line (a line you change inside one of their hunks), listed most focused first. PRs that share only a file are counted, and any PR that couldn't be compared is named, never passed. Bots, your own PRs, lockfiles, changelogs and package.json are ignored.
 
 **GREEN** means coverage is complete, no non-pre-existing check failures remain, no critical or important finding is left unless it's fixed or refuted, and every finding has an answer. **Ready to submit** means GREEN plus no failed readiness item.
 

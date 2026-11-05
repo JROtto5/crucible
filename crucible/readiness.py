@@ -276,10 +276,11 @@ def open_prs(slug, pages=OPEN_PR_PAGES):
     owner, name = slug.split("/", 1)
     prs, total, after = [], 0, None
     for _ in range(pages):
-        args = ["graphql", "-f", f"query={OPEN_PRS_QUERY}", "-F", f"owner={owner}", "-F", f"name={name}"]
+        # -f, not -F: -F turns a repo named "2048" or "true" into a number or a boolean, which String! rejects
+        args = ["graphql", "-f", f"query={OPEN_PRS_QUERY}", "-f", f"owner={owner}", "-f", f"name={name}"]
         if after:
-            args += ["-F", f"after={after}"]
-        data = gh_json(*args)
+            args += ["-f", f"after={after}"]
+        data = gh_json(*args) or gh_json(*args)  # the files query is heavy; GitHub sometimes fails it once
         conn = ((data or {}).get("data") or {}).get("repository") or {}
         conn = conn.get("pullRequests")
         if not conn:
@@ -301,37 +302,47 @@ HUNK_RX = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@", re.M)
 OVERLAP_CANDIDATES = 20  # PRs whose patches are fetched to compare lines; more file-level matches are only counted
 
 
-def _old_ranges(hunks):
-    """(start, end) of each hunk on the base side, context lines included, so hunks a few lines apart overlap."""
-    return [(a, a + max(n, 1) - 1) for a, n in hunks]
+def _changed_old_lines(hunks):
+    """Base-side line numbers our change touches: each removed line, and for an insertion the base line it goes
+    before. Context lines are left out, so the margin doesn't depend on the --unified width the diff was made with."""
+    out = set()
+    for h in hunks:
+        o = h["old_start"] if h["old_len"] else h["old_start"] + 1  # "-12,0" inserts after base line 12
+        for kind, *_ in h["lines"]:
+            if kind in "+-":
+                out.add(o)
+            if kind != "+":
+                o += 1
+    return out
 
 
 def _pr_hunks(slug, number):
-    """{path: [(old_start, old_len)]} for one PR, or None if it can't be read. Binary/huge files have no patch."""
+    """{path: [(start, end)] on the base side, 3 context lines included} for one PR, or None if it can't be read.
+    A file GitHub sends without a patch (binary, or a diff too large to show) maps to None: it can't be compared."""
     data = gh_json(f"repos/{slug}/pulls/{number}/files?per_page=100")
     if not isinstance(data, list):
         return None
-    return {f.get("filename"): [(int(a), int(n) if n is not None else 1) for a, n in HUNK_RX.findall(f.get("patch") or "")]
-            for f in data}
-
-
-def _lines_meet(ours, theirs):
-    return any(a <= d and c <= b for a, b in _old_ranges(ours) for c, d in _old_ranges(theirs))
+    out = {}
+    for f in data:
+        found = HUNK_RX.findall(f.get("patch") or "")
+        out[f.get("filename")] = [(int(a), int(a) + max(int(n) if n else 1, 1) - 1) for a, n in found] if found else None
+    return out
 
 
 def overlapping_prs(repo, files, me=None):
     """Open PRs by someone else that change the same lines as this change. The linked-issue check only sees PRs that
     reference the issue; a PR fixing a neighbouring issue in the same code (Heroic #5776) is still a claim to respect.
 
-    Busy files are touched by many PRs, so the same file alone is only counted; a PR is flagged when one of its
-    hunks overlaps ours on the base side (both diffs include 3 context lines, so hunks ~6 lines apart meet; line drift
-    between the two bases is not corrected). A new file shared with a PR counts as overlapping. Lockfiles,
-    changelogs and package.json are ignored, and bots are skipped."""
+    Busy files are touched by many PRs, so the same file alone is only counted; a PR is flagged when a line we change
+    falls inside one of its hunks on the base side (GitHub's patches carry 3 context lines, so changes up to 3 lines
+    apart meet; line drift between the two bases is not corrected). A new file shared with a PR counts as
+    overlapping. A shared file that can't be compared (no patch, or past the 100 files read) is reported as not
+    compared, never as distant. Lockfiles, changelogs and package.json are ignored, and bots are skipped."""
     name = "no open PR changes the same lines"
     slug = upstream_slug(repo)
     if not slug:
         return _item(name, "na", "no GitHub remote")
-    ours = {f["path"]: [(h["old_start"], h["old_len"]) for h in f["hunks"]] for f in files
+    ours = {f["path"]: _changed_old_lines(f["hunks"]) for f in files
             if f.get("path") and not f.get("deleted") and not SHARED_FILE_RX.search(f["path"])}
     added = {f["path"] for f in files if f.get("added")}
     if not ours:
@@ -352,26 +363,30 @@ def overlapping_prs(repo, files, me=None):
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(8) as ex:
         patches = list(ex.map(lambda c: _pr_hunks(slug, c[0]["number"]), cands[:OVERLAP_CANDIDATES]))
-    hits, unread = [], 0
+    hits, distant, unread = [], [], []
     for (pr, same), hunks in zip(cands, patches):
         if hunks is None:
-            unread += 1
+            unread.append(pr["number"])
             continue
-        meet = [p for p in same if p in added or _lines_meet(ours[p], hunks.get(p) or [])]
+        meet = [p for p in same if p in added or any(a <= n <= b for a, b in hunks.get(p) or [] for n in ours[p])]
         if meet:
             hits.append((pr, meet))
-    seen = f"checked {len(prs)} of {total} open PRs" + (", most recently updated first" if len(prs) < total else "")
-    file_only = [c[0]["number"] for c in cands if c[0]["number"] not in {h[0]["number"] for h in hits}]
-    notes = [seen]
-    if file_only:
-        notes.append(f"{len(file_only)} touch the same files elsewhere"
-                     + (f" ({', '.join('#' + str(n) for n in file_only[:5])}{' …' if len(file_only) > 5 else ''})"))
+        elif any(hunks.get(p) is None for p in same):
+            unread.append(pr["number"])
+        else:
+            distant.append(pr["number"])
+    nums = lambda ns: ", ".join(f"#{n}" for n in ns[:5]) + (" …" if len(ns) > 5 else "")
+    notes = [f"checked {len(prs)} of {total} open PRs" + (", most recently updated first" if len(prs) < total else "")]
+    if distant:
+        notes.append(f"{len(distant)} touch the same files elsewhere ({nums(distant)})")
     if len(cands) > OVERLAP_CANDIDATES:
-        notes.append(f"lines compared for the first {OVERLAP_CANDIDATES} of {len(cands)}")
+        notes.append(f"{len(cands) - OVERLAP_CANDIDATES} more share a file but weren't compared line by line "
+                     f"({nums([c[0]['number'] for c in cands[OVERLAP_CANDIDATES:]])})")
     if unread:
-        notes.append(f"{unread} PR diff(s) unreadable")
+        notes.append(f"{len(unread)} couldn't be compared, no readable patch ({nums(unread)})")
     if not hits:
-        return _item(name, "warn" if unread else "pass", "; ".join(notes))
+        uncompared = unread or len(cands) > OVERLAP_CANDIDATES
+        return _item(name, "warn" if uncompared else "pass", "; ".join(notes))
     shown = "; ".join(f"#{pr['number']}{' (draft)' if pr['draft'] else ''} by {pr['author']} "
                       f"({len(meet)} of its {len(pr['paths'])} files): "
                       f"{', '.join(meet[:3])}{f' +{len(meet) - 3} more' if len(meet) > 3 else ''}" for pr, meet in hits[:5])
