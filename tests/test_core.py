@@ -452,6 +452,12 @@ class TestLearnStyleSources(unittest.TestCase):
         self.assertTrue(read("a.js").startswith("// caf\ufffd"))
         self.assertEqual(read("missing.js"), "")
 
+    def test_non_ascii_path_is_listed_and_read(self):
+        d = make_repo({"src/café.js": "// accent\nconst x = 1;\n"})
+        _ref, files, read = S.upstream_files(d)
+        self.assertEqual(files, ["src/café.js"])
+        self.assertIn("// accent", read("src/café.js"))
+
     def test_is_bot(self):
         self.assertTrue(U.is_bot({"login": "dependabot[bot]", "type": "Bot"}))
         self.assertTrue(U.is_bot({"login": "Renovate", "type": "User"}))

@@ -115,7 +115,9 @@ def upstream_files(repo):
         ref = default_base(repo)
     except Failed:
         ref = "HEAD"
-    files = git(repo, "ls-tree", "-r", "--name-only", ref, check=False).split("\n")
+    # -z: without it git C-quotes non-ASCII paths ("caf\303\251.js"), which then match nothing
+    ls = subprocess.run(["git", "-C", repo, "ls-tree", "-r", "-z", "--name-only", ref], capture_output=True)
+    files = ls.stdout.decode("utf-8", errors="replace").split("\0") if ls.returncode == 0 else []
 
     def read(path):
         r = subprocess.run(["git", "-C", repo, "show", f"{ref}:{path}"], capture_output=True)
