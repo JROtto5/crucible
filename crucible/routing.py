@@ -13,17 +13,26 @@ import collections, glob, os, re
 from .util import MODELS, SEV, read_json
 
 # docs and PR text: prose markup files and the usual extension-less top-level prose files. Not .txt (requirements.txt,
-# CMakeLists.txt) and not "anything under docs/" (docs/conf.py runs). Agent instructions and prompt/guide files are
-# prose that changes a tool's behaviour, so they count as code.
+# CMakeLists.txt) and not "anything under docs/" (docs/conf.py runs). Agent instructions, and prompt/guide files outside
+# a docs/ tree, are prose that changes a tool's behaviour, so they count as code.
 DOC_RX = re.compile(r"(\.(?:md|markdown|rst|adoc)$|(?:^|/)(?:README|CHANGELOG|CHANGES|LICENSE|CONTRIBUTING|AUTHORS|NEWS)"
                     r"(?:\.txt)?$)", re.I)
-NOT_DOC_RX = re.compile(r"(?:^|/)(?:CLAUDE|AGENTS|GEMINI|copilot-instructions)\.md$|(?:^|/)[^/]*(?:prompt|guide)[^/]*/", re.I)
+AGENT_RX = re.compile(r"(?:^|/)(?:CLAUDE|AGENTS|GEMINI|SKILL)\.md$|(?:^|/)\.(?:claude|cursor)/", re.I)
+# outside a docs tree: improve-prompt.md, copilot-instructions.md, prompts/, a package's guides/
+PROMPT_RX = re.compile(r"(?:^|/)[^/]*(?:prompt|instruction)[^/]*$|(?:^|/)(?:prompts?|guides)/", re.I)
+DOCS_TREE_RX = re.compile(r"(?:^|/)docs?/", re.I)
+
+
+def is_doc(path):
+    if not DOC_RX.search(path) or AGENT_RX.search(path):
+        return False
+    return bool(DOCS_TREE_RX.search(path)) or not PROMPT_RX.search(path)
 
 
 def change_kind(paths):
     """"docs" when every changed path is docs or PR text (and there is at least one), else "code"."""
     paths = [p for p in paths if p]
-    return "docs" if paths and all(DOC_RX.search(p) and not NOT_DOC_RX.search(p) for p in paths) else "code"
+    return "docs" if paths and all(is_doc(p) for p in paths) else "code"
 
 
 def enabled(flag=None):
