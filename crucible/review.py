@@ -234,7 +234,8 @@ def salvage_verdict(f, text, repo, budget):
     """The verifier reached a verdict but its StructuredOutput call kept being rejected (bug l: "must have required
     property 'confidence'" although it was set), so it answered in prose. Transcribe that prose into the schema with
     one cheap tool-less call instead of leaving the finding unverified. A transcription is second-hand, so it is
-    capped at medium confidence: on the cheap tier it always escalates, and it can never drop a carried finding."""
+    capped at medium confidence: on the cheap tier it always escalates, and run_review never drops a finding on one
+    (a transcribed "does not hold" keeps it as unverified, with that prose as the reason)."""
     prompt = textwrap.dedent(f"""\
         A code reviewer checked ONE claim and wrote its verdict in prose, because its structured answer failed.
         Transcribe that verdict into the schema. Do not judge the claim yourself and do not add anything.
@@ -483,6 +484,10 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 for f, v, trail, err in ex.map(verify, to_verify):
                     if v is None:                      # fail closed: keep, marked unverified
                         f["verification"] = {"status": "unverified", "reason": err}
+                        kept.append(f)
+                    elif v.get("salvaged") and not v["keep"]:   # second-hand: a transcription never drops a finding
+                        f["verification"] = {"status": "unverified", "tiers": trail, "reason": "the verifier's "
+                                             f"structured answer failed; its prose says the claim does not hold: {v['evidence']}"}
                         kept.append(f)
                     elif v["keep"]:
                         f["verification"] = {"status": "verified", "method": v["method"], "actions": v["actions"],

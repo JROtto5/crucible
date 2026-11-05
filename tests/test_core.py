@@ -767,6 +767,62 @@ class TestRunReviewIncremental(unittest.TestCase):
                     os.environ["CRUCIBLE_CACHE"] = olds[3]
 
 
+class TestRunReviewTranscribed(unittest.TestCase):
+    """Bug l end to end: when the verifier answers in prose, a transcribed "holds" is kept as verified (and marked),
+    a transcribed "does not hold" keeps the finding as unverified with that prose, and a transcribed re-check of a
+    carried finding neither drops it nor marks it re-checked."""
+
+    def test_transcribed_verdicts_never_drop(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            repo, home = os.path.join(d, "r"), os.path.join(d, "home")
+            os.makedirs(os.path.join(repo, "src"))
+            env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",
+                       GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+            g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True, env=env).stdout.decode().strip()
+            w = lambda p, t: open(os.path.join(repo, p), "w").write(t)
+            g("init", "-q", "-b", "main"); w("src/a.js", "export const a = 1;\n"); w("src/b.js", "export const b = 1;\n")
+            g("add", "-A"); g("commit", "-qm", "base"); g("checkout", "-qb", "x")
+            w("src/a.js", "export const a = 1;\nexport function f(xs) { return xs[xs.length]; }\n")
+            w("src/b.js", "export const b = 1;\nexport function g() { return 2; }\n")
+            g("commit", "-qam", "add f and g")
+
+            def finding(path, title):
+                return {"severity": "medium", "file": path, "line": 2, "title": title, "problem": "p",
+                        "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "w", "fix": "x"}
+
+            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
+                if "findings" in schema["properties"]:
+                    return {"summary": "s", "findings": [finding(p, t) for p, t in
+                            (("src/a.js", "f reads past the end"), ("src/b.js", "g has no test")) if p in prompt]}, 0
+                if "Transcribe that verdict" in prompt:      # the salvage call: transcribe the prose it was given
+                    holds = "HOLDS" in prompt
+                    return {"keep": holds, "severity": "medium", "confidence": "high", "method": "read",
+                            "actions": "a", "evidence": "prose says " + ("it holds" if holds else "falsified")}, 0
+                raise U.NoStructuredOutput("x", "Verdict: HOLDS" if "past the end" in prompt else "Verdict: falsified")
+
+            with mock.patch.object(V, "HOME", home), mock.patch.object(U, "HOME", home), \
+                    mock.patch.object(V, "claude", fake), mock.patch.dict(os.environ, {"CRUCIBLE_CACHE": os.path.join(home, "c")}):
+                r = U.read_json(os.path.join(V.run_review(repo, "main", offline=True, skip_checks=True,
+                                                          log=lambda *_: None), "review.json"))
+                self.assertEqual(r["status"], "done", r.get("reason"))
+                self.assertEqual(r["dropped"], [])
+                by = {f["title"]: f["verification"] for f in r["findings"]}
+                self.assertEqual(by["f reads past the end"]["status"], "verified")
+                self.assertIn("transcribed", V.transcribed_note(by["f reads past the end"]))
+                self.assertEqual(by["g has no test"]["status"], "unverified")
+                self.assertIn("prose says falsified", by["g has no test"]["reason"])
+                # round 2 touches only a.js: the b.js finding is carried and re-checked, and that re-check is transcribed
+                w("src/a.js", "export const a = 1;\nexport function f(xs) { return xs[xs.length - 1]; }\n")
+                g("commit", "-qam", "fix f")
+                r2 = U.read_json(os.path.join(V.run_review(repo, "main", offline=True, skip_checks=True,
+                                                           log=lambda *_: None), "review.json"))
+                self.assertEqual(r2["status"], "done", r2.get("reason"))
+                carried = [f for f in r2["findings"] if f["title"] == "g has no test"]
+                self.assertEqual(len(carried), 1)
+                self.assertNotIn("rechecked", carried[0])
+
+
 class TestRerunSameCommit(unittest.TestCase):
     """Real-use bug i: a rerun on the same commit reused the verdict even when the untracked PR_DRAFT.md (or the
     base) had changed, and --fresh without --force did too. The verdict is reused only for identical inputs."""
