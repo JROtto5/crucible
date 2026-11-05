@@ -110,24 +110,21 @@ _TOKEN = re.compile(r"[\w./@+~-]+")
 def mentioned(output, paths, repo=None, cwd=None):
     """The untracked paths the output names as a whole path: repo-relative, relative to the check's cwd, or
     absolute, bare or as ./path or file://path. "a.cjs" does not match inside "src/a.cjs" or "a.cjs.map".
-    One pass over the output, then set lookups, so thousands of untracked files and a long log stay cheap."""
-    named = set()
-    for tok in _TOKEN.findall(output):
-        tok = tok.rstrip(".")
-        if tok.startswith("//"):  # file:///abs/path -> //abs/path after the scheme's ':'
-            tok = "/" + tok.lstrip("/")
-        while tok.startswith("./"):
-            tok = tok[2:]
-        named.add(tok)
+    The output is normalised once (scheme, repo prefix and ./ removed) and split into path-like tokens, so
+    thousands of untracked files and a long log stay cheap, even when the repo path has a space in it."""
+    edge = r"(?<![\w./-])"
+    text = output.replace("file://", " ")
+    if repo:
+        text = re.sub(edge + re.escape(repo.rstrip("/")) + "/", " ", text)
+    text = re.sub(r"(?<![\w.])\./", " ", text)
+    named = {t.rstrip(".") for t in _TOKEN.findall(text)}
     hits = []
     for p in paths:
         forms = {p}
-        if repo:
-            forms.add(os.path.join(repo, p))
-            if cwd and p.startswith(cwd.rstrip("/") + "/"):
-                forms.add(os.path.relpath(p, cwd))
-        if forms & named or any(not _TOKEN.fullmatch(f) and re.search(
-                r"(?<![\w./-])" + re.escape(f) + r"(?![\w-]|\.\w)", output) for f in forms):
+        if cwd and p.startswith(cwd.rstrip("/") + "/"):
+            forms.add(os.path.relpath(p, cwd))
+        if forms & named or any(not _TOKEN.fullmatch(f) and f in text and re.search(
+                edge + re.escape(f) + r"(?![\w-]|\.\w)", text) for f in forms):
             hits.append(p)  # paths with spaces, brackets etc. can't be one token: searched for directly
     return hits
 

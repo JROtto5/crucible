@@ -812,15 +812,20 @@ class TestUntrackedScratchFiles(unittest.TestCase):
         self.assertEqual(C.mentioned("see cap.cjs.", ["cap.cjs"]), ["cap.cjs"])  # end of a sentence
         self.assertEqual(C.mentioned("/r/my scratch.js: error", ["my scratch.js"], "/r"), ["my scratch.js"])
         self.assertEqual(C.mentioned("app/[id]/page.tsx:1 x", ["app/[id]/page.tsx", "[id]/page.tsx"]), ["app/[id]/page.tsx"])
+        self.assertEqual(C.mentioned("./my scratch.js: e", ["my scratch.js"], "/r"), ["my scratch.js"])
+        self.assertEqual(C.mentioned("at file:///r/my scratch.js:3", ["my scratch.js"], "/r"), ["my scratch.js"])
+        self.assertEqual(C.mentioned("/my repo/pk/x.js:1", ["pk/x.js"], "/my repo", "pk"), ["pk/x.js"])
+        self.assertEqual(C.mentioned("/other/r/cap.cjs", ["cap.cjs"], "/r"), [])  # another tree's /r/
 
     def test_mentioned_is_linear(self):
         import time
         from crucible import checks as C
         paths = [f"scratch/f{i}.js" for i in range(20000)]
         out = "\n".join(f"src/mod{i}.ts:1:1 error" for i in range(50000))
-        t = time.monotonic()
-        self.assertEqual(C.mentioned(out + "\nscratch/f7.js: x", paths, "/r"), ["scratch/f7.js"])
-        self.assertLess(time.monotonic() - t, 2)
+        for repo in ("/r", "/home/u/My Projects/app"):  # a space in the repo path must not force a scan per file
+            t = time.monotonic()
+            self.assertEqual(C.mentioned(out + f"\n{repo}/scratch/f7.js: x", paths, repo), ["scratch/f7.js"])
+            self.assertLess(time.monotonic() - t, 2)
 
     def test_f_existing_node_modules_in_the_worktree_is_left_alone(self):
         from crucible import checks as C
