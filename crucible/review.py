@@ -610,7 +610,9 @@ def report(rev, ans, waivers=None):
          "## Project checks", ""]
     res = rev["checks"].get("results", [])
     L += [f"- {'✅' if c['status'] == 'pass' else '⏭️' if c['status'] == 'skipped' else '❌'} `{c['cmd']}`: {c['status']}"
-          + (f" (on base: {c['on_base']})" if c.get("on_base") else "") for c in res] or [f"- {rev['checks'].get('note', 'none')}"]
+          + (f" (on base: {c['on_base']})" if c.get("on_base") else "")
+          + (f" (clean checkout of HEAD; the working tree {'timed out' if c['in_working_tree'] == 'timeout' else 'failed'} on untracked "
+             f"{', '.join(f'`{u}`' for u in c['untracked'][:5])})" if c.get("in_working_tree") else "") for c in res] or [f"- {rev['checks'].get('note', 'none')}"]
     L += ["", "## Readiness", ""]
     icon = {"pass": "✅", "fail": "❌", "warn": "⚠️", "na": "·"}
     L += [f"- ⏭️ {i['item']}: waived ({waivers[i['item']]})" if i["status"] == "fail" and i["item"] in waivers

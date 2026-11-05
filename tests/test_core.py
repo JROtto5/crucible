@@ -749,3 +749,65 @@ class TestRerunSameCommit(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestUntrackedScratchFiles(unittest.TestCase):
+    """Bug h (Heroic): a lint that globs the working tree crashed on an untracked scratch .cjs in the repo root,
+    and the PR was reported as failing lint. Bug f: the base worktree's node_modules symlink hit EEXIST."""
+
+    LINT = ("import os, sys\n"
+            "bad = [p for p in sorted(os.listdir('.')) if p.endswith('.cjs') and 'BROKEN' in open(p).read()]\n"
+            "print('\\n'.join(f'{p}: Parsing error' for p in bad)); sys.exit(1 if bad else 0)\n")
+
+    def _repo(self, extra=None):
+        from crucible import checks as C  # noqa: F401
+        d = make_repo({"lint.py": self.LINT, "a.cjs": "ok\n", **(extra or {})}, {"a.cjs": "ok, changed\n"})
+        os.makedirs(os.path.join(_TMP_HOME, "projects", "x"), exist_ok=True)
+        open(os.path.join(_TMP_HOME, "projects", "x", "config.json"), "w").write(
+            '{"checks": [{"name": "lint", "cmd": "%s lint.py"}]}' % sys.executable)
+        return d
+
+    def test_failure_on_untracked_file_is_rejudged_on_a_clean_checkout(self):
+        from crucible import checks as C
+        d = self._repo()
+        open(os.path.join(d, "capture.cjs"), "w").write("BROKEN\n")
+        res = C.run_all(d, "x", log=lambda *a: None)["results"][0]
+        self.assertEqual(res["status"], "pass")
+        self.assertEqual(res["untracked"], ["capture.cjs"])
+        self.assertEqual(res["in_working_tree"], "fail")
+        self.assertIn("failed in the working tree only", C.facts({"results": [res]}))
+        self.assertEqual(sh(d, "git", "worktree", "list").count("\n"), 0)  # the throwaway worktree is gone
+
+    def test_a_real_failure_still_fails(self):
+        from crucible import checks as C
+        d = self._repo()
+        open(os.path.join(d, "a.cjs"), "w").write("BROKEN\n"); sh(d, "git", "commit", "-qam", "break")
+        open(os.path.join(d, "capture.cjs"), "w").write("BROKEN\n")
+        res = C.run_all(d, "x", log=lambda *a: None)["results"][0]
+        self.assertEqual(res["status"], "fail")
+        self.assertIn("a.cjs: Parsing error", res["tail"])
+        self.assertNotIn("capture.cjs", res["tail"])  # the clean run's output replaces the working-tree one
+
+    def test_failure_not_naming_untracked_files_is_not_rerun(self):
+        from crucible import checks as C
+        d = self._repo()
+        open(os.path.join(d, "a.cjs"), "w").write("BROKEN\n"); sh(d, "git", "commit", "-qam", "break")
+        open(os.path.join(d, "notes.txt"), "w").write("scratch\n")
+        res = C.run_all(d, "x", log=lambda *a: None)["results"][0]
+        self.assertEqual(res["status"], "fail")
+        self.assertNotIn("untracked", res)
+
+    def test_mentioned_matches_whole_paths_only(self):
+        from crucible import checks as C
+        out = "src/a.cjs: error\nfoo.cjs.map ok\n"
+        self.assertEqual(C.mentioned(out, ["src/a.cjs", "a.cjs", "foo.cjs", "b.cjs"]), ["src/a.cjs"])
+        self.assertEqual(C.mentioned("/r/cap.cjs\n  1:1 error", ["cap.cjs"], "/r"), ["cap.cjs"])  # eslint: absolute
+        self.assertEqual(C.mentioned("x.cjs: error", ["pk/x.cjs"], "/r", "pk"), ["pk/x.cjs"])  # relative to cwd
+        self.assertEqual(C.mentioned("/other/cap.cjs", ["cap.cjs"], "/r"), [])
+
+    def test_f_existing_node_modules_in_the_worktree_is_left_alone(self):
+        from crucible import checks as C
+        d = self._repo({"node_modules/.keep": ""})
+        os.makedirs(os.path.join(d, "node_modules", "pkg"))  # installed deps (untracked inside a tracked dir)
+        res = C.run_in_worktree(d, "HEAD", {"cmd": "test -f node_modules/.keep && test ! -L node_modules"})
+        self.assertEqual(res["status"], "pass")

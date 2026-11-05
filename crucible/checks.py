@@ -81,14 +81,42 @@ def detect(repo, project, paths=None):
     return {"checks": checks, "hints": hints[:20], "source": "package.json" if pkg else "auto"}
 
 
-def _run(cmd, cwd, timeout):
+def _run(cmd, cwd, timeout, watch=(), repo=None, rel_cwd=None):
+    """watch: paths to look for in the full output (not just the kept tail) -> "mentions"."""
     try:
         r = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True, timeout=timeout,
                            stdin=subprocess.DEVNULL, env=dict(os.environ, CI="1", FORCE_COLOR="0", NO_COLOR="1"))
         out = (r.stdout + "\n" + r.stderr).strip()
-        return {"status": "pass" if r.returncode == 0 else "fail", "code": r.returncode, "tail": out[-2500:]}
-    except subprocess.TimeoutExpired:
-        return {"status": "timeout", "code": None, "tail": f"timed out after {timeout}s"}
+        res = {"status": "pass" if r.returncode == 0 else "fail", "code": r.returncode, "tail": out[-2500:]}
+    except subprocess.TimeoutExpired as e:
+        out = "\n".join(x.decode(errors="replace") if isinstance(x, bytes) else (x or "") for x in (e.stdout, e.stderr))
+        res = {"status": "timeout", "code": None, "tail": f"timed out after {timeout}s"}
+    if watch:
+        res["mentions"] = mentioned(out, watch, repo, rel_cwd)
+    return res
+
+
+def untracked(repo):
+    """Untracked, non-ignored files: scratch scripts, captures, notes. They are not part of the commit under
+    review, but a linter or test runner globbing the working tree picks them up (bug h: eslint crashed on an
+    untracked .cjs in the repo root and the PR was reported as failing lint)."""
+    out = git(repo, "ls-files", "--others", "--exclude-standard", "-z", check=False) or ""
+    return [p for p in out.split("\0") if p]
+
+
+def mentioned(output, paths, repo=None, cwd=None):
+    """The untracked paths the output names as a whole path: repo-relative, relative to the check's cwd, or
+    absolute. "a.cjs" does not match inside "src/a.cjs" or "a.cjs.map"."""
+    hits = []
+    for p in paths:
+        forms = {p}
+        if repo:
+            forms.add(os.path.join(repo, p))
+            if cwd and p.startswith(cwd.rstrip("/") + "/"):
+                forms.add(os.path.relpath(p, cwd))
+        if any(re.search(r"(?<![\w./-])" + re.escape(f) + r"(?![\w-]|\.\w)", output) for f in forms):
+            hits.append(p)
+    return hits
 
 
 def deps_present(repo):
@@ -104,29 +132,56 @@ def run_all(repo, project, base_sha=None, on_base=False, log=print, paths=None):
         return {"detected": det, "results": [{"name": c["name"], "cmd": c["cmd"], "status": "skipped",
                                                "tail": "dependencies not installed (no node_modules)"} for c in det["checks"]],
                 "note": "install dependencies to enable checks"}
+    scratch = untracked(repo)
     for c in det["checks"]:
         log(f"  check {c['name']}: {c['cmd']}" + (f" (in {c['cwd']})" if c.get("cwd") else ""))
-        res = dict(c, **_run(c["cmd"], os.path.join(repo, c.get("cwd") or ""), c.get("timeout", 600)))
+        res = dict(c, **_run(c["cmd"], os.path.join(repo, c.get("cwd") or ""), c.get("timeout", 600),
+                          watch=scratch, repo=repo, rel_cwd=c.get("cwd")))
+        named = res.pop("mentions", [])
+        if res["status"] in ("fail", "timeout") and named:
+            # The failure names files that are not in the commit: judge the commit itself, in a clean checkout.
+            log(f"  check {c['name']} {res['status']}s naming untracked file(s) {', '.join(named[:5])}; "
+                "re-running on a clean checkout of HEAD")
+            clean = run_in_worktree(repo, "HEAD", c)
+            if clean["status"] in ("pass", "fail", "timeout"):
+                res.update(clean, untracked=named, in_working_tree=res["status"])
+            else:
+                res["untracked"] = named
         if on_base and base_sha and res["status"] in ("fail", "timeout"):
             res["on_base"] = run_on_base(repo, base_sha, c)
         results.append(res)
     return {"detected": det, "results": results}
 
 
-def run_on_base(repo, base_sha, check):
-    """Is a failure pre-existing? Run the same check in a throwaway worktree of the base."""
-    wt = tempfile.mkdtemp(prefix="crucible-base-")
+def link_deps(repo, wt, cwd=None):
+    """Share the installed node_modules (root, and the check's package in a monorepo) with a worktree.
+    A path that already exists in the worktree is left alone: a commit can track node_modules/ entries,
+    and symlinking over them used to fail with "[Errno 17] File exists" (bug f)."""
+    for rel in dict.fromkeys(["", cwd or ""]):
+        src = os.path.join(repo, rel, "node_modules")
+        dst = os.path.join(wt, rel, "node_modules")
+        if os.path.isdir(src) and os.path.isdir(os.path.dirname(dst)) and not os.path.lexists(dst):
+            os.symlink(src, dst)
+
+
+def run_in_worktree(repo, rev, check):
+    """Run one check in a throwaway worktree of rev (tracked files only, plus the shared node_modules).
+    -> _run's result, or {"status": "error: ..."} if the worktree could not be made."""
+    wt = tempfile.mkdtemp(prefix="crucible-wt-")
     try:
-        git(repo, "worktree", "add", "--detach", wt, base_sha)
-        nm = os.path.join(repo, "node_modules")
-        if os.path.isdir(nm):
-            os.symlink(nm, os.path.join(wt, "node_modules"))
-        return _run(check["cmd"], os.path.join(wt, check.get("cwd") or ""), check.get("timeout", 600))["status"]
+        git(repo, "worktree", "add", "--detach", wt, rev)
+        link_deps(repo, wt, check.get("cwd"))
+        return _run(check["cmd"], os.path.join(wt, check.get("cwd") or ""), check.get("timeout", 600))
     except Exception as e:  # noqa: BLE001 - recorded, not fatal
-        return f"error: {e}"
+        return {"status": f"error: {e}"}
     finally:
         git(repo, "worktree", "remove", "--force", wt, check=False)
         shutil.rmtree(wt, ignore_errors=True)
+
+
+def run_on_base(repo, base_sha, check):
+    """Is a failure pre-existing? Run the same check in a throwaway worktree of the base. -> its status."""
+    return run_in_worktree(repo, base_sha, check)["status"]
 
 
 def facts(checks):
@@ -135,7 +190,11 @@ def facts(checks):
     for r in checks.get("results", []):
         if r["status"] in ("fail", "timeout"):
             pre = f" (also fails on base: {r['on_base']})" if r.get("on_base") else ""
+            if r.get("untracked"):
+                pre += f" (output names untracked files not in this commit: {', '.join(r['untracked'][:5])})"
             lines.append(f"- `{r['cmd']}` {r['status'].upper()}{pre}. Output tail:\n```\n{r['tail'][-1500:]}\n```")
         else:
-            lines.append(f"- `{r['cmd']}`: {r['status']}")
+            note = f" (failed in the working tree only, on untracked files {', '.join(r['untracked'][:5])})" \
+                if r.get("untracked") else ""
+            lines.append(f"- `{r['cmd']}`: {r['status']}{note}")
     return "\n".join(lines) or "(no project checks were run)"
