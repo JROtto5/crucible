@@ -25,3 +25,5 @@ jobs:
           python -m pip install .
           cd "$RUNNER_TEMP" && crucible --version
           python -c "import crucible.assist as a, os; assert os.path.isfile(a.DOCS), a.DOCS"
+      - name: lint
+        run: python -m pip install ruff && ruff check .

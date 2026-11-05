@@ -26,3 +26,14 @@ crucible = ["guides/*.md"]
 
 [tool.setuptools.dynamic]
 version = {attr = "crucible.__version__"}
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 130
+extend-exclude = ["eval/cases"]   # fixture repos with planted bugs, on purpose
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]   # pyflakes + syntax; newer ruff defaults enable far more
+ignore = ["E401", "E701", "E702", "E731", "E741"]   # the codebase's compact style: one-line imports, `a = 1; b = 2`, `l`

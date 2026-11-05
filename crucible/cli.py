@@ -24,7 +24,7 @@ def _p(repo):
 
 
 def cmd_review(a):
-    from .review import run_review, load, report
+    from .review import run_review
     try:
         run_review(_p(a.repo), a.base, a.force, a.budget, a.author, a.draft, a.base_checks, a.offline, a.skip_checks,
                    full=a.full, fresh=a.fresh, no_tiers=a.no_tiers)

@@ -3,7 +3,7 @@ Drafts only: nothing is ever posted."""
 import json, os, re, textwrap
 from .readiness import find_draft, split_draft, submitted_text
 from .review import load, project_rules_text
-from .util import Budget, Failed, claude, gh_json, git, project_key
+from .util import Budget, Failed, claude, gh_json, git
 
 DOCS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guides", "answering-maintainers.md")  # ships in the package
 

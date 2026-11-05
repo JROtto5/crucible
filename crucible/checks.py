@@ -1,5 +1,5 @@
 """Run the project's own lint / typecheck / tests before any model call."""
-import glob, json, os, re, shutil, subprocess, tempfile
+import glob, os, re, shutil, subprocess, tempfile
 from .util import git, project_dir, read_json
 
 SCRIPT_ORDER = [("lint", ["lint"]), ("typecheck", ["typecheck", "type-check", "tsc", "types", "check-types"]),

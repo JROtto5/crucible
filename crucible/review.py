@@ -1,10 +1,10 @@
 """The review pipeline: checks → scanners → chunked review → per-finding verification → verdict."""
-import concurrent.futures as cf, datetime as dt, fcntl, hashlib, json, os, re, subprocess, textwrap
+import concurrent.futures as cf, datetime as dt, fcntl, hashlib, os, re, subprocess, textwrap
 from . import checks as checks_mod, diff as diff_mod, readiness, style as style_mod
-from .util import (BLOCKING, HOME, MODELS, PREFERENCE, SEV, TOOLS_READ, TOOLS_RUN, Budget, Failed, NoStructuredOutput,
+from .util import (BLOCKING, HOME, MODELS, PREFERENCE, SEV, TOOLS_RUN, Budget, Failed, NoStructuredOutput,
                    claude, default_base,
                    exclude_locally, git, is_dirty, norm_words, project_dir, project_key, read_json, review_dir,
-                   stable_id, upstream_slug, write_json)
+                   stable_id, write_json)
 
 SEVERITY_DEFS = """Severity definitions (use them literally):
 - critical: data loss or corruption, a security hole, or a crash/hang in normal use; or the change does not do what it claims.
