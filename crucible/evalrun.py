@@ -26,9 +26,17 @@ def load_cases(names=None):
     return out
 
 
+JUNK_DIRS = {"__pycache__", ".pytest_cache", ".ruff_cache", "node_modules"}
+
+
 def _copy_tree(src, dst):
-    for root, _dirs, files in os.walk(src):
+    """Copy a fixture tree, skipping build output that a local test run may have left in it (pytest wrote a
+    __pycache__/*.pyc into a fixture, and reading it as text crashed the case with a UnicodeDecodeError)."""
+    for root, dirs, files in os.walk(src):
+        dirs[:] = [d for d in dirs if d not in JUNK_DIRS]
         for fn in files:
+            if fn.endswith((".pyc", ".pyo")):
+                continue
             s = os.path.join(root, fn)
             rel = os.path.relpath(s, src)
             t = os.path.join(dst, rel)

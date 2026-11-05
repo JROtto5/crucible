@@ -1,4 +1,5 @@
 import os, re, subprocess, sys, tempfile, unittest
+from unittest import mock
 
 _TMP_HOME = tempfile.mkdtemp(prefix="crucible-test-home-")
 os.environ["CRUCIBLE_HOME"] = _TMP_HOME
@@ -1227,6 +1228,24 @@ class TestRunReviewAbsenceAnchor(unittest.TestCase):
                 r5 = run()
                 self.assertEqual(r5["summary"], "The review pass failed for boom.py, so this review is incomplete.")
                 self.assertFalse(r5["coverage"]["complete"])
+
+
+class TestEvalFixtureJunk(unittest.TestCase):
+    def test_build_repo_skips_pycache(self):
+        # a local pytest run left base/tests/__pycache__/*.pyc in an eval fixture; the case crashed reading it as text
+        from crucible import evalrun as E
+        with tempfile.TemporaryDirectory() as d:
+            case = os.path.join(d, "case")
+            for side in ("base", "change"):
+                os.makedirs(os.path.join(case, side, "tests", "__pycache__"))
+                open(os.path.join(case, side, "a.py"), "w").write(f"x = '{side}'\n")
+                open(os.path.join(case, side, "tests", "__pycache__", "t.cpython-314.pyc"), "wb").write(b"\x00\xb4\xff")
+                open(os.path.join(case, side, "stray.pyc"), "wb").write(b"\xb4")
+            out = os.path.join(d, "out"); os.makedirs(out)
+            with mock.patch.dict(os.environ, {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+                                              "GIT_COMMITTER_EMAIL": "t@t"}):
+                repo = E.build_repo(case, {"message": "m"}, out)
+            self.assertEqual(E._git_ls(repo), ["a.py"])
 
 
 class TestRerunSameCommit(unittest.TestCase):
