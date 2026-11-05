@@ -20,7 +20,7 @@ Target: about 2027-01-04. 1.0 means a maintainer or a first-time contributor can
 ## Quickstart and docs
 - [x] `pip install`-able package with a `crucible` entry point (no hand-written shim): `pipx install git+https://github.com/JROtto5/crucible` (2026-11-05). Next: tag a release so the quickstart can pin `@v0.4.0`
 - [ ] Five-minute quickstart from clone to first report
-- [x] CONTRIBUTING.md (setup, what a change needs, safe defaults) and issue templates for a wrong finding, a missed issue and a bug (2026-11-05, DRG-25)
+- [x] CONTRIBUTING.md (setup, what a change needs, safe defaults) and issue templates for a wrong finding, a missed issue and a bug (2026-11-05)
 - [ ] Docs page for each command, including the `PR_DRAFT.md` layout
 - [ ] A worked example report from a public PR
 

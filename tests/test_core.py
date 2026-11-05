@@ -631,7 +631,7 @@ class TestVerifierSalvage(unittest.TestCase):
 
 
 class TestRealUseBugs(unittest.TestCase):
-    """Regression tests for bugs found while reviewing real upstream PRs (BOARD a–e)."""
+    """Regression tests for bugs found while reviewing real upstream PRs (real-use bugs a–e)."""
 
     def test_a_bare_pr_number_is_not_an_issue_link(self):
         self.assertIsNone(R.linked_issue("This overlaps #2693 and #2694."))
