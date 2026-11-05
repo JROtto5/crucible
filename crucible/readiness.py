@@ -101,13 +101,21 @@ def submitted_text(text):
     return (d["title"] + "\n\n" if d["title"] else "") + d["body"]
 
 
-def template_headings(repo):
+def template_text(repo):
+    """-> (relative path, raw text) of the repo's PR template, or (None, "")."""
     for t in TEMPLATES:
         p = os.path.join(repo, t)
         if os.path.exists(p):
-            txt = re.sub(r"<!--.*?-->", "", open(p, errors="replace").read(), flags=re.S)
-            return t, [h.strip("# ").strip() for h in txt.split("\n") if re.match(r"^#{1,4}\s+\S", h)]
-    return None, []
+            return t, open(p, errors="replace").read()
+    return None, ""
+
+
+def template_headings(repo):
+    t, raw = template_text(repo)
+    if not t:
+        return None, []
+    txt = re.sub(r"<!--.*?-->", "", raw, flags=re.S)
+    return t, [h.strip("# ").strip() for h in txt.split("\n") if re.match(r"^#{1,4}\s+\S", h)]
 
 
 def check_draft(repo, draft_text):

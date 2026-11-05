@@ -1142,5 +1142,59 @@ class TestUntrackedScratchFiles(unittest.TestCase):
         self.assertEqual(res["status"], "pass")
 
 
+class TestDescriptionHeuristics(unittest.TestCase):
+    """Real-use bugs g (Heroic: the template's comment, checklist and title counted as body length) and
+    m (three.js: "Checked with `npm run build-docs`" was not accepted as testing evidence)."""
+    TPL = ("<!--\n    Describe your PR below this comment\n    AI disclosure: say how AI was used, if it was, in a few"
+           " words and examples of what to write here\n-->\n\n---\n\nUse the following Checklist if you have"
+           " changed something on the Backend or Frontend:\n\n"
+           "- [ ] Tested the feature and it's working on a current and clean install.\n"
+           "- [ ] Tested the main App features and they are still working on a current and clean install.\n"
+           "- [ ] Created / Updated Tests (If necessary)\n- [ ] Created / Updated documentation (If necessary)\n")
+    STYLE = {"body": {"median_words": 40, "pct_with_emoji": 0, "pct_with_headings": 100, "common_headings": []}}
+    TITLE = "fix: Sort the library the same way in desktop and console mode"
+
+    def draft(self, prose_words):
+        filled = self.TPL.replace("- [ ] Tested the feature", "- [x] Tested the feature")
+        body = filled.replace("-->\n", "-->\n\nCloses #5967\n\n" + "word " * prose_words + "\n", 1)
+        return self.TITLE + "\n\n" + body
+
+    def test_g_template_comment_checklist_and_title_are_not_length(self):
+        text = self.draft(100)
+        self.assertGreater(S.words(text), 190)  # what used to be measured: > max(2.5*40, 40+150)
+        self.assertEqual(S.body_words(text, self.TPL, self.TITLE), 102)  # "Closes #5967" + the prose
+        self.assertNotIn("length", {k for k, _ in S.ai_tells(text, self.STYLE, (), self.TPL, self.TITLE)})
+
+    def test_g_long_prose_is_still_flagged(self):
+        text = self.draft(200)
+        self.assertIn("length", {k for k, _ in S.ai_tells(text, self.STYLE, (), self.TPL, self.TITLE)})
+
+    def test_g_edited_template_line_counts(self):
+        # a checklist line the author rewrote is their own text, not the template's
+        text = self.TITLE + "\n\n- [x] Tested the feature on a clean Flatpak install and on the AppImage\n"
+        self.assertEqual(S.body_words(text, self.TPL, self.TITLE), 13)
+
+    def test_g_check_reads_the_repo_template(self):
+        d = make_repo({".github/pull_request_template.md": self.TPL})
+        text = self.draft(120) + "\nTested in the running app.\n"
+        self.assertEqual(S.check(d, "HEAD", [], "PR_DRAFT.md", text, self.STYLE, title=self.TITLE), [])
+        # without the template the checklist and comment count again, and the draft reads as too long
+        self.assertIn("PR description: length reads as generated",
+                      [f["title"] for f in S.check(make_repo({"a.txt": "x"}), "HEAD", [], "PR_DRAFT.md", text, self.STYLE)])
+
+    def test_m_backticked_build_or_test_command_is_evidence(self):
+        for line in ("No code changes. Checked with `npm run build-docs`: both entries show up.",
+                     "Ran `cargo test -p core` locally: 212 passed.",
+                     "`python3 -m unittest` passes.",
+                     "Reproduced on 5.0.44 and confirmed fixed."):
+            self.assertTrue(S.TESTED_RX.search(line), line)
+
+    def test_m_no_evidence_is_still_flagged(self):
+        d = make_repo({"a.txt": "x"})
+        text = "Fixes #12.\n\nThe `parse()` helper dropped the last `token` of a line, so use `split()` instead."
+        titles = [f["title"] for f in S.check(d, "HEAD", [], "PR_DRAFT.md", text, {})]
+        self.assertIn("PR description: no testing evidence", titles)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -401,7 +401,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         if cut:
             log(f"  draft: author notes from {os.path.basename(draft_path)}:{cut} on are not judged as the PR body")
         style_json = read_json(os.path.join(project_dir(project), "style.json"), {}) or {}
-        house_findings = style_mod.check(repo, base, files, draft_path, draft_text, style_json)
+        house_findings = style_mod.check(repo, base, files, draft_path, draft_text, style_json,
+                                         title=readiness.split_draft(draft_full)["title"])
 
         scanner = diff_mod.scan(files)
         rules, mem, facts = project_rules_text(repo, project), memory_text(project), checks_mod.facts(chk)

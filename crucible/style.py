@@ -25,6 +25,30 @@ def words(t):
     return len(re.findall(r"\w+", t or ""))
 
 
+CHECKBOX_RX = re.compile(r"^([-*+]\s+)\[[ xX]\]")
+# How it was tested: a phrase, or a backticked command naming a build/test tool ("Checked with `npm run build-docs`").
+TESTED_RX = re.compile(r"(?i)\b(tested|test plan|how to test|repro\w*|verified|checked|confirmed|measured|benchmark\w*|ran\b|"
+                       r"npm test|pytest|unittest|screenshot|before|after|tests? pass\w*|passing)\b|"
+                       r"`[^`\n]*\b(npm|pnpm|yarn|npx|bun|deno|make|cargo|go test|pytest|python3?|tox|nox|meson|ninja|ctest|"
+                       r"gradle|mvn|dotnet|rake|mix)\b[^`\n]*`")
+
+
+def _tpl_norm(line):
+    """A line as the template would have it: checkbox state, emphasis and spacing don't matter."""
+    return " ".join(CHECKBOX_RX.sub(r"\1[ ]", line.strip()).replace("*", "").split()).lower()
+
+
+def body_words(text, template="", title=""):
+    """Words the author wrote in the body: HTML comments (as the learned median strips them), the title and lines
+    copied verbatim from the repo's PR template (its checklist and headings, ticked or not) don't count.
+    Merged bodies keep their template lines in the learned median, so this errs toward not flagging length."""
+    t = re.sub(r"<!--.*?-->", "", text or "", flags=re.S)
+    if title and t.lstrip().startswith(title):
+        t = t.lstrip()[len(title):]
+    tpl = {_tpl_norm(l) for l in re.sub(r"<!--.*?-->", "", template or "", flags=re.S).split("\n")} - {""}
+    return sum(words(l) for l in t.split("\n") if _tpl_norm(l) not in tpl)
+
+
 def median_int(xs):
     xs = [x for x in xs if x is not None]
     return int(statistics.median(xs)) if xs else None
@@ -157,8 +181,9 @@ def norm_heading(h):
     return re.sub(r"[\s:]+$", "", re.sub(r"^[^\w]+", "", h.strip())).lower()
 
 
-def ai_tells(text, style=None, allowed_headings=()):
-    """-> list of (kind, detail) for a PR description. `allowed_headings` (the repo's PR template) never count."""
+def ai_tells(text, style=None, allowed_headings=(), template="", title=""):
+    """-> list of (kind, detail) for a PR description. `allowed_headings` (the repo's PR template) never count;
+    length counts only what the author wrote (see body_words)."""
     style = style or {}
     allowed = {norm_heading(h) for h in allowed_headings}
     out = []
@@ -174,7 +199,7 @@ def ai_tells(text, style=None, allowed_headings=()):
     if bullets > 12:
         out.append(("bullet bloat", f"{bullets} bullets"))
     med = (style.get("body") or {}).get("median_words")
-    w = words(text)
+    w = body_words(text, template, title)
     if med and w > max(2.5 * med, med + 150):
         out.append(("length", f"{w} words vs project median {med}"))
     # only learned measurements can call a heading unusual; the template just exempts its own headings
@@ -192,16 +217,16 @@ def ai_tells(text, style=None, allowed_headings=()):
     return out
 
 
-def check(repo, base, files, draft_path, draft_text, style):
-    from .readiness import template_headings
+def check(repo, base, files, draft_path, draft_text, style, title=""):
+    from .readiness import template_headings, template_text
     out = []
     if draft_text:
-        for kind, detail in ai_tells(draft_text, style, template_headings(repo)[1]):
+        for kind, detail in ai_tells(draft_text, style, template_headings(repo)[1], template_text(repo)[1], title):
             out.append(_f("medium" if kind in ("length", "boilerplate") else "low", os.path.basename(draft_path or "PR_DRAFT.md"), 1,
                           f"PR description: {kind} reads as generated", detail,
                           "Rewrite in the project's own voice (run `crucible polish`).",
                           "this project's merged PRs commonly do the same (see STYLE.md measurements)"))
-        if not re.search(r"(?i)\b(tested|test plan|how to test|repro|verified|ran\b|npm test|pytest|screenshot|before|after)", draft_text):
+        if not TESTED_RX.search(draft_text):
             out.append(_f("medium", os.path.basename(draft_path or "PR_DRAFT.md"), 1, "PR description: no testing evidence",
                           "Reviewers can't see how this was tested.", "Add a short 'Tested:' line with the exact commands/results.",
                           "the description already states how it was tested"))
@@ -270,7 +295,7 @@ def keep_required_lines(original, rewritten):
 
 
 def polish(repo, project, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-opus-5-5"), budget_usd=1.0, log=print):
-    from .readiness import NOTES_MARKER, find_draft, split_draft, template_headings
+    from .readiness import NOTES_MARKER, find_draft, split_draft, template_headings, template_text
     path, full = find_draft(repo)
     parts = split_draft(full)
     draft = (f"Title: {parts['title']}\n\n" if parts["title"] else "") + parts["body"]
@@ -304,7 +329,8 @@ def polish(repo, project, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-
     notes = "\n".join(f"- removed: {r}" for r in out["removed"]) or "- nothing removed"
     open(os.path.join(repo, "PR_DRAFT.polish-notes.md"), "w").write(f"# Polish notes\n\n{notes}\n\n## Facts kept\n\n"
                                                                     + "\n".join(f"- {k}" for k in out["kept_facts"]) + "\n")
-    leftover = ai_tells(out["body"], read_json(os.path.join(project_dir(project), "style.json"), {}), heads)
+    leftover = ai_tells(out["body"], read_json(os.path.join(project_dir(project), "style.json"), {}), heads,
+                        template_text(repo)[1])
     log(f"wrote {newp} (original kept) · {len(out['removed'])} removals listed in PR_DRAFT.polish-notes.md · "
         f"remaining tells: {leftover or 'none'} · ${round(cost, 4)}")
     return newp
