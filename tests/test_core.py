@@ -1186,8 +1186,14 @@ class TestDescriptionHeuristics(unittest.TestCase):
         for line in ("No code changes. Checked with `npm run build-docs`: both entries show up.",
                      "Ran `cargo test -p core` locally: 212 passed.",
                      "`python3 -m unittest` passes.",
-                     "Reproduced on 5.0.44 and confirmed fixed."):
+                     "Reproduced on 5.0.44 and confirmed fixed.",
+                     "Screenshots attached.",  # prefixes match, as before the change
+                     "`npm run build-docs` shows both entries.",  # only the command branch matches these two
+                     "`$ make check` is green here."):
             self.assertTrue(S.TESTED_RX.search(line), line)
+        for line in ("Bumps `yarn.lock` for the new dep.", "Updated `Cargo.toml` to pick up the new dep.",
+                     "Adds a `python` binding for the parser.", "The `parse()` helper drops a token."):
+            self.assertFalse(S.TESTED_RX.search(line), line)
 
     def test_m_no_evidence_is_still_flagged(self):
         d = make_repo({"a.txt": "x"})

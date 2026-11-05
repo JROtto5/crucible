@@ -26,11 +26,13 @@ def words(t):
 
 
 CHECKBOX_RX = re.compile(r"^([-*+]\s+)\[[ xX]\]")
-# How it was tested: a phrase, or a backticked command naming a build/test tool ("Checked with `npm run build-docs`").
-TESTED_RX = re.compile(r"(?i)\b(tested|test plan|how to test|repro\w*|verified|checked|confirmed|measured|benchmark\w*|ran\b|"
-                       r"npm test|pytest|unittest|screenshot|before|after|tests? pass\w*|passing)\b|"
-                       r"`[^`\n]*\b(npm|pnpm|yarn|npx|bun|deno|make|cargo|go test|pytest|python3?|tox|nox|meson|ninja|ctest|"
-                       r"gradle|mvn|dotnet|rake|mix)\b[^`\n]*`")
+# How it was tested: a phrase (prefixes match, as before: "Screenshots", "afterwards"), or a code span that *is* a
+# build/test command with arguments ("Checked with `npm run build-docs`"). A bare tool or file name (`python`,
+# `yarn.lock`, `Cargo.toml`) is not a command, so it doesn't count.
+TESTED_RX = re.compile(r"(?i)\b(tested|test plan|how to test|repro|verified|checked|confirmed|measured|benchmark|ran\b|"
+                       r"npm test|pytest|unittest|screenshot|before|after|tests? pass|passing)|"
+                       r"`\s*(\$\s*)?(npm|pnpm|yarn|npx|bun|deno|make|cargo|go|pytest|python3?|tox|nox|meson|ninja|ctest|"
+                       r"gradle|mvn|dotnet|rake|mix)\s+[^`\n]+`")
 
 
 def _tpl_norm(line):
