@@ -99,7 +99,7 @@ Headings from the repo's own PR template never count as "headings this project r
 
 - `polish` rewrites the body of `PR_DRAFT.md` in the house style and carries your notes over below a `<!-- crucible: notes -->` line. Issue-link lines the template requires (`Closes #12`, `Related issue: #34697`) always survive the rewrite verbatim. It keeps every fact, number and test result, adds no unprovable claims, lists anything it removed in `PR_DRAFT.polish-notes.md`, and re-scans the result for generated-text tells.
 - `prep` predicts reviewer questions and answers them with file:line and test evidence. It also writes "explain it like you wrote it" notes.
-- `reply` fetches the comments on an open PR and drafts replies that follow [docs/answering-maintainers.md](docs/answering-maintainers.md).
+- `reply` fetches the comments on an open PR and drafts replies that follow [crucible/guides/answering-maintainers.md](crucible/guides/answering-maintainers.md).
 
 crucible's working files (`PR_DRAFT*.md`, `PREP.md`, `REPLIES.md`, `PR.diff`) are added to `.git/info/exclude`, so they never end up in your commit.
 
@@ -112,9 +112,16 @@ Model calls run with `--setting-sources ""` and an empty MCP config. A checked-o
 Requires Python 3.10+, git, `gh`, and the [Claude Code](https://claude.com/claude-code) CLI.
 
 ```bash
-git clone … ~/dev/crucible
-printf '#!/usr/bin/env bash\nPYTHONPATH=~/dev/crucible exec python3 -m crucible "$@"\n' > ~/.local/bin/crucible && chmod +x ~/.local/bin/crucible
-python3 -m unittest discover -s ~/dev/crucible/tests
+pipx install git+https://github.com/JROtto5/crucible   # or: pip install --user git+https://github.com/JROtto5/crucible
+crucible --version
+```
+
+Nothing else is installed: crucible uses only the Python standard library. To work on crucible itself, or to run `crucible eval` (its fixture cases live in the repository, not the package):
+
+```bash
+git clone https://github.com/JROtto5/crucible && cd crucible
+pipx install --editable .
+python3 -m unittest discover -s tests
 ```
 
 Environment variables:

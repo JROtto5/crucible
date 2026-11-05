@@ -17,7 +17,7 @@ Target: about 2027-01-04. 1.0 means a maintainer or a first-time contributor can
 - [ ] Baseline, 2026-11-04 (5 reports, 3 projects): 18 kept, 12 dropped by verification, 1 kept finding later refuted by the author
 
 ## Quickstart and docs
-- [ ] `pip install`-able package with a `crucible` entry point (no hand-written shim)
+- [x] `pip install`-able package with a `crucible` entry point (no hand-written shim): `pipx install git+https://github.com/JROtto5/crucible` (2026-11-05). Next: tag a release so the quickstart can pin `@v0.4.0`
 - [ ] Five-minute quickstart from clone to first report
 - [ ] Docs page for each command, including the `PR_DRAFT.md` layout
 - [ ] A worked example report from a public PR

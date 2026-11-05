@@ -20,3 +20,8 @@ jobs:
         run: git config --global user.name ci && git config --global user.email ci@example.invalid && git config --global init.defaultBranch main
       - name: unit tests
         run: python -m unittest discover -s tests -v
+      - name: install the package and run the entry point
+        run: |
+          python -m pip install .
+          cd "$RUNNER_TEMP" && crucible --version
+          python -c "import crucible.assist as a, os; assert os.path.isfile(a.DOCS), a.DOCS"

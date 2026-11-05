@@ -5,7 +5,7 @@ from .readiness import find_draft, split_draft, submitted_text
 from .review import load, project_rules_text
 from .util import Budget, Failed, claude, gh_json, git, project_key
 
-DOCS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs", "answering-maintainers.md")
+DOCS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guides", "answering-maintainers.md")  # ships in the package
 
 PREP_SCHEMA = {"type": "object", "properties": {"questions": {"type": "array", "maxItems": 12, "items": {
     "type": "object", "properties": {"question": {"type": "string"}, "answer": {"type": "string"},

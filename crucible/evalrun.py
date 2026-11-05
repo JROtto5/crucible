@@ -192,6 +192,8 @@ def write_results(label, settings, summary, results):
 
 
 def run_eval(args, log=print):
+    if not os.path.isdir(os.path.join(EVAL_DIR, "cases")):
+        raise SystemExit("crucible eval runs from a git clone of crucible (eval/cases is not part of the installed package)")
     cases = load_cases(args.cases)
     if not cases:
         raise SystemExit("no eval cases matched")

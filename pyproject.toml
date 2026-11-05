@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crucible-review"
+dynamic = ["version"]
+description = "An independent, evidence-first reviewer for the pull requests you send to other people's projects."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/JROtto5/crucible"
+
+[project.scripts]
+crucible = "crucible.cli:main"
+
+[tool.setuptools]
+packages = ["crucible"]
+
+[tool.setuptools.package-data]
+crucible = ["guides/*.md"]
+
+[tool.setuptools.dynamic]
+version = {attr = "crucible.__version__"}

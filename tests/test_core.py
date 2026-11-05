@@ -467,6 +467,41 @@ class TestLearnStyleSources(unittest.TestCase):
         self.assertFalse(U.is_bot(None))
 
 
+class TestPackaging(unittest.TestCase):
+    """`pipx install git+…` must give a working `crucible`: the entry point resolves and the files it reads ship."""
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def test_guide_ships_inside_the_package(self):
+        from crucible import assist
+        self.assertTrue(os.path.isfile(assist.DOCS), assist.DOCS)
+        self.assertEqual(os.path.dirname(os.path.dirname(assist.DOCS)), os.path.join(self.ROOT, "crucible"))
+
+    def test_entry_point_and_package_data(self):
+        import fnmatch, importlib
+        try:
+            import tomllib
+        except ImportError:   # Python 3.10; CI's install step still covers the build there
+            self.skipTest("tomllib needs Python 3.11+")
+        cfg = tomllib.load(open(os.path.join(self.ROOT, "pyproject.toml"), "rb"))
+        mod, fn = cfg["project"]["scripts"]["crucible"].split(":")
+        self.assertTrue(callable(getattr(importlib.import_module(mod), fn)))
+        self.assertEqual(cfg["project"]["dependencies"], [])
+        from crucible import assist
+        rel = os.path.relpath(assist.DOCS, os.path.join(self.ROOT, "crucible"))
+        self.assertTrue(any(fnmatch.fnmatch(rel, g) for g in cfg["tool"]["setuptools"]["package-data"]["crucible"]), rel)
+
+    def test_eval_outside_a_clone_says_why(self):
+        from crucible import evalrun
+        orig = evalrun.EVAL_DIR
+        evalrun.EVAL_DIR = tempfile.mkdtemp(prefix="crucible-noeval-")
+        try:
+            with self.assertRaises(SystemExit) as cm:
+                evalrun.run_eval(type("A", (), {"cases": None})())
+            self.assertIn("git clone", str(cm.exception))
+        finally:
+            evalrun.EVAL_DIR = orig
+
+
 class TestWaivers(unittest.TestCase):
     def test_waiver_unblocks_only_the_waived_failure(self):
         from crucible.review import ready_after_waivers
