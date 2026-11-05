@@ -253,6 +253,7 @@ class TestDraftSplit(unittest.TestCase):
         files = D.parse(U.git(d, "diff", f"{base}..HEAD"))
         out = R.evaluate(d, "t__evaluate", base, files, offline=True)
         self.assertIsNone(out["issue"])  # #77 is in the author's notes, not the PR
+        self.assertIn({"item": "no open PR changes the same lines", "status": "na", "evidence": "offline"}, out["items"])
         with open(os.path.join(d, "PR_DRAFT.md"), "w") as fh:
             fh.write("# Fix a\n\nFixes #12.\n\n## Explain it to me\nsee #77\n")
         self.assertEqual(R.evaluate(d, "t__evaluate", base, files, offline=True)["issue"], 12)
@@ -696,6 +697,86 @@ class TestUnclaimedPR(unittest.TestCase):
             self.assertIn("pull request", it["evidence"])
         finally:
             R.gh_json, R.upstream_slug = orig
+
+
+class TestOverlappingPRs(unittest.TestCase):
+    """Real-use bug k: the competing-PR check only looked at PRs that reference the linked issue, so it missed
+    Heroic #5776, which fixes a neighbouring issue in the same comparators."""
+
+    OURS = [{"path": "src/Library.tsx", "hunks": [{"old_start": 375, "old_len": 11}]},
+            {"path": "src/new_helper.ts", "added": True, "hunks": [{"old_start": 0, "old_len": 0}]},
+            {"path": "pnpm-lock.yaml", "hunks": [{"old_start": 10, "old_len": 6}]}]
+
+    def stub(self, pages, patches):
+        calls = []
+
+        def gh(*args):
+            calls.append(args)
+            if args[0] == "graphql":
+                after = next((a.split("=", 1)[1] for a in args if a.startswith("after=")), None)
+                return pages.get(after)
+            n = int(args[0].split("/pulls/")[1].split("/")[0])
+            return patches.get(n)
+        orig = (R.gh_json, R.upstream_slug)
+        R.gh_json, R.upstream_slug = gh, (lambda repo: "o/r")
+        self.addCleanup(lambda: setattr(R, "gh_json", orig[0]) or setattr(R, "upstream_slug", orig[1]))
+        return calls
+
+    @staticmethod
+    def page(nodes, total, cursor=None):
+        return {"data": {"repository": {"pullRequests": {
+            "totalCount": total, "pageInfo": {"hasNextPage": bool(cursor), "endCursor": cursor},
+            "nodes": [{"number": n, "url": f"u/{n}", "isDraft": False, "author": {"login": who, "__typename": typ},
+                       "files": {"nodes": [{"path": p} for p in paths]}} for n, who, typ, paths in nodes]}}}}
+
+    def test_focused_line_overlap_ranks_first_and_noise_is_filtered(self):
+        giant = ["src/Library.tsx"] + [f"src/f{i}.ts" for i in range(60)]
+        self.stub({None: self.page([(6045, "a", "User", giant),
+                                    (7001, "dependabot", "Bot", ["src/Library.tsx"]),
+                                    (7002, "me", "User", ["src/Library.tsx"]),
+                                    (7003, "b", "User", ["src/Library.tsx", "x.ts"]),     # same file, far away
+                                    (7004, "c", "User", ["pnpm-lock.yaml"])], 105, "c1"),
+                   "c1": self.page([(5776, "d", "User", ["src/Library.tsx", "src/Console.tsx"])], 105)},
+                  {6045: [{"filename": "src/Library.tsx", "patch": "@@ -374,6 +374,6 @@ x"}],
+                   7003: [{"filename": "src/Library.tsx", "patch": "@@ -10,7 +10,8 @@ y\n@@ -900,6 +901,6 @@"}],
+                   5776: [{"filename": "src/Library.tsx", "patch": "@@ -375,11 +375,12 @@ sort"}]})
+        it = R.overlapping_prs(".", self.OURS, "me")
+        self.assertEqual(it["status"], "warn")
+        ev = it["evidence"]
+        self.assertTrue(ev.startswith("#5776 by d (1 of its 2 files)"), ev)   # the focused PR leads
+        self.assertIn("#6045", ev)
+        self.assertLess(ev.index("#5776"), ev.index("#6045"))
+        for skipped in ("#7001", "#7002", "#7004"):                          # bot, our own PR, lockfile only
+            self.assertNotIn(skipped, ev)
+        self.assertIn("1 touch the same files elsewhere (#7003)", ev)
+        self.assertIn("checked 6 of 105 open PRs", ev)
+
+    def test_pass_when_only_distant_hunks_and_new_file_collision_counts(self):
+        self.stub({None: self.page([(7003, "b", "User", ["src/Library.tsx"])], 1)},
+                  {7003: [{"filename": "src/Library.tsx", "patch": "@@ -900,6 +901,6 @@"}]})
+        self.assertEqual(R.overlapping_prs(".", self.OURS, "me")["status"], "pass")
+        self.stub({None: self.page([(7005, "e", "User", ["src/new_helper.ts"])], 1)},
+                  {7005: [{"filename": "src/new_helper.ts", "patch": "@@ -0,0 +1,40 @@"}]})
+        it = R.overlapping_prs(".", self.OURS, "me")
+        self.assertEqual(it["status"], "warn")
+        self.assertIn("#7005", it["evidence"])
+
+    def test_unreadable_api_warns_and_pages_are_capped(self):
+        self.stub({}, {})
+        it = R.overlapping_prs(".", self.OURS, "me")
+        self.assertEqual((it["status"], it["evidence"]), ("warn", "could not list open PRs on o/r"))
+        calls = self.stub({None: self.page([], 999, "c1"), "c1": self.page([], 999, "c2"),
+                           "c2": self.page([], 999, "c3"), "c3": self.page([], 999, "c4")}, {})
+        prs, total = R.open_prs("o/r")
+        self.assertEqual((prs, total, len(calls)), ([], 999, R.OPEN_PR_PAGES))
+        calls = self.stub({None: self.page([(7003, "b", "User", ["src/Library.tsx"])], 1)}, {})  # patch unreadable
+        it = R.overlapping_prs(".", self.OURS, "me")
+        self.assertEqual(it["status"], "warn")
+        self.assertIn("1 PR diff(s) unreadable", it["evidence"])
+
+    def test_only_shared_files_is_na(self):
+        self.stub({}, {})
+        self.assertEqual(R.overlapping_prs(".", [self.OURS[2]], "me")["status"], "na")
 
 
 class TestRunReviewIncremental(unittest.TestCase):
