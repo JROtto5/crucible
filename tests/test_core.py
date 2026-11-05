@@ -454,6 +454,7 @@ class TestLearnStyleSources(unittest.TestCase):
 
     def test_non_ascii_path_is_listed_and_read(self):
         d = make_repo({"src/café.js": "// accent\nconst x = 1;\n"})
+        sh(d, "git", "config", "core.quotepath", "true")   # git's default; a global false would hide the bug
         _ref, files, read = S.upstream_files(d)
         self.assertEqual(files, ["src/café.js"])
         self.assertIn("// accent", read("src/café.js"))
