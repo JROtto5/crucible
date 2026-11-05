@@ -785,7 +785,11 @@ class TestUntrackedScratchFiles(unittest.TestCase):
         self.assertIn("a.cjs: Parsing error", res["tail"])
         self.assertNotIn("capture.cjs", res["tail"])  # the clean run's output replaces the working-tree one
         self.assertIn("capture.cjs", res["working_tree_tail"])
-        self.assertIn("on a clean checkout of HEAD", C.facts({"results": [res]}))
+        fx = C.facts({"results": [res]})
+        self.assertIn("on a clean checkout of HEAD", fx)
+        # both outputs: the working-tree tail first, then the clean checkout's
+        self.assertLess(fx.index("capture.cjs: Parsing error"), fx.index("Clean checkout"))
+        self.assertIn("a.cjs: Parsing error", fx[fx.index("Clean checkout"):])
 
     def test_failure_not_naming_untracked_files_is_not_rerun(self):
         from crucible import checks as C
@@ -806,6 +810,8 @@ class TestUntrackedScratchFiles(unittest.TestCase):
         self.assertEqual(C.mentioned("./cap.cjs: SyntaxError", ["cap.cjs"], "/r"), ["cap.cjs"])
         self.assertEqual(C.mentioned("at file:///r/cap.mjs:3:1", ["cap.mjs"], "/r"), ["cap.mjs"])
         self.assertEqual(C.mentioned("see cap.cjs.", ["cap.cjs"]), ["cap.cjs"])  # end of a sentence
+        self.assertEqual(C.mentioned("/r/my scratch.js: error", ["my scratch.js"], "/r"), ["my scratch.js"])
+        self.assertEqual(C.mentioned("app/[id]/page.tsx:1 x", ["app/[id]/page.tsx", "[id]/page.tsx"]), ["app/[id]/page.tsx"])
 
     def test_mentioned_is_linear(self):
         import time

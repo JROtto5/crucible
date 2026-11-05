@@ -104,12 +104,15 @@ def untracked(repo):
     return [p for p in out.split("\0") if p]
 
 
+_TOKEN = re.compile(r"[\w./@+~-]+")
+
+
 def mentioned(output, paths, repo=None, cwd=None):
     """The untracked paths the output names as a whole path: repo-relative, relative to the check's cwd, or
     absolute, bare or as ./path or file://path. "a.cjs" does not match inside "src/a.cjs" or "a.cjs.map".
     One pass over the output, then set lookups, so thousands of untracked files and a long log stay cheap."""
     named = set()
-    for tok in re.findall(r"[\w./@+~-]+", output):
+    for tok in _TOKEN.findall(output):
         tok = tok.rstrip(".")
         if tok.startswith("//"):  # file:///abs/path -> //abs/path after the scheme's ':'
             tok = "/" + tok.lstrip("/")
@@ -123,8 +126,9 @@ def mentioned(output, paths, repo=None, cwd=None):
             forms.add(os.path.join(repo, p))
             if cwd and p.startswith(cwd.rstrip("/") + "/"):
                 forms.add(os.path.relpath(p, cwd))
-        if forms & named:
-            hits.append(p)
+        if forms & named or any(not _TOKEN.fullmatch(f) and re.search(
+                r"(?<![\w./-])" + re.escape(f) + r"(?![\w-]|\.\w)", output) for f in forms):
+            hits.append(p)  # paths with spaces, brackets etc. can't be one token: searched for directly
     return hits
 
 
@@ -202,7 +206,8 @@ def facts(checks):
             if r.get("in_working_tree"):
                 pre += (f" (on a clean checkout of HEAD: the working-tree run named untracked files not in this commit, "
                         f"{', '.join(r['untracked'][:5])}, so it was re-run with tracked files and node_modules only; "
-                        "a missing gitignored file such as .env or generated code can also cause this failure)")
+                        "a missing gitignored file such as .env or generated code can also cause this failure). "
+                        f"Working-tree output tail:\n```\n{r.get('working_tree_tail', '')[-600:]}\n```\nClean checkout")
             elif r.get("untracked"):
                 pre += f" (output names untracked files not in this commit: {', '.join(r['untracked'][:5])}; " \
                        "a clean re-run could not be made)"
