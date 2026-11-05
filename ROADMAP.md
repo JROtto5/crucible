@@ -13,6 +13,7 @@ Target: about 2027-01-04. 1.0 means a maintainer or a first-time contributor can
 - [ ] Each false-positive class seen in real reports gets a regression test (started: author notes counted as the PR body; template headings flagged as unusual; a check failing on an untracked scratch file, bug h)
 - [ ] The verifier can only run `pytest` on Python repos (no `python3 -c` probes), so Python findings are verified by reading far more often than JS ones (seen in crucible's own reviews, 2026-11-04). Decide on a safe probe runner. Seen again 2026-11-05: in crucible's self-review of bug l, 4 verifiers tried `python3 -m unittest` (or a mutant copy) and were blocked by the approval gate, so every Python finding came back `by read`. Next: allow the project's own test runner (`python3 -m unittest`) and throwaway scripts in a temp dir
 - [x] Prefer `Closes/Fixes #N` over a bare `#N` for "issue linked", and reject template placeholders (v0.3)
+- [x] Surface an open PR that changes the same lines even when it links a different issue (real-use bug k, Heroic #5776; 2026-11-05). Next: measure how often it warns on real PRs (busy files in Heroic: 12 line-overlapping PRs, #5776 ranked first)
 - [ ] Baseline, 2026-11-04 (5 reports, 3 projects): 18 kept, 12 dropped by verification, 1 kept finding later refuted by the author
 
 ## Quickstart and docs
