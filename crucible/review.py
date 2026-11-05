@@ -240,8 +240,7 @@ def salvage_verdict(f, text, repo, budget):
         Transcribe that verdict into the schema. Do not judge the claim yourself and do not add anything.
         keep = true if the prose says the claim survives / holds / stands; false if it is falsified / dropped / does
         not hold. severity = the severity the prose settles on (else {f['severity']}). method = executed only if the
-        prose says it ran something. confidence = high only if the prose shows the falsification test was checked
-        directly with an unambiguous result; otherwise medium (low if the prose hedges).
+        prose says it ran something. confidence = low if the prose hedges, otherwise medium.
 
         Claim: {f['title']} (at {f['file']}:{f['line']}, proposed severity {f['severity']})
 
@@ -515,7 +514,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                                              "evidence": "re-checked after a later commit: " + v["evidence"],
                                              "confidence": "high", "tiers": [{"model": tiers[0]}]}
                         dropped.append(f)
-                    elif v:
+                    elif v and not v.get("salvaged"):      # a transcription can't drop it, so it settled nothing
                         f["rechecked"] = tiers[0]
         kept.sort(key=lambda f: (SEV.index(f["severity"]), (f.get("verification") or {}).get("method") != "executed"))
         record.update(status="done", summary=" ".join(summaries)[:3000], findings=kept, dropped=dropped,

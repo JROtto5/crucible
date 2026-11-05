@@ -426,17 +426,11 @@ class TestVerifierSalvage(unittest.TestCase):
     finding came back unverified although the prose held a clear verdict (5 of 415 verifications, 2026-11-04)."""
     F = {"title": "off by one", "file": "a.js", "line": 3, "severity": "medium", "wrong_if": "x"}
 
-    def run_tiered(self, fake, tiers):
-        old = (V.claude, os.environ.get("CRUCIBLE_CACHE_VERIFY"))
-        V.claude, os.environ["CRUCIBLE_CACHE_VERIFY"] = fake, "0"
-        try:
+    def run_tiered(self, fake, tiers, cache=None):
+        from unittest import mock
+        env = {"CRUCIBLE_CACHE": cache, "CRUCIBLE_CACHE_VERIFY": "1"} if cache else {"CRUCIBLE_CACHE_VERIFY": "0"}
+        with mock.patch.object(V, "claude", fake), mock.patch.dict(os.environ, env):
             return V.verify_tiered(self.F, "code", ".", None, tiers)
-        finally:
-            V.claude = old[0]
-            if old[1] is None:
-                os.environ.pop("CRUCIBLE_CACHE_VERIFY")
-            else:
-                os.environ["CRUCIBLE_CACHE_VERIFY"] = old[1]
 
     def test_prose_verdict_is_transcribed_not_left_unverified(self):
         calls = []
@@ -464,20 +458,12 @@ class TestVerifierSalvage(unittest.TestCase):
             return {"keep": False, "severity": "low", "confidence": "high", "method": "read",
                     "actions": "a", "evidence": "e"}, 0
         with tempfile.TemporaryDirectory() as d:
-            old = (V.claude, os.environ.get("CRUCIBLE_CACHE"))
-            V.claude, os.environ["CRUCIBLE_CACHE"] = fake, d
-            try:
-                V.verify_tiered(self.F, "code", ".", None, ["cheap", "strong"])
-                self.assertEqual(calls, ["cheap", V.SALVAGE_MODEL, "strong"])   # a transcription is never final
-                calls.clear()
-                V.verify_tiered(self.F, "code", ".", None, ["cheap", "strong"])
-                self.assertEqual(calls[0], "cheap")                              # not replayed from the cache
-            finally:
-                V.claude = old[0]
-                if old[1] is None:
-                    os.environ.pop("CRUCIBLE_CACHE")
-                else:
-                    os.environ["CRUCIBLE_CACHE"] = old[1]
+            self.run_tiered(fake, ["cheap", "strong"], cache=d)
+            self.assertEqual(calls, ["cheap", V.SALVAGE_MODEL, "strong"])   # a transcription is never final
+            calls.clear()
+            self.run_tiered(fake, ["cheap", "strong"], cache=d)
+            self.assertEqual(calls[0], "cheap")                              # not replayed from the cache
+            self.assertTrue(os.listdir(d))                                   # the first-hand verdict was cached
 
     def test_a_failed_transcription_fails_closed(self):
         def fake(prompt, model, *a, **kw):
