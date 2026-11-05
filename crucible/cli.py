@@ -12,6 +12,7 @@
   crucible remember PROJECT "lesson"                              curated repeat-mistakes memory
   crucible proposals PROJECT [--accept N]                         review proposed memory entries
   crucible eval    [--cases ...] [--no-tiers] [--label L]         score the reviewer on labelled fixtures (eval/)
+  crucible routing-replay [--include-self]                        what cost-routing rules would lose, on stored reviews
 
 crucible never pushes, comments, approves or posts. A human submits."""
 import argparse, datetime as dt, os, sys
@@ -27,7 +28,7 @@ def cmd_review(a):
     from .review import run_review
     try:
         run_review(_p(a.repo), a.base, a.force, a.budget, a.author, a.draft, a.base_checks, a.offline, a.skip_checks,
-                   full=a.full, fresh=a.fresh, no_tiers=a.no_tiers)
+                   full=a.full, fresh=a.fresh, no_tiers=a.no_tiers, route=a.route or None)
     except Failed as e:
         sys.exit(f"crucible: {e}")
     return cmd_status(a)
@@ -146,6 +147,11 @@ def cmd_proposals(a):
         print("no proposals")
 
 
+def cmd_routing_replay(a):
+    from . import routing
+    print(routing.replay_report(routing.replay(os.path.join(HOME, "reviews"), include_self=a.include_self)))
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="crucible", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--version", action="version", version=__version__)
@@ -159,6 +165,8 @@ def main(argv=None):
     r.add_argument("--full", action="store_true", help="review the whole change, not just what changed since the last review")
     r.add_argument("--fresh", action="store_true", help="redo the review and bypass the review/verification cache (--force alone reuses it, so verdicts are stable)")
     r.add_argument("--no-tiers", action="store_true", help="verify every finding with the strong model only")
+    r.add_argument("--route", action="store_true", help="route by change type: a docs/PR-text-only round gets one cheaper "
+                   "pass (also CRUCIBLE_ROUTE=1); see `crucible routing-replay`")
     st = s.add_parser("status"); st.add_argument("repo", nargs="?", default=".")
     an = s.add_parser("answer"); an.add_argument("id"); an.add_argument("disposition", choices=["fixed", "refuted", "deferred"])
     an.add_argument("note"); an.add_argument("--repo", default=".")
@@ -172,6 +180,8 @@ def main(argv=None):
     vo.add_argument("--repo", default=".")
     rm = s.add_parser("remember"); rm.add_argument("project"); rm.add_argument("lesson")
     pp = s.add_parser("proposals"); pp.add_argument("project"); pp.add_argument("--accept", type=int)
+    rr = s.add_parser("routing-replay", help="replay stored reviews offline: what each cost-routing rule would lose")
+    rr.add_argument("--include-self", action="store_true", help="include crucible's reviews of itself")
     ev = s.add_parser("eval", help="run the review on labelled fixture changes (eval/cases) and score it")
     ev.add_argument("--cases", nargs="*", help="substrings of case names to run (default: all)")
     ev.add_argument("--review-model"); ev.add_argument("--verify-model"); ev.add_argument("--cheap-model")
@@ -181,7 +191,8 @@ def main(argv=None):
     ev.add_argument("--no-write", action="store_true", help="don't update eval/RESULTS.md and history")
     a = p.parse_args(argv)
     {"review": cmd_review, "status": cmd_status, "answer": cmd_answer, "waive": cmd_waive, "learn": cmd_learn, "prep": cmd_prep,
-     "polish": cmd_polish, "reply": cmd_reply, "vote": cmd_vote, "remember": cmd_remember, "proposals": cmd_proposals, "eval": cmd_eval}[a.cmd](a)
+     "polish": cmd_polish, "reply": cmd_reply, "vote": cmd_vote, "remember": cmd_remember, "proposals": cmd_proposals, "eval": cmd_eval,
+     "routing-replay": cmd_routing_replay}[a.cmd](a)
 
 
 if __name__ == "__main__":

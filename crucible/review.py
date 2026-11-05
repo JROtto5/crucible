@@ -1,6 +1,6 @@
 """The review pipeline: checks → scanners → chunked review → per-finding verification → verdict."""
 import concurrent.futures as cf, datetime as dt, fcntl, hashlib, os, re, subprocess, textwrap
-from . import checks as checks_mod, diff as diff_mod, readiness, style as style_mod
+from . import checks as checks_mod, diff as diff_mod, readiness, routing, style as style_mod
 from .util import (BLOCKING, HOME, MODELS, PREFERENCE, SEV, TOOLS_RUN, Budget, Failed, NoStructuredOutput,
                    claude, default_base,
                    exclude_locally, git, is_dirty, norm_words, project_dir, project_key, read_json, review_dir,
@@ -280,13 +280,15 @@ def verify_tiered(f, code, repo, budget, tiers, fresh=False, since=""):
             v = hit
         else:
             try:
-                v, _ = claude(prompt, model, VERIFY_SCHEMA, repo, budget, tools=TOOLS_RUN, effort="high")
+                v, cost = claude(prompt, model, VERIFY_SCHEMA, repo, budget, tools=TOOLS_RUN, effort="high")
+                v = dict(v, cost=round(cost or 0, 4))
             except NoStructuredOutput as e:
                 v = salvage_verdict(f, e.text, repo, budget)
             if not v.get("salvaged"):      # the rejection is flaky: a rerun should retry the real verifier
                 cache_put(key, v)
         trail.append({"model": model, "keep": v["keep"], "severity": v["severity"], "confidence": v.get("confidence"),
-                      "cached": bool(hit), **({"salvaged": True} if v.get("salvaged") else {})})
+                      "cached": bool(hit), **({"salvaged": True} if v.get("salvaged") else {}),
+                      **({"cost": v["cost"]} if "cost" in v and not hit else {})})
         if i < len(tiers) - 1 and not needs_escalation(v):
             break
     return v, trail
@@ -414,9 +416,12 @@ def stale_inputs(prev, inputs):
 
 
 def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, draft=None, base_checks=False,
-               offline=False, skip_checks=False, log=print, full=False, fresh=False, no_tiers=False):
+               offline=False, skip_checks=False, log=print, full=False, fresh=False, no_tiers=False, route=None):
     """full: ignore the previous review of this branch (no incremental re-review).
-    fresh: bypass the review/verification cache. no_tiers: verify with the strong model only."""
+    fresh: bypass the review/verification cache. no_tiers: verify with the strong model only.
+    route: route by change type (routing.py); None reads CRUCIBLE_ROUTE."""
+    if route is None:
+        route = os.environ.get("CRUCIBLE_ROUTE", "") not in ("", "0")
     repo = os.path.abspath(repo)
     project = project_key(repo)
     if is_dirty(repo):
@@ -494,6 +499,13 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                                      "reverified": len(reverify)}
         else:
             chunks, uncovered = diff_mod.chunk(files)
+        tiers = verify_tiers(verify_model, no_tiers)
+        if route:
+            kind = routing.change_kind([f["path"] for f in (dfiles if prev_sha else files)])
+            review_model, tiers = routing.route(kind, review_model, tiers, authors)
+            record["route"] = {"kind": kind, "review_model": review_model, "verify_tiers": tiers}
+            record["review_model"] = review_model
+            log(f"  route: {kind} change → review {review_model}, verify {' → '.join(tiers)}")
         cands, chunk_status, summaries = list(scanner) + house_findings, [], []
         fkey, review_cost = facts_key(chk), 0.0
         for i, ch in enumerate(chunks, 1):
@@ -534,8 +546,9 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             if f["id"] in taken:
                 f["id"] += "-n"
         to_verify = [f for f in new if f["source"] == "review"] + reverify
+        for f in to_verify:                            # replays of routing rules need the reviewer's own severity
+            f.setdefault("proposed_severity", f["severity"])
         kept, dropped = [f for f in new if f["source"] in ("scanner", "style")] + carried, list(carried_dropped)
-        tiers = verify_tiers(verify_model, no_tiers)
         record["verify_tiers"] = tiers
 
         def verify(f):

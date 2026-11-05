@@ -17,6 +17,9 @@ Target: about 2027-01-04. 1.0 means a maintainer or a first-time contributor can
 - [x] Surface an open PR that changes the same lines even when it links a different issue (real-use bug k, Heroic #5776; 2026-11-05). Next: measure how often it warns on real PRs (busy files in Heroic: 12 line-overlapping PRs, #5776 ranked first)
 - [ ] Baseline, 2026-11-04 (5 reports, 3 projects): 18 kept, 12 dropped by verification, 1 kept finding later refuted by the author
 
+- [x] Cost routing by change type behind `--route`, gated by an offline replay of stored reviews (`crucible routing-replay`; 2026-11-05). Docs-only rounds get one cheaper pass. Lows-on-the-cheap-tier failed the bar (4 real lows lost on 57 upstream reviews, one fixed by the author), so it wasn't built
+- [ ] Incremental re-review across amended commits: 38 of 57 upstream reviews (67% of spend) were full re-reviews because the previous reviewed commit isn't an ancestor after `git commit --amend`. With the same merge-base, `git diff prev..HEAD` is still the change between rounds; require the old commit to exist, and prove it on a stubbed two-round amend test plus a replayed real pair
+
 ## Quickstart and docs
 - [x] `pip install`-able package with a `crucible` entry point (no hand-written shim): `pipx install git+https://github.com/JROtto5/crucible` (2026-11-05). Next: tag a release so the quickstart can pin `@v0.4.0`
 - [ ] Five-minute quickstart from clone to first report

@@ -4,7 +4,7 @@ _TMP_HOME = tempfile.mkdtemp(prefix="crucible-test-home-")
 os.environ["CRUCIBLE_HOME"] = _TMP_HOME
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from crucible import diff as D, readiness as R, review as V, style as S, util as U  # noqa: E402
+from crucible import diff as D, readiness as R, review as V, routing as RT, style as S, util as U  # noqa: E402
 
 
 def sh(cwd, *cmd):
@@ -1477,6 +1477,140 @@ class TestDescriptionHeuristics(unittest.TestCase):
         text = "Fixes #12.\n\nThe `parse()` helper dropped the last `token` of a line, so use `split()` instead."
         titles = [f["title"] for f in S.check(d, "HEAD", [], "PR_DRAFT.md", text, {})]
         self.assertIn("PR description: no testing evidence", titles)
+
+
+class TestRouting(unittest.TestCase):
+    """Cost routing by change type (ARMOR exchange 2026-11-05) and the offline replay that gates each rule."""
+
+    def test_change_kind(self):
+        for paths in (["README.md"], ["docs/guide.rst", "CHANGELOG"], ["packages/x/README.md", "LICENSE"], ["notes.txt"]):
+            self.assertEqual(RT.change_kind(paths), "docs", paths)
+        # falsifiers: any code file makes it code; nothing changed is not "docs"; docs-looking names that aren't
+        for paths in (["README.md", "src/a.js"], [], ["src/docstring.py"], ["docs.js"], ["src/readme_parser.py"],
+                      ["assets/logo.png"]):
+            self.assertEqual(RT.change_kind(paths), "code", paths)
+
+    def test_route(self):
+        tiers = ["claude-haiku-5-5", "claude-sonnet-5-5"]
+        self.assertEqual(RT.route("code", "claude-opus-5-5", tiers), ("claude-opus-5-5", tiers))
+        self.assertEqual(RT.route("docs", "claude-opus-5-5", tiers), ("claude-sonnet-5-5", tiers[:1]))
+        # the mid model wrote the change: keep the independent reviewer, still one verification tier
+        self.assertEqual(RT.route("docs", "claude-opus-5-5", tiers, ["claude-sonnet-5-5"]),
+                         ("claude-opus-5-5", tiers[:1]))
+
+    @staticmethod
+    def _store(root, repo, sha, started, findings=(), dropped=(), files=("src/a.js",), answers=None, **extra):
+        d = os.path.join(root, repo, sha)
+        os.makedirs(d)
+        U.write_json(os.path.join(d, "review.json"), dict(
+            {"repo": repo, "sha": sha, "base": "b0", "status": "done", "started": started, "inputs": {"draft": "D"},
+             "coverage": {"chunks": [{"files": list(files)}]}, "cost_usd": 1.0, "cost_review_usd": 0.7,
+             "cost_verify_usd": 0.3, "findings": list(findings), "dropped": list(dropped)}, **extra))
+        if answers:
+            U.write_json(os.path.join(d, "answers.json"), answers)
+
+    @staticmethod
+    def _f(fid, sev, title, cheap, strong=None, **kw):
+        tiers = [dict(model="haiku", **cheap)] + ([dict(model="sonnet", **strong)] if strong else [])
+        return dict({"id": fid, "source": "review", "severity": sev, "title": title, "file": "src/a.js",
+                     "verification": {"tiers": tiers}}, **kw)
+
+    def test_replay_counts_losses_once_at_their_worst(self):
+        with tempfile.TemporaryDirectory() as root:
+            low_lost = self._f("CR-1", "low", "ruff claim is false", {"keep": False, "severity": "low"},
+                               {"keep": True, "severity": "low"})
+            med_down = self._f("CR-2", "medium", "cost grows", {"keep": True, "severity": "low"},
+                               {"keep": True, "severity": "medium"})
+            med_lost = self._f("CR-2", "medium", "cost grows", {"keep": False, "severity": "low"},
+                               {"keep": True, "severity": "medium"})
+            extra = self._f("CR-3", "low", "noise", {"keep": True, "severity": "low"}, {"keep": False, "severity": "low"})
+            not_low = self._f("CR-4", "important", "proposed important", {"keep": True, "severity": "low"},
+                              {"keep": False, "severity": "low"})        # dropped: its proposal is known, not low
+            settled = self._f("CR-5", "low", "cheap tier was sure", {"keep": True, "severity": "low"})
+            self._store(root, "o__p", "s1", "2026-11-05T01", [low_lost, med_down, settled], [extra, not_low])
+            self._store(root, "o__p", "s2", "2026-11-05T02", [med_lost], answers={"CR-2": {"disposition": "fixed"}})
+            self._store(root, "o__p", "s3", "2026-11-05T03", files=["README.md"])
+            self._store(root, "JROtto5__crucible", "s4", "2026-11-05T04",
+                        [self._f("CR-9", "important", "self", {"keep": False, "severity": "low"},
+                                 {"keep": True, "severity": "important"})])
+            r = RT.replay(root)
+            self.assertEqual(r["reviews"], 3)                     # crucible's own reviews are left out by default
+            lc = r["low_cheap"]
+            self.assertEqual(lc["decided"], 3)                    # CR-1, "cost grows" (2 sightings), CR-3
+            self.assertEqual(lc["sightings"], 4)
+            self.assertEqual(dict(lc["lost"]), {"low": 1, "medium": 1})   # the medium counts once, as lost
+            self.assertEqual(dict(lc["downgraded"]), {})
+            self.assertEqual(lc["extra_kept"], 1)
+            self.assertEqual([t for _, _, t in lc["lost_fixed"]], ["cost grows"])
+            self.assertFalse(RT.safe(lc["lost"], lc["downgraded"]))
+            self.assertEqual((r["docs"]["reviews"], r["repeat_full"]["reviews"]), (1, 2))
+            self.assertEqual(r["raw"], 6)
+            self.assertEqual(r["dropped"], 2)
+            text = RT.replay_report(r)
+            self.assertIn("Fails the bar: stays off", text)
+            self.assertIn("lost and later fixed by the author: [medium] cost grows", text)
+            self.assertIn("Refuted share would go 33% → 50%", text)   # (2 dropped - 1 extra kept + 2 lost) of 6
+            self.assertEqual(RT.replay(root, include_self=True)["low_cheap"]["lost"]["important"], 1)
+
+    def test_safe_bar(self):
+        self.assertTrue(RT.safe({"low": 3}))
+        self.assertFalse(RT.safe({"medium": 1}))
+        self.assertFalse(RT.safe({}, {"medium": 1}))
+        self.assertFalse(RT.safe({"important": 1}))
+
+    def test_run_review_routes_a_docs_round(self):
+        for paths, kind in ((("README.md", "docs/use.md"), "docs"), (("README.md", "src/a.py"), "code")):
+            with tempfile.TemporaryDirectory() as d:
+                repo, home = os.path.join(d, "r"), os.path.join(d, "home")
+                env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
+                           GIT_COMMITTER_EMAIL="t@t", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+                g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True, env=env)
+                os.makedirs(os.path.join(repo, "docs")); os.makedirs(os.path.join(repo, "src"))
+                g("init", "-q", "-b", "main")
+                for p in paths:
+                    open(os.path.join(repo, p), "w").write("old\n")
+                g("add", "-A"); g("commit", "-qm", "base"); g("checkout", "-qb", "x")
+                for p in paths:
+                    open(os.path.join(repo, p), "w").write("old\nnew line\n")
+                g("commit", "-qam", "change")
+                calls = []
+
+                def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
+                    calls.append((model, "findings" in schema["properties"]))
+                    if "findings" in schema["properties"]:
+                        return {"summary": "s", "findings": [
+                            {"severity": "low", "file": paths[0], "line": 2, "title": "unclear sentence", "problem": "p",
+                             "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "w", "fix": "f"}]}, 0.01
+                    # unsure: without routing this escalates to the strong tier
+                    return {"keep": True, "severity": "low", "method": "read", "actions": "a", "evidence": "e",
+                            "confidence": "medium"}, 0.001
+
+                olds = (V.HOME, U.HOME, V.claude, os.environ.get("CRUCIBLE_CACHE"))
+                V.HOME = U.HOME = home
+                os.environ["CRUCIBLE_CACHE"] = os.path.join(home, "cache")
+                V.claude = fake
+                try:
+                    r = U.read_json(os.path.join(V.run_review(repo, "main", offline=True, skip_checks=True, route=True,
+                                                              author="claude-haiku-5-5", log=lambda *_: None), "review.json"))
+                finally:
+                    V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
+                    if olds[3] is None:
+                        os.environ.pop("CRUCIBLE_CACHE", None)
+                    else:
+                        os.environ["CRUCIBLE_CACHE"] = olds[3]
+                self.assertEqual(r["status"], "done", r.get("reason"))
+                self.assertEqual(r["route"]["kind"], kind)
+                reviewers = [m for m, is_review in calls if is_review]
+                verifiers = [m for m, is_review in calls if not is_review]
+                f = r["findings"][0]
+                self.assertEqual(f["proposed_severity"], "low")
+                self.assertEqual(f["verification"]["tiers"][0]["cost"], 0.001)
+                if kind == "docs":
+                    self.assertEqual((reviewers, verifiers), (["claude-sonnet-5-5"], ["claude-haiku-5-5"]))
+                    self.assertEqual(r["review_model"], "claude-sonnet-5-5")
+                else:                                         # code keeps the full pipeline
+                    self.assertEqual(reviewers, ["claude-opus-5-5"])
+                    self.assertEqual(verifiers, ["claude-haiku-5-5", "claude-sonnet-5-5"])
 
 
 if __name__ == "__main__":
