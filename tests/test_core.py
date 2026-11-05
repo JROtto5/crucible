@@ -1494,7 +1494,9 @@ class TestRouting(unittest.TestCase):
                       ["prompts/review.md"], [".github/copilot-instructions.md"], ["improve-prompt.md"],
                       ["SYSTEM_PROMPT.md"], [".claude/skills/x/SKILL.md"], [".claude/commands/x.md"],
                       ["system_prompts/review.md"], ["prompt_templates/a.md"], [".github/instructions/py.md"],
-                      ["userguide/x.md"], ["docs/CLAUDE.md"], ["docs/.claude/commands/x.md"]):
+                      ["userguide/x.md"], ["docs/CLAUDE.md"], ["docs/.claude/commands/x.md"],
+                      # deliberately conservative: a substring match on the directory errs toward the full pass
+                      ["prompt_toolkit/README.md"], ["guidelines/CONTRIBUTING.md"]):
             self.assertEqual(RT.change_kind(paths), "code", paths)
 
     def test_enabled(self):

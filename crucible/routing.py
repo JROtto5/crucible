@@ -19,7 +19,8 @@ DOC_RX = re.compile(r"(\.(?:md|markdown|rst|adoc)$|(?:^|/)(?:README|CHANGELOG|CH
                     r"(?:\.txt)?$)", re.I)
 AGENT_RX = re.compile(r"(?:^|/)(?:CLAUDE|AGENTS|GEMINI|SKILL)\.md$|(?:^|/)\.(?:claude|cursor)/", re.I)
 # outside a docs tree: improve-prompt.md, copilot-instructions.md, any *prompt*/ or *instruction*/ directory, a
-# package's guides/. Agent files (AGENT_RX) are code even inside docs/.
+# package's guides/. Agent files (AGENT_RX) are code even inside docs/. The directory match is a substring on
+# purpose: prompt_toolkit/README.md or guidelines/CONTRIBUTING.md also count as code, which only costs the full pass.
 PROMPT_RX = re.compile(r"(?:^|/)[^/]*(?:prompt|instruction)[^/]*(?:/|$)|(?:^|/)[^/]*guide[^/]*/", re.I)
 DOCS_TREE_RX = re.compile(r"(?:^|/)docs?/", re.I)
 
