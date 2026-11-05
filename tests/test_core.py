@@ -452,12 +452,58 @@ class TestVerifierSalvage(unittest.TestCase):
         self.assertFalse(v["keep"])
         self.assertEqual(calls, [("strong", V.TOOLS_RUN), (V.SALVAGE_MODEL, None)])   # transcription runs no tools
         self.assertTrue(trail[0]["salvaged"])
+        self.assertEqual(v["confidence"], "medium")       # second-hand: never high
+
+    def test_salvaged_cheap_verdict_escalates_and_is_not_cached(self):
+        calls = []
+
+        def fake(prompt, model, schema, cwd, budget=None, tools=None, **kw):
+            calls.append(model)
+            if model == "cheap":
+                raise U.NoStructuredOutput("x", "Verdict: claim falsified.")
+            return {"keep": False, "severity": "low", "confidence": "high", "method": "read",
+                    "actions": "a", "evidence": "e"}, 0
+        with tempfile.TemporaryDirectory() as d:
+            old = (V.claude, os.environ.get("CRUCIBLE_CACHE"))
+            V.claude, os.environ["CRUCIBLE_CACHE"] = fake, d
+            try:
+                V.verify_tiered(self.F, "code", ".", None, ["cheap", "strong"])
+                self.assertEqual(calls, ["cheap", V.SALVAGE_MODEL, "strong"])   # a transcription is never final
+                calls.clear()
+                V.verify_tiered(self.F, "code", ".", None, ["cheap", "strong"])
+                self.assertEqual(calls[0], "cheap")                              # not replayed from the cache
+            finally:
+                V.claude = old[0]
+                if old[1] is None:
+                    os.environ.pop("CRUCIBLE_CACHE")
+                else:
+                    os.environ["CRUCIBLE_CACHE"] = old[1]
+
+    def test_a_failed_transcription_fails_closed(self):
+        def fake(prompt, model, *a, **kw):
+            if model == "strong":
+                raise U.NoStructuredOutput("x", "Verdict: holds.")
+            raise U.Failed("model call timed out after 300s")
+        with self.assertRaises(U.Failed):            # run_review keeps the finding as "unverified"
+            self.run_tiered(fake, ["strong"])
 
     def test_other_failures_still_fail_closed(self):
         def fake(*a, **kw):
             raise U.Failed("model call timed out after 1500s")
         with self.assertRaises(U.Failed):
             self.run_tiered(fake, ["strong"])
+
+    def test_report_marks_transcribed_verdicts(self):
+        tiers = [{"model": "cheap", "salvaged": True}, {"model": "strong"}]
+        self.assertEqual(V.transcribed_note({"tiers": tiers}), "")          # the strong tier decided it first-hand
+        self.assertIn("transcribed", V.transcribed_note({"tiers": tiers[:1]}))
+        self.assertEqual(V.transcribed_note({"status": "unverified", "reason": "x"}), "")
+        f = dict(self.F, id="CR-1", problem="p", fix="x", verification={
+            "status": "dropped", "method": "read", "actions": "a", "evidence": "falsified", "tiers": tiers[:1]})
+        rev = {"repo": "o__r", "sha": "a" * 40, "status": "done", "readiness": {"items": []}, "findings": [],
+               "dropped": [f], "coverage": {"reviewed": 1, "files": 1, "missing": [], "complete": True}, "review_model": "r",
+               "verify_model": "v", "base_ref": "main", "base": "b" * 40, "cost_usd": 0, "checks": {}}
+        self.assertIn("(`a.js:3`) (transcribed from the verifier's prose): falsified", V.report(rev, {}))
 
     def test_short_fields_come_before_free_text(self):
         keys = list(V.VERIFY_SCHEMA["properties"])

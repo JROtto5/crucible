@@ -233,8 +233,8 @@ def verify_tiers(strong, no_tiers=False):
 def salvage_verdict(f, text, repo, budget):
     """The verifier reached a verdict but its StructuredOutput call kept being rejected (bug l: "must have required
     property 'confidence'" although it was set), so it answered in prose. Transcribe that prose into the schema with
-    one cheap tool-less call instead of leaving the finding unverified. Never stronger than the prose: "high" only
-    when the prose says the falsification test was checked directly."""
+    one cheap tool-less call instead of leaving the finding unverified. A transcription is second-hand, so it is
+    capped at medium confidence: on the cheap tier it always escalates, and it can never drop a carried finding."""
     prompt = textwrap.dedent(f"""\
         A code reviewer checked ONE claim and wrote its verdict in prose, because its structured answer failed.
         Transcribe that verdict into the schema. Do not judge the claim yourself and do not add anything.
@@ -251,7 +251,7 @@ def salvage_verdict(f, text, repo, budget):
         >>>
         """)
     v, _ = claude(prompt, SALVAGE_MODEL, VERIFY_SCHEMA, repo, budget, tools=None, effort="low", timeout=300)
-    return dict(v, salvaged=True)
+    return dict(v, salvaged=True, confidence="low" if v.get("confidence") == "low" else "medium")
 
 
 def needs_escalation(v):
@@ -278,7 +278,8 @@ def verify_tiered(f, code, repo, budget, tiers, fresh=False, since=""):
                 v, _ = claude(prompt, model, VERIFY_SCHEMA, repo, budget, tools=TOOLS_RUN, effort="high")
             except NoStructuredOutput as e:
                 v = salvage_verdict(f, e.text, repo, budget)
-            cache_put(key, v)
+            if not v.get("salvaged"):      # the rejection is flaky: a rerun should retry the real verifier
+                cache_put(key, v)
         trail.append({"model": model, "keep": v["keep"], "severity": v["severity"], "confidence": v.get("confidence"),
                       "cached": bool(hit), **({"salvaged": True} if v.get("salvaged") else {})})
         if i < len(tiers) - 1 and not needs_escalation(v):
@@ -617,6 +618,11 @@ def load_waivers(project, branch):
     return (read_json(waivers_path(project), {}) or {}).get(branch, {})
 
 
+def transcribed_note(vf):
+    """Flags a verdict that salvage_verdict() transcribed from the verifier's prose (only the final tier counts)."""
+    return " (transcribed from the verifier's prose)" if ((vf.get("tiers") or [{}])[-1]).get("salvaged") else ""
+
+
 def report(rev, ans, waivers=None):
     """waivers: {readiness item name: reason} for this branch. A waived failing item no longer blocks readiness."""
     waivers = waivers or {}
@@ -661,13 +667,14 @@ def report(rev, ans, waivers=None):
             L.append(f"- capped to low: {f['non_blocking']} (was {f.get('capped_from', f['severity'])})")
         if vf:
             L.append(f"- verification: **{vf.get('status')}**" + (f" by {vf['method']}" if vf.get("method") else "")
-                     + (" (transcribed from the verifier's prose)" if any(t.get("salvaged") for t in vf.get("tiers") or []) else "")
+                     + transcribed_note(vf)
                      + (f": {vf.get('evidence')}" if vf.get("evidence") else f" ({vf.get('reason')})"))
             if vf.get("actions"):
                 L.append(f"- verifier actions: {vf['actions']}")
         L.append("")
     if rev["dropped"]:
         L += ["<details><summary>Dropped by verification</summary>", ""]
-        L += [f"- **{f['title']}** (`{f['file']}:{f['line']}`): {f['verification']['evidence']}" for f in rev["dropped"]]
+        L += [f"- **{f['title']}** (`{f['file']}:{f['line']}`){transcribed_note(f['verification'])}: {f['verification']['evidence']}"
+              for f in rev["dropped"]]
         L += ["", "</details>"]
     return "\n".join(L) + "\n"
