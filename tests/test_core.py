@@ -1,5 +1,4 @@
 import os, re, subprocess, sys, tempfile, unittest
-from unittest import mock
 
 _TMP_HOME = tempfile.mkdtemp(prefix="crucible-test-home-")
 os.environ["CRUCIBLE_HOME"] = _TMP_HOME
@@ -1242,9 +1241,7 @@ class TestEvalFixtureJunk(unittest.TestCase):
                 open(os.path.join(case, side, "tests", "__pycache__", "t.cpython-314.pyc"), "wb").write(b"\x00\xb4\xff")
                 open(os.path.join(case, side, "stray.pyc"), "wb").write(b"\xb4")
             out = os.path.join(d, "out"); os.makedirs(out)
-            with mock.patch.dict(os.environ, {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
-                                              "GIT_COMMITTER_EMAIL": "t@t"}):
-                repo = E.build_repo(case, {"message": "m"}, out)
+            repo = E.build_repo(case, {"message": "m"}, out)        # _git sets its own identity and config
             self.assertEqual(E._git_ls(repo), ["a.py"])
 
 
