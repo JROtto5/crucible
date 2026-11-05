@@ -322,29 +322,43 @@ ABSENCE_RX = re.compile(
 
 def absence_anchor(f):
     """None when the finding isn't about something missing. Otherwise the files where the missing piece would land:
-    the model's anchor_files, or [] when only the title says so (unknown: any later change may resolve it)."""
-    if f.get("anchor_files"):
-        return [a for a in f["anchor_files"] if isinstance(a, str) and a]
+    the model's anchor_files (repo-relative, `./` stripped), or [] when only the title says so (unknown: any later
+    change may resolve it)."""
+    named = [re.sub(r"^(?:\./)+", "", a) for a in f.get("anchor_files") or [] if isinstance(a, str)]
+    if [a for a in named if a]:
+        return [a for a in named if a]
     return [] if ABSENCE_RX.search(f.get("title", "")) else None
 
 
-def split_prev(findings, ranges, hunks, prev_sha, changed=()):
+def anchor_hits(anchor, changed, known):
+    """The changed files that may resolve an absence finding. The model guesses where the missing piece will land and
+    can be wrong, so a file in an anchor's directory (not the repo root) counts too, and an anchor that names no file at HEAD or in the
+    change (a test file it imagined) is ignored; with no usable anchor, any change counts."""
+    usable = [a for a in anchor if a in known or a in changed]
+    if not usable:
+        return sorted(changed)
+    dirs = {os.path.dirname(a) for a in usable} - {""}       # at the root, a sibling (README for CHANGELOG) says nothing
+    return sorted(c for c in changed if c in usable or os.path.dirname(c) in dirs)
+
+
+def split_prev(findings, ranges, hunks, prev_sha, changed=(), known=None):
     """Split a previous review's model findings into (carried, touched). A finding is carried, with its line mapped
     forward, when its cited region wasn't touched since prev_sha; otherwise it must be verified again. An absence
-    finding ("no test for X") is also verified again when its anchor changed: one of its anchor_files, or, with no
-    anchor, any file in `changed` (the files changed since prev_sha); it is marked with `anchor_changed`.
+    finding ("no test for X") is also verified again when its anchor changed (see anchor_hits; `changed` = the files
+    changed since prev_sha, `known` = the files at HEAD); it is marked with `anchor_changed`.
     Scanner and style findings are recomputed every time, so they are neither carried nor re-verified."""
     carried, touched = [], []
-    changed = set(changed)
+    changed, known = set(changed), set(known or ())
     for f in findings:
         if f.get("source") != "review":
             continue
+        f = {k: v for k, v in f.items() if k != "anchor_changed"}     # an earlier round's, not this one's
         rs = ranges.get(f["file"], [])
         if rs and diff_mod.region_touched(rs, f["line"]):
             touched.append(dict(f, reverified_from=prev_sha[:10]))
             continue
         anchor = absence_anchor(f)
-        hit = sorted(changed & set(anchor) if anchor else changed) if anchor is not None else []
+        hit = anchor_hits(anchor, changed, known) if anchor is not None else []
         if hit:
             moved = diff_mod.map_line(hunks.get(f["file"], []), f["line"]) if f["file"] in hunks else f["line"]
             touched.append(dict(f, line=f["line"] if moved is None else moved, reverified_from=prev_sha[:10],
@@ -463,8 +477,10 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             dfiles = [f for f in diff_mod.parse(delta) if f["path"] in set(code_files)] if delta else []
             d0 = git(repo, "diff", "-U0", "--no-color", f"{prev_sha}..HEAD") if delta else ""
             ranges, hunks = diff_mod.changed_old_ranges(d0), diff_mod.hunks_old_new(d0)
-            changed = git(repo, "diff", "--name-only", "--no-color", f"{prev_sha}..HEAD").splitlines() if delta else []
-            carried, reverify = split_prev(prev_rev.get("findings", []), ranges, hunks, prev_sha, changed)
+            # -z: without it git C-quotes non-ASCII paths, which then match no anchor
+            changed = [p for p in git(repo, "diff", "--name-only", "-z", f"{prev_sha}..HEAD").split("\0") if p] if delta else []
+            known = [p for p in git(repo, "ls-files", "-z").split("\0") if p]
+            carried, reverify = split_prev(prev_rev.get("findings", []), ranges, hunks, prev_sha, changed, known)
             carried_dropped, _ = split_prev(prev_rev.get("dropped", []), ranges, hunks, prev_sha)
             chunks, uncovered = diff_mod.chunk(dfiles)
             log(f"  incremental: since {prev_sha[:10]} · {len(dfiles)} changed file(s) to review · "
@@ -570,7 +586,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         kept.sort(key=lambda f: (SEV.index(f["severity"]), (f.get("verification") or {}).get("method") != "executed"))
         # an incremental round summarizes only its own changes: repeating the earlier round's summary restated
         # problems that were already fixed (seen in the bug j self-review)
-        if prev_sha and not summaries:
+        if prev_sha and not chunks:
             summaries.append(f"No code changed since {prev_sha[:10]}; its findings were carried or re-checked.")
         record.update(status="done", summary=" ".join(summaries)[:3000], findings=kept, dropped=dropped,
                       cost_usd=round(budget.spent, 4), cost_review_usd=round(review_cost, 4),
