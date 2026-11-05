@@ -318,14 +318,17 @@ def _changed_old_lines(hunks):
 
 def _pr_hunks(slug, number):
     """{path: [(start, end)] on the base side, 3 context lines included} for one PR, or None if it can't be read.
-    A file GitHub sends without a patch (binary, or a diff too large to show) maps to None: it can't be compared."""
+    A pure rename maps to []. Any other file GitHub sends without a patch (binary, mode-only, or a diff too large to
+    show) maps to None: it can't be compared."""
     data = gh_json(f"repos/{slug}/pulls/{number}/files?per_page=100")
     if not isinstance(data, list):
         return None
     out = {}
     for f in data:
         found = HUNK_RX.findall(f.get("patch") or "")
-        if found or f.get("changes") == 0:                # a mode change or pure rename has no lines to compare
+        # A pure rename has no lines to compare. A binary file also arrives with changes 0 and no patch, and a
+        # mode-only change looks the same, so neither is assumed to be distant.
+        if found or (f.get("status") == "renamed" and f.get("changes") == 0):
             out[f.get("filename")] = [(int(a), int(a) + max(int(n) if n else 1, 1) - 1) for a, n in found]
         else:
             out[f.get("filename")] = None
