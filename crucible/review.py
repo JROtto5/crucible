@@ -486,8 +486,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                         f["verification"] = {"status": "unverified", "reason": err}
                         kept.append(f)
                     elif v.get("salvaged") and not v["keep"]:   # second-hand: a transcription never drops a finding
-                        f["verification"] = {"status": "unverified", "tiers": trail, "reason": "the verifier's "
-                                             f"structured answer failed; its prose says the claim does not hold: {v['evidence']}"}
+                        f["verification"] = {"status": "unverified", "tiers": trail,
+                                             "reason": f"its prose says the claim does not hold: {v['evidence']}"}
                         kept.append(f)
                     elif v["keep"]:
                         f["verification"] = {"status": "verified", "method": v["method"], "actions": v["actions"],

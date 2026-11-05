@@ -1,4 +1,4 @@
-import os, subprocess, sys, tempfile, unittest
+import os, re, subprocess, sys, tempfile, unittest
 
 _TMP_HOME = tempfile.mkdtemp(prefix="crucible-test-home-")
 os.environ["CRUCIBLE_HOME"] = _TMP_HOME
@@ -791,18 +791,22 @@ class TestRunReviewTranscribed(unittest.TestCase):
                 return {"severity": "medium", "file": path, "line": 2, "title": title, "problem": "p",
                         "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "w", "fix": "x"}
 
+            transcribed = []
+
             def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
                 if "findings" in schema["properties"]:
                     return {"summary": "s", "findings": [finding(p, t) for p, t in
                             (("src/a.js", "f reads past the end"), ("src/b.js", "g has no test")) if p in prompt]}, 0
                 if "Transcribe that verdict" in prompt:      # the salvage call: transcribe the prose it was given
+                    transcribed.append(re.search(r"Claim: (.*?) \(at", prompt).group(1))
                     holds = "HOLDS" in prompt
                     return {"keep": holds, "severity": "medium", "confidence": "high", "method": "read",
                             "actions": "a", "evidence": "prose says " + ("it holds" if holds else "falsified")}, 0
                 raise U.NoStructuredOutput("x", "Verdict: HOLDS" if "past the end" in prompt else "Verdict: falsified")
 
             with mock.patch.object(V, "HOME", home), mock.patch.object(U, "HOME", home), \
-                    mock.patch.object(V, "claude", fake), mock.patch.dict(os.environ, {"CRUCIBLE_CACHE": os.path.join(home, "c")}):
+                    mock.patch.object(V, "claude", fake), mock.patch.dict(os.environ, {"CRUCIBLE_CACHE": os.path.join(home, "c"),
+                                                           "CRUCIBLE_VERIFY_CHEAP": "cheap", "CRUCIBLE_VERIFY_MODEL": "strong"}):
                 r = U.read_json(os.path.join(V.run_review(repo, "main", offline=True, skip_checks=True,
                                                           log=lambda *_: None), "review.json"))
                 self.assertEqual(r["status"], "done", r.get("reason"))
@@ -815,12 +819,16 @@ class TestRunReviewTranscribed(unittest.TestCase):
                 # round 2 touches only a.js: the b.js finding is carried and re-checked, and that re-check is transcribed
                 w("src/a.js", "export const a = 1;\nexport function f(xs) { return xs[xs.length - 1]; }\n")
                 g("commit", "-qam", "fix f")
+                transcribed.clear()
                 r2 = U.read_json(os.path.join(V.run_review(repo, "main", offline=True, skip_checks=True,
                                                            log=lambda *_: None), "review.json"))
                 self.assertEqual(r2["status"], "done", r2.get("reason"))
                 carried = [f for f in r2["findings"] if f["title"] == "g has no test"]
                 self.assertEqual(len(carried), 1)
+                self.assertIn("g has no test", transcribed)           # the re-check ran and was transcribed
                 self.assertNotIn("rechecked", carried[0])
+                self.assertEqual(carried[0]["verification"]["status"], "unverified")
+                self.assertEqual(r2["dropped"], [])
 
 
 class TestRerunSameCommit(unittest.TestCase):
