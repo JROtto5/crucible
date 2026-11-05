@@ -331,14 +331,19 @@ def absence_anchor(f):
 
 
 def anchor_hits(anchor, changed, known):
-    """The changed files that may resolve an absence finding. The model guesses where the missing piece will land and
-    can be wrong, so a file in an anchor's directory (not the repo root) counts too, and an anchor that names no file at HEAD or in the
-    change (a test file it imagined) is ignored; with no usable anchor, any change counts."""
-    usable = [a for a in anchor if a in known or a in changed]
-    if not usable:
+    """The changed files that may resolve an absence finding. An anchor that exists (at HEAD or in the change) must
+    change itself. The model can also guess a file that doesn't exist (a test file it imagined): then any changed
+    file in that directory counts, or any change at all when the directory is the repo root or holds no file."""
+    if not anchor:                                    # only the title says something is missing
         return sorted(changed)
-    dirs = {os.path.dirname(a) for a in usable} - {""}       # at the root, a sibling (README for CHANGELOG) says nothing
-    return sorted(c for c in changed if c in usable or os.path.dirname(c) in dirs)
+    hits = set(changed) & set(anchor)
+    known_dirs = {os.path.dirname(k) for k in set(known) | set(changed)}
+    for a in anchor:
+        if a in known or a in changed:
+            continue
+        d = os.path.dirname(a)
+        hits |= set(changed) if not d or d not in known_dirs else {c for c in changed if os.path.dirname(c) == d}
+    return sorted(hits)
 
 
 def split_prev(findings, ranges, hunks, prev_sha, changed=(), known=None):
@@ -586,7 +591,10 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         kept.sort(key=lambda f: (SEV.index(f["severity"]), (f.get("verification") or {}).get("method") != "executed"))
         # an incremental round summarizes only its own changes: repeating the earlier round's summary restated
         # problems that were already fixed (seen in the bug j self-review)
-        if prev_sha and not chunks:
+        failed = [p for c in chunk_status if c["status"] == "failed" for p in c["files"]]
+        if not summaries and failed:
+            summaries.append(f"The review pass failed for {', '.join(failed)[:300]}, so this review is incomplete.")
+        elif prev_sha and not chunks:
             summaries.append(f"No code changed since {prev_sha[:10]}; its findings were carried or re-checked.")
         record.update(status="done", summary=" ".join(summaries)[:3000], findings=kept, dropped=dropped,
                       cost_usd=round(budget.spent, 4), cost_review_usd=round(review_cost, 4),

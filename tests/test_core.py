@@ -734,15 +734,20 @@ class TestIncremental(unittest.TestCase):
         self.assertNotIn("anchor_changed", touched[0])
 
     def test_anchor_hits_tolerate_a_wrong_guess(self):
-        known = {"tests/test_core.py", "crucible/review.py", "CHANGELOG.md"}
-        # the model named the right file, or a sibling of the file where the test landed
+        known = {"tests/test_core.py", "crucible/review.py", "crucible/util.py", "CHANGELOG.md"}
+        # a real anchor must change itself; an edit next to it (crucible/util.py) costs no re-verify
         self.assertEqual(V.anchor_hits(["tests/test_core.py"], {"tests/test_core.py", "README.md"}, known),
                          ["tests/test_core.py"])
-        self.assertEqual(V.anchor_hits(["tests/test_core.py"], {"tests/test_review.py"}, known), ["tests/test_review.py"])
-        # an imagined file that doesn't exist: fall back to any change
-        self.assertEqual(V.anchor_hits(["tests/test_review.py"], {"tests/test_core.py"}, known), ["tests/test_core.py"])
-        # a real anchor elsewhere that didn't change: no re-verify
+        self.assertEqual(V.anchor_hits(["crucible/review.py"], {"crucible/util.py"}, known), [])
         self.assertEqual(V.anchor_hits(["CHANGELOG.md"], {"tests/x/t.py"}, known), [])
+        # an imagined test file: any change in its directory counts, also next to a real anchor (CR-398406d7)
+        self.assertEqual(V.anchor_hits(["tests/test_review.py"], {"tests/test_core.py", "README.md"}, known),
+                         ["tests/test_core.py"])
+        self.assertEqual(V.anchor_hits(["tests/test_review.py", "CHANGELOG.md"], {"tests/test_core.py"}, known),
+                         ["tests/test_core.py"])
+        # an imagined file at the root or in a directory that doesn't exist: any change counts
+        self.assertEqual(V.anchor_hits(["test_review.py"], {"crucible/util.py"}, known), ["crucible/util.py"])
+        self.assertEqual(V.anchor_hits(["spec/review.spec.js"], {"crucible/util.py"}, known), ["crucible/util.py"])
         self.assertEqual(V.absence_anchor({"title": "x", "anchor_files": ["./tests/test_core.py"]}), ["tests/test_core.py"])
 
     def test_absence_rx_falsifiers(self):
@@ -1219,7 +1224,9 @@ class TestRunReviewAbsenceAnchor(unittest.TestCase):
                 g("commit", "-q", "--allow-empty", "-m", "empty")       # nothing to review: say so, don't go blank
                 self.assertIn("No code changed since", run()["summary"])
                 w("boom.py", "BOOM = 1\n"); g("add", "-A"); g("commit", "-qm", "boom")   # code changed, its pass failed
-                self.assertNotIn("No code changed", run()["summary"])
+                r5 = run()
+                self.assertEqual(r5["summary"], "The review pass failed for boom.py, so this review is incomplete.")
+                self.assertFalse(r5["coverage"]["complete"])
 
 
 class TestRerunSameCommit(unittest.TestCase):
