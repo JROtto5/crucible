@@ -443,6 +443,15 @@ class TestLearnStyleSources(unittest.TestCase):
         self.assertEqual([c["body"] for c in got], ["Please add a test."])
         self.assertEqual(sizes, [2, 2])
 
+    def test_non_utf8_source_does_not_crash(self):
+        d = make_repo({"a.js": "x\n"})
+        open(os.path.join(d, "a.js"), "wb").write(b"// caf\xe9\nconst x = 1;\n")
+        sh(d, "git", "commit", "-qam", "latin-1")
+        ref, _files, read = S.upstream_files(d)
+        self.assertEqual(ref, "main")
+        self.assertTrue(read("a.js").startswith("// caf\ufffd"))
+        self.assertEqual(read("missing.js"), "")
+
     def test_is_bot(self):
         self.assertTrue(U.is_bot({"login": "dependabot[bot]", "type": "Bot"}))
         self.assertTrue(U.is_bot({"login": "Renovate", "type": "User"}))

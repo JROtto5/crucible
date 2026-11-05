@@ -3,7 +3,7 @@
 `learn_style` measures (deterministic) + extracts conventions (one model call) into projects/<p>/STYLE.md + style.json.
 `check` returns deterministic medium/low findings for the diff's comments and the PR draft.
 `polish` rewrites PR_DRAFT.md into PR_DRAFT.polished.md in the project's voice, without inventing claims."""
-import collections, os, re, statistics, textwrap
+import collections, os, re, statistics, subprocess, textwrap
 from .util import (CODE_EXT_RX, ISSUE_KW, TEST_PATH_RX, Budget, Failed, claude, default_base, gh_json, git, is_bot, project_dir,
                    read_json, write_json)
 
@@ -108,8 +108,9 @@ def title_stats(titles):
 
 
 def upstream_files(repo):
-    """(ref, read) for the project's own code: the upstream default branch, never the working tree or HEAD, so the
-    contributor's unpushed commits are not measured or quoted as house style. Falls back to HEAD with no base branch."""
+    """(ref, files, read) for the project's own code on its upstream default branch, not the working tree, so the
+    contributor's unpushed commits are not measured or quoted as house style. HEAD is the last resort, when no base
+    branch exists. read() tolerates non-UTF-8 bytes, as the old open(errors="replace") did."""
     try:
         ref = default_base(repo)
     except Failed:
@@ -117,7 +118,8 @@ def upstream_files(repo):
     files = git(repo, "ls-tree", "-r", "--name-only", ref, check=False).split("\n")
 
     def read(path):
-        return git(repo, "show", f"{ref}:{path}", check=False)
+        r = subprocess.run(["git", "-C", repo, "show", f"{ref}:{path}"], capture_output=True)
+        return r.stdout.decode("utf-8", errors="replace") if r.returncode == 0 else ""
     return ref, [f for f in files if f], read
 
 
