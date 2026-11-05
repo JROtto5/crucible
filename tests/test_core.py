@@ -1484,14 +1484,17 @@ class TestRouting(unittest.TestCase):
 
     def test_change_kind(self):
         for paths in (["README.md"], ["docs/guide.rst", "CHANGELOG"], ["packages/x/README.md", "LICENSE"], ["README.txt", "docs/api.adoc"],
-                      ["docs/guides/getting-started.md"], ["docs/user-guide/index.md"], ["doc/prompt-engineering.rst"]):
+                      ["docs/guides/getting-started.md"], ["docs/user-guide/index.md"], ["doc/prompt-engineering.rst"],
+                      ["docs/prompts/system.md"]):   # inside a docs tree, prompt-named prose is documentation
             self.assertEqual(RT.change_kind(paths), "docs", paths)
         # falsifiers: any code file makes it code; nothing changed is not "docs"; docs-looking names that aren't
         for paths in (["README.md", "src/a.js"], [], ["src/docstring.py"], ["docs.js"], ["src/readme_parser.py"],
                       ["assets/logo.png"], ["requirements.txt"], ["CMakeLists.txt"], ["docs/conf.py"],
                       ["docs/examples/demo.py"], ["CLAUDE.md"], ["sub/AGENTS.md"], ["crucible/guides/answering.md"],
                       ["prompts/review.md"], [".github/copilot-instructions.md"], ["improve-prompt.md"],
-                      ["SYSTEM_PROMPT.md"], [".claude/skills/x/SKILL.md"], [".claude/commands/x.md"]):
+                      ["SYSTEM_PROMPT.md"], [".claude/skills/x/SKILL.md"], [".claude/commands/x.md"],
+                      ["system_prompts/review.md"], ["prompt_templates/a.md"], [".github/instructions/py.md"],
+                      ["userguide/x.md"], ["docs/CLAUDE.md"], ["docs/.claude/commands/x.md"]):
             self.assertEqual(RT.change_kind(paths), "code", paths)
 
     def test_enabled(self):

@@ -18,8 +18,9 @@ from .util import MODELS, SEV, read_json
 DOC_RX = re.compile(r"(\.(?:md|markdown|rst|adoc)$|(?:^|/)(?:README|CHANGELOG|CHANGES|LICENSE|CONTRIBUTING|AUTHORS|NEWS)"
                     r"(?:\.txt)?$)", re.I)
 AGENT_RX = re.compile(r"(?:^|/)(?:CLAUDE|AGENTS|GEMINI|SKILL)\.md$|(?:^|/)\.(?:claude|cursor)/", re.I)
-# outside a docs tree: improve-prompt.md, copilot-instructions.md, prompts/, a package's guides/
-PROMPT_RX = re.compile(r"(?:^|/)[^/]*(?:prompt|instruction)[^/]*$|(?:^|/)(?:prompts?|guides)/", re.I)
+# outside a docs tree: improve-prompt.md, copilot-instructions.md, any *prompt*/ or *instruction*/ directory, a
+# package's guides/. Agent files (AGENT_RX) are code even inside docs/.
+PROMPT_RX = re.compile(r"(?:^|/)[^/]*(?:prompt|instruction)[^/]*(?:/|$)|(?:^|/)[^/]*guide[^/]*/", re.I)
 DOCS_TREE_RX = re.compile(r"(?:^|/)docs?/", re.I)
 
 
