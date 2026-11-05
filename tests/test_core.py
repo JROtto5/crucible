@@ -747,9 +747,6 @@ class TestRerunSameCommit(unittest.TestCase):
                 os.environ["CRUCIBLE_CACHE"] = olds[3]
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class TestUntrackedScratchFiles(unittest.TestCase):
     """Bug h (Heroic): a lint that globs the working tree crashed on an untracked scratch .cjs in the repo root,
@@ -787,6 +784,8 @@ class TestUntrackedScratchFiles(unittest.TestCase):
         self.assertEqual(res["status"], "fail")
         self.assertIn("a.cjs: Parsing error", res["tail"])
         self.assertNotIn("capture.cjs", res["tail"])  # the clean run's output replaces the working-tree one
+        self.assertIn("capture.cjs", res["working_tree_tail"])
+        self.assertIn("on a clean checkout of HEAD", C.facts({"results": [res]}))
 
     def test_failure_not_naming_untracked_files_is_not_rerun(self):
         from crucible import checks as C
@@ -804,6 +803,18 @@ class TestUntrackedScratchFiles(unittest.TestCase):
         self.assertEqual(C.mentioned("/r/cap.cjs\n  1:1 error", ["cap.cjs"], "/r"), ["cap.cjs"])  # eslint: absolute
         self.assertEqual(C.mentioned("x.cjs: error", ["pk/x.cjs"], "/r", "pk"), ["pk/x.cjs"])  # relative to cwd
         self.assertEqual(C.mentioned("/other/cap.cjs", ["cap.cjs"], "/r"), [])
+        self.assertEqual(C.mentioned("./cap.cjs: SyntaxError", ["cap.cjs"], "/r"), ["cap.cjs"])
+        self.assertEqual(C.mentioned("at file:///r/cap.mjs:3:1", ["cap.mjs"], "/r"), ["cap.mjs"])
+        self.assertEqual(C.mentioned("see cap.cjs.", ["cap.cjs"]), ["cap.cjs"])  # end of a sentence
+
+    def test_mentioned_is_linear(self):
+        import time
+        from crucible import checks as C
+        paths = [f"scratch/f{i}.js" for i in range(20000)]
+        out = "\n".join(f"src/mod{i}.ts:1:1 error" for i in range(50000))
+        t = time.monotonic()
+        self.assertEqual(C.mentioned(out + "\nscratch/f7.js: x", paths, "/r"), ["scratch/f7.js"])
+        self.assertLess(time.monotonic() - t, 2)
 
     def test_f_existing_node_modules_in_the_worktree_is_left_alone(self):
         from crucible import checks as C
@@ -811,3 +822,7 @@ class TestUntrackedScratchFiles(unittest.TestCase):
         os.makedirs(os.path.join(d, "node_modules", "pkg"))  # installed deps (untracked inside a tracked dir)
         res = C.run_in_worktree(d, "HEAD", {"cmd": "test -f node_modules/.keep && test ! -L node_modules"})
         self.assertEqual(res["status"], "pass")
+
+
+if __name__ == "__main__":
+    unittest.main()

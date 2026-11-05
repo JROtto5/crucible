@@ -2,6 +2,7 @@
 
 One line per change, newest first.
 
+- 2026-11-04: A project check that fails naming an untracked file (an eslint crash on a scratch `.cjs` in the repo root, Heroic) is re-run on a clean checkout of HEAD and that result counts; the report and the reviewer's facts say so, and keep the working-tree tail (real-use bug h). Failures that name no untracked file are not re-run. The base and clean worktrees no longer fail with "File exists" when the commit tracks a `node_modules/` entry, and a monorepo package's `node_modules` is shared too (bug f). Tests 65 → 71.
 - 2026-11-04: A rerun on an already-reviewed commit re-reviews when `PR_DRAFT.md` (or `--draft`) or the base changed, instead of returning the old verdict for a draft it never read; `--fresh` alone now redoes the review (real-use bug i). Editing only the author's notes keeps the verdict, and an unreadable draft is a clean error instead of a traceback. Tests run directly (`python tests/test_core.py`) run all 65, not the first 40.
 - 2026-11-04: **v0.3.0.** `crucible eval`: 16 labelled fixture changes (12 planted bugs, 4 clean) scored for recall, false blocking findings, true findings dropped by verification, and cost; results in eval/RESULTS.md. Baseline: 92% blocking recall, 100% any-severity, 0 false blocking.
 - 2026-11-04: Tiered verification: a cheap model checks each finding first, and the strong model re-checks survivors at blocking severity or low confidence. Same eval recall, 24% lower verification cost ($1.75 vs $2.30 on the eval set). `--no-tiers`, `CRUCIBLE_VERIFY_CHEAP`.
