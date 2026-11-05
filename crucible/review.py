@@ -19,7 +19,10 @@ FINDINGS_SCHEMA = {"type": "object", "properties": {
         "severity": {"type": "string", "enum": SEV}, "file": {"type": "string"}, "line": {"type": "integer"},
         "title": {"type": "string"}, "problem": {"type": "string"},
         "caused_by_this_change": {"type": "boolean"}, "reachable_in_real_use": {"type": "boolean"},
-        "wrong_if": {"type": "string"}, "fix": {"type": "string"}},
+        "wrong_if": {"type": "string"}, "fix": {"type": "string"},
+        "anchor_files": {"type": "array", "items": {"type": "string"},
+                         "description": "only for a finding about something MISSING (a test, docs, a changelog entry, a "
+                                        "caller update): the file(s) where it would be added. Omit otherwise."}},
         "required": ["severity", "file", "line", "title", "problem", "caused_by_this_change",
                      "reachable_in_real_use", "wrong_if", "fix"]}}},
     "required": ["summary", "findings"]}
@@ -162,7 +165,9 @@ def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, hou
         tests, API / wire-format / backward-compat breaks, perf traps, security, and violations of written project rules.
         Give at most 10 findings, ranked; merge findings that share a root cause. An empty list is a good answer.
         Every finding needs a concrete file and line in the NEW file, and a "wrong_if": the specific observation
-        that would prove it false. Set caused_by_this_change / reachable_in_real_use honestly.
+        that would prove it false. Set caused_by_this_change / reachable_in_real_use honestly. When a finding is
+        about something missing (no test, no docs or changelog entry), cite the code it is about and list in
+        "anchor_files" where the missing piece would go (e.g. the test file), so a later round re-checks it there.
 
         {SEVERITY_DEFS}
 
@@ -305,11 +310,32 @@ def previous_review(repo, project, sha, base):
     return None, None
 
 
-def split_prev(findings, ranges, hunks, prev_sha):
+# A title that says something is missing. Such a finding cites the code it is about, but the fix lands elsewhere
+# (usually a test file), so its own lines never change and the line-based carry kept it after the fix (seen 4 times
+# in crucible's self-reviews, e.g. "No test for the new recheck guard" carried 2 rounds after its test landed).
+ABSENCE_RX = re.compile(
+    r"\b(?:no|missing|lacks?|lacking|without|omits?)\b[^.;]{0,40}?\b(?:tests?|coverage|changelog|docs?|documentation"
+    r"|readme|comments?|entry|note)\b|\buntested\b|\bnever (?:exercised|tested|covered|asserted)\b"
+    r"|\b(?:not|never|isn't|aren't|don't|doesn't|only partly)\s+(?:tested|test|covered|covers?|exercised|exercises?"
+    r"|documented)\b", re.I)
+
+
+def absence_anchor(f):
+    """None when the finding isn't about something missing. Otherwise the files where the missing piece would land:
+    the model's anchor_files, or [] when only the title says so (unknown: any later change may resolve it)."""
+    if f.get("anchor_files"):
+        return [a for a in f["anchor_files"] if isinstance(a, str) and a]
+    return [] if ABSENCE_RX.search(f.get("title", "")) else None
+
+
+def split_prev(findings, ranges, hunks, prev_sha, changed=()):
     """Split a previous review's model findings into (carried, touched). A finding is carried, with its line mapped
-    forward, when its cited region wasn't touched since prev_sha; otherwise it must be verified again.
+    forward, when its cited region wasn't touched since prev_sha; otherwise it must be verified again. An absence
+    finding ("no test for X") is also verified again when its anchor changed: one of its anchor_files, or, with no
+    anchor, any file in `changed` (the files changed since prev_sha); it is marked with `anchor_changed`.
     Scanner and style findings are recomputed every time, so they are neither carried nor re-verified."""
     carried, touched = [], []
+    changed = set(changed)
     for f in findings:
         if f.get("source") != "review":
             continue
@@ -317,12 +343,30 @@ def split_prev(findings, ranges, hunks, prev_sha):
         if rs and diff_mod.region_touched(rs, f["line"]):
             touched.append(dict(f, reverified_from=prev_sha[:10]))
             continue
+        anchor = absence_anchor(f)
+        hit = sorted(changed & set(anchor) if anchor else changed) if anchor is not None else []
+        if hit:
+            moved = diff_mod.map_line(hunks.get(f["file"], []), f["line"]) if f["file"] in hunks else f["line"]
+            touched.append(dict(f, line=f["line"] if moved is None else moved, reverified_from=prev_sha[:10],
+                                anchor_changed=hit))
+            continue
         moved = diff_mod.map_line(hunks.get(f["file"], []), f["line"]) if f["file"] in hunks else f["line"]
         if moved is None:
             touched.append(dict(f, reverified_from=prev_sha[:10]))
         else:
             carried.append(dict(f, line=moved, carried_from=prev_sha[:10]))
     return carried, touched
+
+
+def anchor_since(repo, prev_sha, f):
+    """The re-check context for an absence finding whose anchor changed: which files changed and their diff, so the
+    verifier looks where the missing piece would land instead of only at the cited line."""
+    files = f["anchor_changed"]
+    patch = git(repo, "diff", "--unified=3", "--no-color", f"{prev_sha}..HEAD", "--", *files[:20], check=False)
+    return (f"This claim says something is missing. It was verified on an earlier commit ({prev_sha[:10]}); these "
+            f"files changed since then: {', '.join(files[:20])}. Check whether those later changes add what it says "
+            f"is missing (e.g. a test that now covers the code); if so it no longer holds.\n"
+            f"Changes since {prev_sha[:10]} in those files:\n{patch[:6000]}")
 
 
 def review_inputs(repo, base, draft=None):
@@ -419,7 +463,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             dfiles = [f for f in diff_mod.parse(delta) if f["path"] in set(code_files)] if delta else []
             d0 = git(repo, "diff", "-U0", "--no-color", f"{prev_sha}..HEAD") if delta else ""
             ranges, hunks = diff_mod.changed_old_ranges(d0), diff_mod.hunks_old_new(d0)
-            carried, reverify = split_prev(prev_rev.get("findings", []), ranges, hunks, prev_sha)
+            changed = git(repo, "diff", "--name-only", "--no-color", f"{prev_sha}..HEAD").splitlines() if delta else []
+            carried, reverify = split_prev(prev_rev.get("findings", []), ranges, hunks, prev_sha, changed)
             carried_dropped, _ = split_prev(prev_rev.get("dropped", []), ranges, hunks, prev_sha)
             chunks, uncovered = diff_mod.chunk(dfiles)
             log(f"  incremental: since {prev_sha[:10]} · {len(dfiles)} changed file(s) to review · "
@@ -429,8 +474,6 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         else:
             chunks, uncovered = diff_mod.chunk(files)
         cands, chunk_status, summaries = list(scanner) + house_findings, [], []
-        if prev_sha and prev_rev.get("summary"):
-            summaries.append(prev_rev["summary"][:1500])
         fkey, review_cost = facts_key(chk), 0.0
         for i, ch in enumerate(chunks, 1):
             prompt = review_prompt(project, sha, base, ch, rules, mem, facts, clog, all_files, house,
@@ -475,8 +518,10 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         record["verify_tiers"] = tiers
 
         def verify(f):
+            since = anchor_since(repo, prev_sha, f) if f.get("anchor_changed") else ""
             try:
-                return (f,) + verify_tiered(f, region(repo, sha, f["file"], f["line"]), repo, budget, tiers, fresh) + (None,)
+                return (f,) + verify_tiered(f, region(repo, sha, f["file"], f["line"]), repo, budget, tiers, fresh,
+                                            since) + (None,)
             except Failed as e:
                 return f, None, [], str(e)
         if to_verify:
@@ -523,6 +568,10 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                     elif v and not v.get("salvaged"):      # a transcription can't drop it, so it settled nothing
                         f["rechecked"] = tiers[0]
         kept.sort(key=lambda f: (SEV.index(f["severity"]), (f.get("verification") or {}).get("method") != "executed"))
+        # an incremental round summarizes only its own changes: repeating the earlier round's summary restated
+        # problems that were already fixed (seen in the bug j self-review)
+        if prev_sha and not summaries:
+            summaries.append(f"No code changed since {prev_sha[:10]}; its findings were carried or re-checked.")
         record.update(status="done", summary=" ".join(summaries)[:3000], findings=kept, dropped=dropped,
                       cost_usd=round(budget.spent, 4), cost_review_usd=round(review_cost, 4),
                       cost_verify_usd=round(budget.spent - review_cost, 4), finished=dt.datetime.now().isoformat(timespec="seconds"),

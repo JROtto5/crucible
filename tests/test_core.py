@@ -713,6 +713,37 @@ class TestIncremental(unittest.TestCase):
         self.assertEqual({f["title"]: f["line"] for f in carried}, {"lastN(0)": 5, "far below": 42})
         self.assertTrue(all(f["carried_from"] == "f" * 10 for f in carried))
 
+    def test_absence_finding_reverified_when_its_anchor_changes(self):
+        # ROADMAP item 1 (BLAZE exchange 2026-11-05): "no test for X" cites X, but the fix lands in a test file, so
+        # its own lines never change. It is re-verified when its anchor changed, and carried otherwise.
+        prev = [{"source": "review", "file": "r.py", "line": 9, "title": "Guard is subtle", "anchor_files": ["t.py"]},
+                {"source": "review", "file": "r.py", "line": 9, "title": "Docs gap", "anchor_files": ["README.md"]},
+                {"source": "review", "file": "r.py", "line": 9, "title": "No test for the new recheck guard"},
+                {"source": "review", "file": "r.py", "line": 9, "title": "Off-by-one in the guard"}]
+        carried, touched = V.split_prev(prev, {}, {}, "f" * 40, changed=["t.py"])
+        self.assertEqual({f["title"]: f["anchor_changed"] for f in touched},
+                         {"Guard is subtle": ["t.py"], "No test for the new recheck guard": ["t.py"]})
+        self.assertEqual(sorted(f["title"] for f in carried), ["Docs gap", "Off-by-one in the guard"])
+        # nothing changed since: every finding carries, absence or not
+        carried, touched = V.split_prev(prev, {}, {}, "f" * 40, changed=[])
+        self.assertEqual((len(carried), touched), (4, []))
+
+    def test_absence_rx_falsifiers(self):
+        # real titles from ~/.crucible/reviews (2026-11-04/05): these say something is missing ...
+        for t in ["No test for the new recheck guard on transcribed verdicts", "No CHANGELOG entry for a user-visible "
+                  "behaviour change", "Report line, cache behaviour and failure of the salvage call are untested",
+                  "Skinned-tangent exclusion from the copy path isn't covered", "Tests don't cover the ordering the fix "
+                  "depends on", "The perf test never exercises untracked paths", "New scoring rule only partly tested",
+                  "Missing comment on why the normalisation replaces with a space"]:
+            self.assertIsNotNone(V.absence_anchor({"title": t}), t)
+        # ... and these are about code that is there, so their cited lines decide
+        for t in ["New trailing \\b in TESTED_RX stops matching plurals", "README overstates the guarantee of the clean "
+                  "re-run", "Garbled changelog sentence from a bad merge of two clauses", "Wall-clock assertion in a "
+                  "unit test", "New test only fails without the fix under git's default quotepath",
+                  "Docstring says both diffs have 3 context lines, but ours is parsed with --unified=5"]:
+            self.assertIsNone(V.absence_anchor({"title": t}), t)
+        self.assertEqual(V.absence_anchor({"title": "x", "anchor_files": ["t.py", "", 3]}), ["t.py"])
+
     def test_previous_review_requires_ancestor_same_base_and_complete(self):
         with tempfile.TemporaryDirectory() as d:
             home = os.path.join(d, "home"); repo = os.path.join(d, "r"); os.makedirs(repo)
@@ -998,13 +1029,13 @@ class TestRunReviewIncremental(unittest.TestCase):
                          "problem": "xs[xs.length]", "caused_by_this_change": True, "reachable_in_real_use": True,
                          "wrong_if": "index < length", "fix": "length - 1"}]
                     if "src/b.js" in prompt and "export function g" in prompt:
-                        found.append({"severity": "medium", "file": "src/b.js", "line": 2, "title": "g has no test",
-                                      "problem": "untested", "caused_by_this_change": True, "reachable_in_real_use": True,
-                                      "wrong_if": "a test covers g", "fix": "add a test"})
+                        found.append({"severity": "medium", "file": "src/b.js", "line": 2, "title": "g returns a constant",
+                                      "problem": "callers expect the input back", "caused_by_this_change": True,
+                                      "reachable_in_real_use": True, "wrong_if": "callers want 2", "fix": "return x"})
                     return {"summary": "s", "findings": found}, 0.01
-                if "changed since then" in prompt:      # the re-check of the carried b.js finding: a test was added
-                    return {"keep": False, "severity": "medium", "method": "read", "actions": "read test",
-                            "evidence": "test/g.test.js covers g", "confidence": "high"}, 0.001
+                if "changed since then" in prompt:      # the re-check of the carried b.js finding: its caller changed
+                    return {"keep": False, "severity": "medium", "method": "read", "actions": "read caller",
+                            "evidence": "test/g.test.js now expects 2", "confidence": "high"}, 0.001
                 return {"keep": True, "severity": "important" if "past the end" in prompt else "medium", "method": "read",
                         "actions": "read", "evidence": "seen", "confidence": "high"}, 0.001
 
@@ -1025,12 +1056,12 @@ class TestRunReviewIncremental(unittest.TestCase):
                 d2 = V.run_review(repo, "main", offline=True, skip_checks=True, log=lambda *_: None)
                 r2 = U.read_json(os.path.join(d2, "review.json"))
                 self.assertEqual(r2["status"], "done", r2.get("reason"))
-                self.assertEqual(r2["incremental"]["carried"], 1)            # g has no test (b.js untouched)
+                self.assertEqual(r2["incremental"]["carried"], 1)            # g returns a constant (b.js untouched)
                 self.assertEqual(r2["incremental"]["reverified"], 1)         # f reads past the end (a.js touched)
                 self.assertTrue(any(c[2] for c in calls))                    # the re-check saw the later changes
                 kept_titles = {f["title"] for f in r2["findings"]}
-                self.assertNotIn("g has no test", kept_titles)               # dropped by the re-check
-                self.assertIn("g has no test", {f["title"] for f in r2["dropped"]})
+                self.assertNotIn("g returns a constant", kept_titles)        # dropped by the re-check
+                self.assertIn("g returns a constant", {f["title"] for f in r2["dropped"]})
                 self.assertTrue(r2["coverage"]["complete"])
             finally:
                 V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
@@ -1069,7 +1100,7 @@ class TestRunReviewTranscribed(unittest.TestCase):
             def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
                 if "findings" in schema["properties"]:
                     return {"summary": "s", "findings": [finding(p, t) for p, t in
-                            (("src/a.js", "f reads past the end"), ("src/b.js", "g has no test")) if p in prompt]}, 0
+                            (("src/a.js", "f reads past the end"), ("src/b.js", "g returns a constant")) if p in prompt]}, 0
                 if "Transcribe that verdict" in prompt:      # the salvage call: transcribe the prose it was given
                     transcribed.append(re.search(r"Claim: (.*?) \(at", prompt).group(1))
                     holds = "HOLDS" in prompt
@@ -1087,8 +1118,8 @@ class TestRunReviewTranscribed(unittest.TestCase):
                 by = {f["title"]: f["verification"] for f in r["findings"]}
                 self.assertEqual(by["f reads past the end"]["status"], "verified")
                 self.assertIn("transcribed", V.transcribed_note(by["f reads past the end"]))
-                self.assertEqual(by["g has no test"]["status"], "unverified")
-                self.assertIn("prose says falsified", by["g has no test"]["reason"])
+                self.assertEqual(by["g returns a constant"]["status"], "unverified")
+                self.assertIn("prose says falsified", by["g returns a constant"]["reason"])
                 # round 2 touches only a.js: the b.js finding is carried and re-checked, and that re-check is transcribed
                 w("src/a.js", "export const a = 1;\nexport function f(xs) { return xs[xs.length - 1]; }\n")
                 g("commit", "-qam", "fix f")
@@ -1096,12 +1127,77 @@ class TestRunReviewTranscribed(unittest.TestCase):
                 r2 = U.read_json(os.path.join(V.run_review(repo, "main", offline=True, skip_checks=True,
                                                            log=lambda *_: None), "review.json"))
                 self.assertEqual(r2["status"], "done", r2.get("reason"))
-                carried = [f for f in r2["findings"] if f["title"] == "g has no test"]
+                carried = [f for f in r2["findings"] if f["title"] == "g returns a constant"]
                 self.assertEqual(len(carried), 1)
-                self.assertIn("g has no test", transcribed)           # the re-check ran and was transcribed
+                self.assertIn("g returns a constant", transcribed)           # the re-check ran and was transcribed
                 self.assertNotIn("rechecked", carried[0])
                 self.assertEqual(carried[0]["verification"]["status"], "unverified")
                 self.assertEqual(r2["dropped"], [])
+
+
+class TestRunReviewAbsenceAnchor(unittest.TestCase):
+    """ROADMAP item 1, the bug-l self-review case: "no test for the guard" cites the guard, its test lands in the test
+    file, the guard's lines don't change. The old line-based carry kept the finding (and with one verify tier never
+    re-checked it). Now it is re-verified with the test file's diff in front of the verifier, and dropped; a later
+    round that leaves its anchor alone carries the remaining finding without a verify call."""
+
+    def test_landed_test_drops_the_absence_finding(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            repo, home = os.path.join(d, "r"), os.path.join(d, "home")
+            os.makedirs(os.path.join(repo, "tests"))
+            env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",
+                       GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+            g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True, env=env).stdout.decode().strip()
+            w = lambda p, t: open(os.path.join(repo, p), "w").write(t)
+            g("init", "-q", "-b", "main"); w("guard.py", "def ok(v):\n    return True\n"); w("tests/test_x.py", "# tests\n")
+            g("add", "-A"); g("commit", "-qm", "base"); g("checkout", "-qb", "x")
+            w("guard.py", "def ok(v):\n    return not v.get('salvaged')\n"); g("commit", "-qam", "guard")
+            verify_prompts = []
+
+            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
+                if "findings" in schema["properties"]:
+                    if "def ok" not in prompt:
+                        return {"summary": "only the test file changed", "findings": []}, 0
+                    return {"summary": "adds the salvaged guard, untested", "findings": [
+                        {"severity": "low", "file": "guard.py", "line": 2, "title": "No test for the salvaged guard",
+                         "problem": "p", "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "a test",
+                         "fix": "add one", "anchor_files": ["tests/test_x.py"]},
+                        {"severity": "low", "file": "guard.py", "line": 1, "title": "ok() is a vague name",
+                         "problem": "p", "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "w",
+                         "fix": "rename"}]}, 0
+                verify_prompts.append(prompt)
+                landed = "test_salvaged_guard" in prompt          # the verifier was shown the landed test
+                return {"keep": not landed, "severity": "low", "confidence": "high", "method": "read", "actions": "a",
+                        "evidence": "tests/test_x.py:2 covers it" if landed else "no test"}, 0
+
+            with mock.patch.object(V, "HOME", home), mock.patch.object(U, "HOME", home), \
+                    mock.patch.object(V, "claude", fake), mock.patch.dict(os.environ, {"CRUCIBLE_CACHE": os.path.join(home, "c")}):
+                run = lambda: U.read_json(os.path.join(V.run_review(repo, "main", offline=True, skip_checks=True,
+                                                                    no_tiers=True, log=lambda *_: None), "review.json"))
+                r1 = run()
+                self.assertEqual(r1["status"], "done", r1.get("reason"))
+                self.assertEqual(len(r1["findings"]), 2)
+                # round 2: the test lands; guard.py is untouched
+                w("tests/test_x.py", "# tests\ndef test_salvaged_guard(): assert not ok({'salvaged': True})\n")
+                g("commit", "-qam", "test the guard"); verify_prompts.clear()
+                r2 = run()
+                self.assertEqual(r2["status"], "done", r2.get("reason"))
+                self.assertEqual([f["title"] for f in r2["findings"]], ["ok() is a vague name"])
+                gone = [f for f in r2["dropped"] if f["title"] == "No test for the salvaged guard"]
+                self.assertEqual(len(gone), 1)
+                self.assertEqual(gone[0]["anchor_changed"], ["tests/test_x.py"])
+                self.assertEqual(len(verify_prompts), 1)            # only the absence finding; the naming one carried
+                self.assertEqual((r2["incremental"]["carried"], r2["incremental"]["reverified"]), (1, 1))
+                self.assertEqual(r2["summary"], "only the test file changed")   # not round 1's "untested"
+                # round 3: a change outside the anchor: nothing to re-verify, the naming finding still carries
+                w("README.md", "docs\n"); g("add", "-A"); g("commit", "-qm", "docs"); verify_prompts.clear()
+                r3 = run()
+                self.assertEqual([f["title"] for f in r3["findings"]], ["ok() is a vague name"])
+                self.assertEqual(verify_prompts, [])
+                self.assertNotIn("untested", r3["summary"])
+                g("commit", "-q", "--allow-empty", "-m", "empty")       # nothing to review: say so, don't go blank
+                self.assertIn("No code changed since", run()["summary"])
 
 
 class TestRerunSameCommit(unittest.TestCase):
