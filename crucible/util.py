@@ -78,6 +78,19 @@ def default_base(repo):
     raise Failed("could not find a base branch; pass --base")
 
 
+BOT_LOGINS = {"dependabot", "renovate", "renovate-bot", "greenkeeper", "pre-commit-ci", "allcontributors", "imgbot",
+              "mergify", "snyk-bot", "codecov", "coderabbitai", "copilot", "github-actions", "netlify", "vercel",
+              "changeset-bot", "sonarcloud", "deepsource-autofix", "release-please"}
+
+
+def is_bot(user):
+    """A GitHub REST user object (or login) that is an app or a well-known automation account, not a person."""
+    if isinstance(user, str):
+        user = {"login": user}
+    login = ((user or {}).get("login") or "").lower()
+    return (user or {}).get("type") == "Bot" or login.endswith("[bot]") or login in BOT_LOGINS
+
+
 def is_dirty(repo):
     return bool(git(repo, "status", "--porcelain", "--untracked-files=no", check=False))
 

@@ -371,6 +371,86 @@ class TestStyle(unittest.TestCase):
 
 
 
+class TestLearnStyleSources(unittest.TestCase):
+    """Bug j: `learn` measured Dependabot PR bodies and quoted the contributor's own unpushed commit as house style."""
+    def setUp(self):
+        self.up = make_repo({"src/core.js": "// upstream comment\nconst a = 1;\n"})
+        work = tempfile.mkdtemp(prefix="crucible-clone-")
+        sh(work, "git", "clone", "-q", self.up, "c")
+        self.c = os.path.join(work, "c")
+        sh(self.c, "git", "config", "user.email", "t@t"); sh(self.c, "git", "config", "user.name", "t")
+        sh(self.c, "git", "checkout", "-qb", "fix")
+        open(os.path.join(self.c, "src", "core.js"), "w").write("// LOCAL UNPUSHED narration\nconst a = 2;\n")
+        open(os.path.join(self.c, "src", "local_only.js"), "w").write("// LOCAL ONLY FILE\n")
+        sh(self.c, "git", "add", "-A"); sh(self.c, "git", "commit", "-qm", "local work")
+        self.prompts = []
+
+        def pr(num, login, body, typ="User"):
+            return {"number": num, "title": f"Fix thing {num}", "body": body, "merged_at": "2026-11-01T00:00:00Z",
+                    "html_url": f"https://github.com/o/r/pull/{num}", "author_association": "CONTRIBUTOR",
+                    "user": {"login": login, "type": typ}}
+        self.pulls = [pr(1, "dependabot[bot]", "Bumps lodash. " + "release notes " * 400, "Bot"),
+                      pr(2, "renovate", "Update dependency x. " + "changelog " * 400),
+                      pr(3, "alice", "Fixes #5.\n\nShort human body."), pr(4, "bob", "Fixes #6.\n\nAnother short one.")]
+
+        def fake_gh(path, check=False):
+            return self.pulls if path.startswith("repos/o/r/pulls?") else []
+
+        def fake_claude(prompt, *a, **k):
+            self.prompts.append(prompt)
+            return {"tone": "t", "comment_conventions": "c", "callouts": "x", "avoid": "y"}, 0.0
+        self._orig = (S.gh_json, S.claude)
+        S.gh_json, S.claude = fake_gh, fake_claude
+
+    def tearDown(self):
+        S.gh_json, S.claude = self._orig
+
+    def test_bots_excluded_and_code_from_upstream_branch(self):
+        m = S.learn_style(self.c, "o/r", "o__r_bugj", log=lambda *_: None)
+        self.assertEqual(m["prs_sampled"], 2)
+        self.assertLess(m["body"]["median_words"], 10)
+        self.assertNotIn("Bumps lodash", " ".join(e["body"] for e in m["examples"]))
+        self.assertEqual(m["code_ref"], "origin/main")
+        self.assertIn("upstream comment", self.prompts[0])
+        self.assertNotIn("LOCAL", self.prompts[0])
+        self.assertEqual(m["comment_density_median"], 50.0)
+
+    def test_falls_back_to_head_without_a_base_branch(self):
+        d = make_repo({"x.py": "# hi\nx = 1\n"})
+        sh(d, "git", "branch", "-m", "main", "topic")
+        ref, files, read = S.upstream_files(d)
+        self.assertEqual((ref, files), ("HEAD", ["x.py"]))
+        self.assertIn("# hi", read("x.py"))
+
+    def test_collect_skips_bot_prs_and_bot_comments(self):
+        from crucible import learn as L
+        comments = [{"author_association": "MEMBER", "body": "Please add a test.", "user": {"login": "carol"}},
+                    {"author_association": "MEMBER", "body": "Coverage report", "user": {"login": "codecov[bot]", "type": "Bot"}}]
+
+        def fake_gh(path, check=False):
+            if path.startswith("repos/o/r/pulls?"):
+                return self.pulls
+            if "/comments" in path and "issues/3/" in path:
+                return comments
+            return {"additions": 1, "deletions": 1} if re.match(r"repos/o/r/pulls/\d+$", path) else []
+        orig = L.gh_json
+        L.gh_json = fake_gh
+        try:
+            merged, got, sizes = L.collect("o/r", log=lambda *_: None)
+        finally:
+            L.gh_json = orig
+        self.assertEqual([p["number"] for p in merged], [3, 4])
+        self.assertEqual([c["body"] for c in got], ["Please add a test."])
+        self.assertEqual(sizes, [2, 2])
+
+    def test_is_bot(self):
+        self.assertTrue(U.is_bot({"login": "dependabot[bot]", "type": "Bot"}))
+        self.assertTrue(U.is_bot({"login": "Renovate", "type": "User"}))
+        self.assertTrue(U.is_bot("github-actions[bot]"))
+        self.assertFalse(U.is_bot({"login": "alice", "type": "User"}))
+        self.assertFalse(U.is_bot(None))
+
+
 class TestWaivers(unittest.TestCase):
     def test_waiver_unblocks_only_the_waived_failure(self):
         from crucible.review import ready_after_waivers

@@ -1,6 +1,6 @@
 """`crucible learn`: extract what this project's maintainers actually ask for, from merged PR reviews."""
 import datetime as dt, os, statistics, textwrap
-from .util import Budget, Failed, claude, gh_json, project_dir, project_key, upstream_slug, write_json
+from .util import Budget, Failed, claude, gh_json, is_bot, project_dir, project_key, upstream_slug, write_json
 
 MAINTAINERS = {"OWNER", "MEMBER", "COLLABORATOR"}
 RULES_SCHEMA = {"type": "object", "properties": {"rules": {"type": "array", "maxItems": 25, "items": {
@@ -11,7 +11,8 @@ RULES_SCHEMA = {"type": "object", "properties": {"rules": {"type": "array", "max
 
 def collect(slug, n=25, log=print):
     pulls = gh_json(f"repos/{slug}/pulls?state=closed&sort=updated&direction=desc&per_page=60", check=True) or []
-    merged = [p for p in pulls if p.get("merged_at")][:n]
+    # bot PRs (Dependabot bumps) and bot comments say nothing about what maintainers ask of people
+    merged = [p for p in pulls if p.get("merged_at") and not is_bot(p.get("user"))][:n]
     comments, sizes = [], []
     for p in merged:
         num = p["number"]
@@ -23,6 +24,7 @@ def collect(slug, n=25, log=print):
                    f"repos/{slug}/pulls/{num}/reviews?per_page=100"):
             for c in gh_json(ep) or []:
                 if c.get("author_association") in MAINTAINERS and (c.get("body") or "").strip() \
+                        and not is_bot(c.get("user")) \
                         and (c.get("user") or {}).get("login") != (p.get("user") or {}).get("login"):
                     comments.append({"pr": num, "url": c.get("html_url") or p["html_url"], "path": c.get("path"),
                                      "body": c["body"].strip()[:600]})

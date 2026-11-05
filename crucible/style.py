@@ -4,7 +4,8 @@
 `check` returns deterministic medium/low findings for the diff's comments and the PR draft.
 `polish` rewrites PR_DRAFT.md into PR_DRAFT.polished.md in the project's voice, without inventing claims."""
 import collections, os, re, statistics, textwrap
-from .util import (CODE_EXT_RX, ISSUE_KW, TEST_PATH_RX, Budget, claude, gh_json, git, project_dir, read_json, write_json)
+from .util import (CODE_EXT_RX, ISSUE_KW, TEST_PATH_RX, Budget, Failed, claude, default_base, gh_json, git, is_bot, project_dir,
+                   read_json, write_json)
 
 EMOJI_RX = re.compile("[\U0001F300-\U0001FAFF\U00002700-\U000027BF\U0001F000-\U0001F2FF☀-⛿⭐✅❌]")
 BOILERPLATE_RX = re.compile(r"^[^\w\n]*(this (pr|pull request|change|commit) (introduces|adds|aims|implements|fixes|addresses)|"
@@ -106,9 +107,24 @@ def title_stats(titles):
             "ends_with_period_pct": round(100 * sum(t.endswith(".") for t in titles) / max(1, len(titles)))}
 
 
+def upstream_files(repo):
+    """(ref, read) for the project's own code: the upstream default branch, never the working tree or HEAD, so the
+    contributor's unpushed commits are not measured or quoted as house style. Falls back to HEAD with no base branch."""
+    try:
+        ref = default_base(repo)
+    except Failed:
+        ref = "HEAD"
+    files = git(repo, "ls-tree", "-r", "--name-only", ref, check=False).split("\n")
+
+    def read(path):
+        return git(repo, "show", f"{ref}:{path}", check=False)
+    return ref, [f for f in files if f], read
+
+
 def learn_style(repo, slug, project, n=20, model="claude-sonnet-5-5", budget_usd=1.5, log=print):
     pulls = gh_json(f"repos/{slug}/pulls?state=closed&sort=updated&direction=desc&per_page=80") or []
-    merged = [p for p in pulls if p.get("merged_at") and p.get("author_association") in ("OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR")]
+    merged = [p for p in pulls if p.get("merged_at") and p.get("author_association") in ("OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR")
+              and not is_bot(p.get("user"))]
     # prefer repeat authors
     counts = collections.Counter((p.get("user") or {}).get("login") for p in merged)
     merged.sort(key=lambda p: -counts[(p.get("user") or {}).get("login")])
@@ -124,21 +140,18 @@ def learn_style(repo, slug, project, n=20, model="claude-sonnet-5-5", budget_usd
                     "formats": title_stats(subj)["formats"]},
          "examples": [{"url": p["html_url"], "title": p["title"], "body": (p.get("body") or "")[:900]}
                       for p in sorted(sample, key=lambda p: abs(words(p.get("body")) - (body_stats(bodies)["median_words"] or 0)))[:3]]}
-    # repo-wide comment density over a sample of source files at HEAD
-    files = [f for f in git(repo, "ls-files", check=False).split("\n") if CODE_EXT_RX.search(f) and not TEST_PATH_RX.search(f)
+    # repo-wide comment density over a sample of source files on the upstream branch
+    ref, all_files, read = upstream_files(repo)
+    files = [f for f in all_files if CODE_EXT_RX.search(f) and not TEST_PATH_RX.search(f)
              and not re.search(r"(^|/)(vendor|dist|build|node_modules|libs?/)", f)][:400]
-    dens = []
-    for f in files[:: max(1, len(files) // 60)][:60]:
-        try:
-            dens.append(comment_density(open(os.path.join(repo, f), errors="replace").read()))
-        except OSError:
-            pass
+    dens = [comment_density(t) for t in (read(f) for f in files[:: max(1, len(files) // 60)][:60]) if t]
     m["comment_density_median"] = statistics.median(dens) if dens else None
+    m["code_ref"] = ref
     write_json(os.path.join(project_dir(project), "style.json"), m)
     conv = {"tone": "", "comment_conventions": "", "callouts": "", "avoid": ""}
     try:
         samp = "\n\n".join(f"### {e['title']} ({e['url']})\n{e['body']}" for e in m["examples"])
-        code = "\n\n".join(f"--- {f} ---\n" + open(os.path.join(repo, f), errors="replace").read()[:3000]
+        code = "\n\n".join(f"--- {f} ---\n" + read(f)[:3000]
                            for f in files[:: max(1, len(files) // 4)][:4])
         out, _ = claude(textwrap.dedent(f"""\
             Describe how regular contributors to {slug} write, so a newcomer's PR can match them. Be concrete and short.
