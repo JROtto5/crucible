@@ -175,7 +175,7 @@ class TestCIMatrix(unittest.TestCase):
         self.assertEqual(R.matrix_axes(wf), {"django-version": ["4.2", "5.0"], "os": ["ubuntu-latest", "macos-latest"],
                                              "exp": ["1"]})
         # indentless block list (dash at the key's indent) and a flow list split over lines
-        wf2 = ("    matrix:\n      three-version:\n      - 0.159.0\n      - latest\n      node: [\n        18,  # old\n"
+        wf2 = ("    matrix:\n      three-version:\n      - 0.159.0\n      - latest\n      node: [\n        # oldest LTS first\n        18,  # old\n"
                "        20\n      ]\n      include:\n      - three-version: 0.150.0\n    steps: []\n")
         self.assertEqual(R.matrix_axes(wf2), {"three-version": ["0.159.0", "latest"], "node": ["18", "20"]})
 

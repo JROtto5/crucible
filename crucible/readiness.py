@@ -242,7 +242,7 @@ def matrix_axes(text):
                     k, v = km.groups()
                     while v.startswith("[") and "]" not in v and i + 1 < len(lines):  # flow list over several lines
                         i += 1
-                        v += " " + re.sub(r"\s+#.*$", "", lines[i].strip())
+                        v += " " + re.sub(r"(^|\s+)#.*$", "", lines[i].strip())  # also a comment-only line
                     if v.startswith("[") and v.endswith("]"):
                         axes.setdefault(k, []).extend(_matrix_scalars(v[1:-1].split(",")))
                     elif not v:
