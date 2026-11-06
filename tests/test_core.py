@@ -1133,8 +1133,10 @@ class TestOverlappingPRs(unittest.TestCase):
         R.overlapping_prs(".", self.OURS, "me")
         path = R._hunk_cache_path("o/r", 8101)
         entry = U.read_json(path)
-        for at in (entry["at"] - R.HUNK_CACHE_TTL - 1, "yesterday"):   # expired, then hand-edited
-            U.write_json(path, {**entry, "at": at})
+        bad = [{**entry, "at": entry["at"] - R.HUNK_CACHE_TTL - 1}, {**entry, "at": "yesterday"}, [],   # expired,
+               {**entry, "hunks": {"src/Library.tsx": 5}}, {**entry, "hunks": {"src/Library.tsx": [[7]]}}]  # edited
+        for damaged in bad:
+            U.write_json(path, damaged)
             calls = self.stub({None: pg}, {8101: far})
             self.assertEqual(R.overlapping_prs(".", self.OURS, "me")["status"], "pass")
             self.assertEqual(rest(calls), 1)

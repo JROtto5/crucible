@@ -334,6 +334,14 @@ def _hunk_cache_path(slug, number):
     return os.path.join(util.HOME, "cache", "pr-hunks", slug.replace("/", "__"), f"{int(number)}.json")
 
 
+def _valid_hunks(hunks):
+    """A cached {path: None | [[start, end], ...]} as _pr_hunks writes it; anything else (a hand edit) is a miss."""
+    return isinstance(hunks, dict) and all(
+        r is None or (isinstance(r, list) and all(isinstance(x, list) and len(x) == 2 and
+                                                  all(type(v) is int for v in x) for x in r))
+        for r in hunks.values())
+
+
 def _pr_hunks(slug, number, head=None):
     """{path: [(start, end)] on the base side, 3 context lines included} for one PR, or FETCH_FAILED if the API call
     failed. A pure rename maps to []. Any other file GitHub sends without a patch (binary, mode-only, or a diff too
@@ -345,10 +353,10 @@ def _pr_hunks(slug, number, head=None):
     if path:
         hit = read_json(path)
         hit = hit if isinstance(hit, dict) else {}
-        at = hit.get("at")
+        at, hunks = hit.get("at"), hit.get("hunks")
         if hit.get("head") == head and isinstance(at, (int, float)) and time.time() - at < HUNK_CACHE_TTL \
-                and isinstance(hit.get("hunks"), dict):
-            return {f: (None if r is None else [tuple(x) for x in r]) for f, r in hit["hunks"].items()}
+                and _valid_hunks(hunks):
+            return {f: (None if r is None else [tuple(x) for x in r]) for f, r in hunks.items()}
     data = gh_json(f"repos/{slug}/pulls/{number}/files?per_page=100")
     if not isinstance(data, list):
         return FETCH_FAILED
