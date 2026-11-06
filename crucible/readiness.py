@@ -120,7 +120,8 @@ def _read_tracked(repo, rel):
     p = os.path.join(repo, rel)
     if os.path.isfile(p):
         return open(p, errors="replace").read()
-    r = subprocess.run(["git", "-C", repo, "show", "HEAD:" + rel], capture_output=True)
+    # "./" makes the path relative to `repo`, like ls-tree above, when `repo` is below the work-tree root
+    r = subprocess.run(["git", "-C", repo, "show", "HEAD:./" + rel], capture_output=True)
     return r.stdout.decode(errors="replace") if r.returncode == 0 else None
 
 

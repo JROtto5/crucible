@@ -176,6 +176,10 @@ class TestReadiness(unittest.TestCase):
                        "src/pull_request_template.md": "## C\n"})
         self.assertEqual(R.template_text(d), (None, ""))
         self.assertEqual(R.check_draft(d, "x" * 300)["status"], "pass")
+        # run from a subdirectory of the work tree: listing and reading both resolve against that directory
+        d = make_repo({"pkg/.github/pull_request_template.md": "## Sub\n", ".github/pull_request_template.md": "## Top\n"})
+        os.remove(os.path.join(d, "pkg/.github/pull_request_template.md"))
+        self.assertEqual(R.template_text(os.path.join(d, "pkg")), (".github/pull_request_template.md", "## Sub\n"))
         # a directory that isn't a git repo still works from disk
         d = tempfile.mkdtemp(prefix="crucible-nogit-")
         os.makedirs(os.path.join(d, ".github"))
