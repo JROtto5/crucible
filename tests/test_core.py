@@ -415,6 +415,31 @@ class TestLearnStyleSources(unittest.TestCase):
         self.assertNotIn("LOCAL", self.prompts[0])
         self.assertEqual(m["comment_density_median"], 50.0)
 
+    def test_length_baseline_from_outside_contributors(self):
+        """three-mesh-bvh 2026-11-06: the repeat-author sample is the owner's own one-line PRs (median 17), so a
+        183-word contributor body was a medium "length reads as generated"; outside contributors' median is 144.5."""
+        def pr(num, login, assoc, n_words, typ="User"):
+            return {"number": num, "title": f"T{num}", "body": "word " * n_words, "merged_at": "2026-11-01T00:00:00Z",
+                    "html_url": f"https://github.com/o/r/pull/{num}", "author_association": assoc,
+                    "user": {"login": login, "type": typ}}
+        owner = [pr(i, "owner", "OWNER", 12) for i in range(1, 16)]
+        outside = [pr(20 + i, f"c{i}", ("CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "NONE")[i % 3], 140 + i) for i in range(6)]
+        self.pulls = owner + outside + [pr(40, "dependabot[bot]", "CONTRIBUTOR", 900, "Bot"),
+                                        pr(41, "x", "NONE", 900) | {"merged_at": None}]  # bot and unmerged: ignored
+        m = S.learn_style(self.c, "o/r", "o__r_outside", log=lambda *_: None)
+        self.assertEqual(m["body"]["median_words"], 12)  # the regulars' sample is unchanged
+        self.assertEqual((m["body"]["outside_median_words"], m["body"]["outside_prs"]), (142, 6))
+        self.assertIn("from outside contributors (6 merged PRs): median 142 words",
+                      open(os.path.join(S.project_dir("o__r_outside"), "STYLE.md")).read())
+        self.assertEqual(S.ai_tells("word " * 183, m), [])
+        tells = dict(S.ai_tells("word " * 400, m))  # falsifier: well past the outside norm still reads as long
+        self.assertEqual(tells.get("length"), "400 words vs median 142 of 6 merged PRs from outside contributors")
+        # fewer than 5 outside PRs: no outside baseline, the regulars' median is used as before
+        self.pulls = owner + outside[:4]
+        m = S.learn_style(self.c, "o/r", "o__r_outside", log=lambda *_: None)
+        self.assertNotIn("outside_median_words", m["body"])
+        self.assertEqual(dict(S.ai_tells("word " * 183, m)).get("length"), "183 words vs project median 12")
+
     def test_falls_back_to_head_without_a_base_branch(self):
         d = make_repo({"x.py": "# hi\nx = 1\n"})
         sh(d, "git", "branch", "-m", "main", "topic")
@@ -1561,6 +1586,17 @@ class TestDescriptionHeuristics(unittest.TestCase):
         # without the template the checklist and comment count again, and the draft reads as too long
         self.assertIn("PR description: length reads as generated",
                       [f["title"] for f in S.check(make_repo({"a.txt": "x"}), "HEAD", [], "PR_DRAFT.md", text, self.STYLE)])
+
+    def test_outside_baseline_replays_real_reviews(self):
+        """Stored upstream length findings, replayed on the outside-contributor medians measured 2026-11-06."""
+        def tells(w, med, outside):
+            return {k for k, _ in S.ai_tells("word " * w, {"body": {"median_words": med, "outside_median_words": outside,
+                                                                    "outside_prs": 14}})}
+        self.assertNotIn("length", tells(183, 17, 144))  # three-mesh-bvh, was flagged medium
+        self.assertNotIn("length", tells(182, 26, 54))   # MangoHud, was flagged
+        self.assertIn("length", tells(327, 19, 20))      # colyseus: its outside contributors are terse too
+        self.assertIn("length", tells(1258, 74, 182))    # three.js: still far too long
+        self.assertNotIn("length", tells(300, 0, 0))     # an empty-bodied project gives no baseline, as before
 
     def test_m_backticked_build_or_test_command_is_evidence(self):
         for line in ("No code changes. Checked with `npm run build-docs`: both entries show up.",

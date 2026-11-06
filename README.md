@@ -36,7 +36,7 @@ The one blocking miss is the refcount case: the bug is found, but rated medium. 
 4. **House-style checks**, measured against the project's `STYLE.md`:
    - comments denser than the file's own style, or narrating the obvious;
    - big uncommented logic in files that normally explain themselves;
-   - generated-sounding descriptions: emoji, "This PR introduces…", filler, bullet bloat, a body far longer than the project median, headings the project never uses;
+   - generated-sounding descriptions: emoji, "This PR introduces…", filler, bullet bloat, a body far longer than what outside contributors' merged PRs usually have, headings the project never uses;
    - a description with no testing evidence.
 
    These are medium/low and answerable, not blocking.
@@ -77,7 +77,7 @@ Learning reads the project's most recent merged PRs through `gh` and writes thre
 - `meta.json`: median and p75 merged-PR size.
 - `STYLE.md` / `style.json`, measured from PRs by repeat contributors:
   - title format and length;
-  - body length (median and p75 words);
+  - body length (median and p75 words), and separately for merged PRs from outside contributors (not owner, member or collaborator). The length check compares a draft with the outside contributors' median when at least 5 such PRs exist, because owners often merge their own PRs with a one-line body;
   - how often PRs use headings, tables, screenshots and emoji;
   - how issues are referenced;
   - commit format;

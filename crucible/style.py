@@ -92,6 +92,23 @@ def body_stats(bodies):
             "issue_ref_forms": [f for f, _ in refs.most_common(4)]}
 
 
+MAINTAINER_ASSOC = ("OWNER", "MEMBER", "COLLABORATOR")
+OUTSIDE_MIN = 5
+
+
+def outside_body_stats(pulls):
+    """Body length of merged, non-bot PRs from people outside the project (not owner/member/collaborator): what a
+    maintainer accepts from a contributor like the crucible user. A repo's owner often merges their own PRs with a
+    one-line body (three-mesh-bvh 2026-11-06: 12 words from members vs 144.5 from outside contributors), so the
+    repeat-author sample alone would call a normal contributor PR "long". -> {} with fewer than OUTSIDE_MIN PRs."""
+    bodies = [p.get("body") or "" for p in pulls if p.get("merged_at") and not is_bot(p.get("user"))
+              and p.get("author_association") not in MAINTAINER_ASSOC]
+    if len(bodies) < OUTSIDE_MIN:
+        return {}
+    b = body_stats(bodies)
+    return {"outside_median_words": b["median_words"], "outside_p75_words": b["p75_words"], "outside_prs": len(bodies)}
+
+
 def title_stats(titles):
     pats = collections.Counter()
     for t in titles:
@@ -138,7 +155,8 @@ def learn_style(repo, slug, project, n=20, model="claude-sonnet-5-5", budget_usd
         for c in gh_json(f"repos/{slug}/pulls/{p['number']}/commits?per_page=20") or []:
             commits.append(((c.get("commit") or {}).get("message") or "").strip())
     subj = [c.split("\n", 1)[0] for c in commits if c]
-    m = {"slug": slug, "prs_sampled": len(sample), "title": title_stats(titles), "body": body_stats(bodies),
+    m = {"slug": slug, "prs_sampled": len(sample), "title": title_stats(titles),
+         "body": {**body_stats(bodies), **outside_body_stats(pulls)},
          "commit": {"median_subject_chars": median_int([len(s) for s in subj]),
                     "pct_with_body": round(100 * sum(1 for c in commits if "\n\n" in c) / max(1, len(commits))),
                     "formats": title_stats(subj)["formats"]},
@@ -184,6 +202,8 @@ def learn_style(repo, slug, project, n=20, model="claude-sonnet-5-5", budget_usd
          f"- median {b['median_words']} words (p75 {b['p75_words']}); headings in {b['pct_with_headings']}% "
          f"(common: {b['common_headings'] or 'none'}); tables {b['pct_with_tables']}%; screenshots {b['pct_with_images']}%; "
          f"emoji {b['pct_with_emoji']}%",
+         *([f"- from outside contributors ({b['outside_prs']} merged PRs): median {b['outside_median_words']} words "
+            f"(p75 {b['outside_p75_words']}); the length check uses this"] if b.get("outside_median_words") else []),
          f"- issue references: {b['issue_ref_forms'] or 'none observed'}", "", "## Commits",
          f"- median subject {c['median_subject_chars']} chars; with body {c['pct_with_body']}%; formats: "
          + ", ".join(f"{k} ({v})" for k, v in c["formats"]), "",
@@ -225,10 +245,14 @@ def ai_tells(text, style=None, allowed_headings=(), template="", title=""):
     bullets = len(re.findall(r"(?m)^\s*[-*] ", text))
     if bullets > 12:
         out.append(("bullet bloat", f"{bullets} bullets"))
-    med = (style.get("body") or {}).get("median_words")
+    # judged against outside contributors' merged PRs when learned (see outside_body_stats), else the regulars'
+    body = style.get("body") or {}
+    outside = body.get("outside_median_words") is not None
+    med = body["outside_median_words"] if outside else body.get("median_words")
     w = body_words(text, template, title)
     if med and w > max(2.5 * med, med + 150):
-        out.append(("length", f"{w} words vs project median {med}"))
+        out.append(("length", f"{w} words vs median {med} of {body.get('outside_prs')} merged PRs from outside contributors"
+                    if outside else f"{w} words vs project median {med}"))
     # only learned measurements can call a heading unusual; the template just exempts its own headings
     common = {norm_heading(h) for h in (style.get("body") or {}).get("common_headings") or []}
     own = [h for h in HEADING_RX.findall(text) if norm_heading(h) not in allowed]
