@@ -3,7 +3,7 @@
 Target: about 2027-01-04. 1.0 means a maintainer or a first-time contributor can install it, run it on a real PR and trust what it says.
 
 ## Precision, measured on real PRs
-- [x] `crucible stats`: kept vs dropped-by-verification vs later fixed/deferred/refuted (from answers), per project and overall, deduped across rounds (2026-11-05: 59 upstream reviews, 195 unique model findings, 96 kept, 16 of 21 answered held up). Next: count findings a maintainer later raised that crucible missed (recall on real PRs)
+- [x] `crucible stats`: kept vs dropped-by-verification vs later fixed/deferred/refuted (from answers), per project and overall, deduped across rounds (2026-11-05: 59 upstream reviews, 195 unique model findings, 96 kept, 16 of 21 answered held up, 75 kept still unanswered). Next: count findings a maintainer later raised that crucible missed (recall on real PRs)
 - [x] A labelled fixture eval (`crucible eval`, 16 cases) with recall / false-blocking / cost in the README (v0.3)
 - [ ] A labelled set of at least 20 real merged upstream PRs replayed through `crucible review`, with precision and recall reported in the README
 - [ ] Grow the fixture eval to 30+ cases, including multi-file changes and severity calibration (the refcount case is found but rated medium)

@@ -58,7 +58,7 @@ def _load(root, include_self, project):
 
 
 def collect(root, include_self=False, project=None):
-    """-> {"overall": row, "projects": {repo: row}, "reviews": n, "cost": usd}. A row counts unique findings."""
+    """-> {"overall": row, "projects": {repo: row}}. A row counts unique findings, plus the reviews and their cost."""
     reviews, answers = _load(root, include_self, project)
     g, findings = _Groups(), []                    # findings: (repo, id, title_key, kept, severity)
     for repo, rev in reviews:
@@ -120,12 +120,14 @@ def report(s):
     o = s["overall"]
     head = (f"{'project':<44} {'revs':>4} {'$/rev':>7} {'unique':>6} {'kept':>5} {'drop':>5} "
             f"{'fixed':>5} {'defer':>5} {'refut':>5} {'unans':>6}  held up (answered, not refuted)")
-    out = [head, "-" * len(head)] + [_line(p.replace("__", "/"), r) for p, r in s["projects"].items()]
+    out = [head, "-" * len(head)] + [_line(p.replace("__", "/", 1), r) for p, r in s["projects"].items()]
     out += ["-" * len(head), _line("overall", o), ""]
     if o["unique"]:
         sev = ", ".join(f"{k} {o['kept_by_severity'][k]}" for k in SEV if o["kept_by_severity"][k])
         out.append(f"Unique model findings: {o['unique']}; verification kept {o['kept']} ({o['kept'] / o['unique']:.0%})"
                    f" and dropped {o['dropped']}. Kept by severity: {sev or 'none'}.")
+        if held_up(o):
+            out.append(f"Held up covers only answered findings: {o['unanswered']} of {o['kept']} kept are unanswered.")
     out.append("Counts are unique findings (same id, or same title in one project, count once); model findings only.")
     return "\n".join(out)
 

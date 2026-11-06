@@ -1707,10 +1707,11 @@ class TestStats(unittest.TestCase):
             # round 1: two findings + one dropped; a scanner finding never counts
             self._store(root, "o__p", "s1", [self._f("CR-1", "Off-by-one in loop", "medium"),
                                              self._f("CR-2", "No test for clamp"), self._f("SC-1", "TODO", source="scanner")],
-                        [self._f("CR-3", "Style nit")], answers={"CR-1": {"disposition": "refuted", "at": "2026-11-05T01"}})
-            # round 2 (incremental): CR-1 carried with its id and re-answered fixed later; CR-3 now kept
+                        [self._f("CR-3", "Style nit")], answers={"CR-1": {"disposition": "fixed", "at": "2026-11-05T04"}})
+            # round 2 (incremental): CR-1 carried with its id; its answer here is older than round 1's, so it loses
+            # (answers are re-dated when edited by hand); CR-3 now kept
             self._store(root, "o__p", "s2", [self._f("CR-1", "Off-by-one in loop", "medium"), self._f("CR-3", "Style nit")],
-                        answers={"CR-1": {"disposition": "fixed", "at": "2026-11-05T02"}})
+                        answers={"CR-1": {"disposition": "refuted", "at": "2026-11-05T02"}})
             # round 3 (amended commit, full re-review): same title, new id, title differs only in case/punctuation
             self._store(root, "o__p", "s3", [self._f("CR-9", "no test for clamp.")],
                         answers={"CR-9": {"disposition": "deferred", "at": "2026-11-05T03"}})
@@ -1718,22 +1719,25 @@ class TestStats(unittest.TestCase):
             self._store(root, "o__q", "t1", dropped=[self._f("CR-5", "No test for clamp")])
             self._store(root, "JROtto5__crucible", "c1", [self._f("CR-7", "self")])
             self._store(root, "o__p", "s4", [self._f("CR-8", "x")])
+            self._store(root, "o__my__lib", "m1", dropped=[self._f("CR-6", "y")])   # a repo name with "__"
             os.remove(os.path.join(root, "o__p", "s4", "review.json"))     # an unfinished review dir is ignored
             s = ST.collect(root)
             o = s["overall"]
-            self.assertEqual((o["unique"], o["kept"], o["dropped"]), (4, 3, 1))
+            self.assertEqual((o["unique"], o["kept"], o["dropped"]), (5, 3, 2))
             self.assertEqual((o["fixed"], o["deferred"], o["refuted"], o["unanswered"]), (1, 1, 0, 1))
             self.assertEqual(dict(o["kept_by_severity"]), {"medium": 1, "low": 2})
-            self.assertEqual((o["reviews"], o["cost"]), (4, 4.0))
-            self.assertEqual(sorted(s["projects"]), ["o__p", "o__q"])
+            self.assertEqual((o["reviews"], o["cost"]), (5, 5.0))
+            self.assertEqual(sorted(s["projects"]), ["o__my__lib", "o__p", "o__q"])
             self.assertEqual(ST.held_up(o), (2, 2))
             self.assertIsNone(ST.held_up(s["projects"]["o__q"]))
-            self.assertEqual(ST.collect(root, include_self=True)["overall"]["unique"], 5)
+            self.assertEqual(ST.collect(root, include_self=True)["overall"]["unique"], 6)
             self.assertEqual(list(ST.collect(root, project="o/q")["projects"]), ["o__q"])
             text = ST.report(s)
             self.assertIn("o/p", text)
             self.assertIn("2/2 (100%)", text)
-            self.assertIn("verification kept 3 (75%) and dropped 1", text)
+            self.assertIn("verification kept 3 (60%) and dropped 2", text)
+            self.assertIn("o/my__lib ", text)
+            self.assertIn("1 of 3 kept are unanswered", text)
             self.assertEqual(json.loads(ST.to_json(s))["overall"]["kept_by_severity"], {"medium": 1, "low": 2})
 
     def test_cli(self):
