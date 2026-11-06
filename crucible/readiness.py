@@ -331,9 +331,7 @@ HUNK_CACHE_TTL = 7 * 86400  # a PR's diff is fixed by its head SHA; the TTL only
 
 
 def _hunk_cache_path(slug, number):
-    d = os.path.join(util.HOME, "cache", "pr-hunks", slug.replace("/", "__"))
-    os.makedirs(d, exist_ok=True)
-    return os.path.join(d, f"{int(number)}.json")
+    return os.path.join(util.HOME, "cache", "pr-hunks", slug.replace("/", "__"), f"{int(number)}.json")
 
 
 def _pr_hunks(slug, number, head=None):
@@ -345,8 +343,11 @@ def _pr_hunks(slug, number, head=None):
     rounds on a busy repo don't refetch up to OVERLAP_CANDIDATES patches over REST each time."""
     path = _hunk_cache_path(slug, number) if head else None
     if path:
-        hit = read_json(path) or {}
-        if hit.get("head") == head and time.time() - hit.get("at", 0) < HUNK_CACHE_TTL and isinstance(hit.get("hunks"), dict):
+        hit = read_json(path)
+        hit = hit if isinstance(hit, dict) else {}
+        at = hit.get("at")
+        if hit.get("head") == head and isinstance(at, (int, float)) and time.time() - at < HUNK_CACHE_TTL \
+                and isinstance(hit.get("hunks"), dict):
             return {f: (None if r is None else [tuple(x) for x in r]) for f, r in hit["hunks"].items()}
     data = gh_json(f"repos/{slug}/pulls/{number}/files?per_page=100")
     if not isinstance(data, list):
@@ -362,9 +363,10 @@ def _pr_hunks(slug, number, head=None):
             out[f.get("filename")] = None
     if path:
         try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
             write_json(path, {"head": head, "at": time.time(), "hunks": out})
         except OSError:
-            pass  # a read-only home only costs the refetch next round
+            pass  # an unwritable cache only costs the refetch next round
     return out
 
 

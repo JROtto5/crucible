@@ -1124,6 +1124,35 @@ class TestOverlappingPRs(unittest.TestCase):
             R.upstream_slug = orig
         self.assertEqual(rest(calls), [8001])
 
+    def test_hunk_cache_expires_and_tolerates_bad_or_unwritable_files(self):
+        far = [{"filename": "src/Library.tsx", "patch": "@@ -10,6 +10,6 @@"}]
+        pg = self.page([(8101, "u", "User", ["src/Library.tsx"])], 1)
+        pg["data"]["repository"]["pullRequests"]["nodes"][0]["headRefOid"] = "h1"
+        rest = lambda calls: sum(1 for c in calls if c[0] != "graphql")
+        calls = self.stub({None: pg}, {8101: far})
+        R.overlapping_prs(".", self.OURS, "me")
+        path = R._hunk_cache_path("o/r", 8101)
+        entry = U.read_json(path)
+        for at in (entry["at"] - R.HUNK_CACHE_TTL - 1, "yesterday"):   # expired, then hand-edited
+            U.write_json(path, {**entry, "at": at})
+            calls = self.stub({None: pg}, {8101: far})
+            self.assertEqual(R.overlapping_prs(".", self.OURS, "me")["status"], "pass")
+            self.assertEqual(rest(calls), 1)
+        calls = self.stub({None: pg}, {8101: far})                      # the refetch refreshed the entry
+        R.overlapping_prs(".", self.OURS, "me")
+        self.assertEqual(rest(calls), 0)
+        # An unwritable cache (here a file where the directory should be) degrades to fetching, never fails
+        orig = R.util.HOME
+        with tempfile.TemporaryDirectory() as d:
+            open(os.path.join(d, "cache"), "w").close()
+            R.util.HOME = d
+            try:
+                calls = self.stub({None: pg}, {8101: far})
+                self.assertEqual(R.overlapping_prs(".", self.OURS, "me")["status"], "pass")
+                self.assertEqual(rest(calls), 1)
+            finally:
+                R.util.HOME = orig
+
     def test_only_shared_files_is_na(self):
         self.stub({}, {})
         lock = [f for f in self.OURS if f["path"] == "pnpm-lock.yaml"]
