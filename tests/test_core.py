@@ -1,4 +1,4 @@
-import os, re, subprocess, sys, tempfile, unittest
+import json, os, re, subprocess, sys, tempfile, unittest
 
 _TMP_HOME = tempfile.mkdtemp(prefix="crucible-test-home-")
 os.environ["CRUCIBLE_HOME"] = _TMP_HOME
@@ -1685,6 +1685,65 @@ class TestRouting(unittest.TestCase):
             self.assertEqual(r["incremental"]["carried"], 1)
             self.assertIn(("claude-haiku-5-5", False, True), calls)            # the carried finding was re-checked
             self.assertEqual([f["title"] for f in r["dropped"]], ["b is undocumented in the README"])
+
+class TestStats(unittest.TestCase):
+    """`crucible stats`: one unique finding however many rounds showed it; latest answer wins."""
+    @staticmethod
+    def _store(root, repo, sha, findings=(), dropped=(), answers=None, cost=1.0):
+        d = os.path.join(root, repo, sha)
+        os.makedirs(d)
+        U.write_json(os.path.join(d, "review.json"), {"repo": repo, "sha": sha, "status": "done", "cost_usd": cost,
+                                                      "findings": list(findings), "dropped": list(dropped)})
+        if answers:
+            U.write_json(os.path.join(d, "answers.json"), answers)
+
+    @staticmethod
+    def _f(fid, title, sev="low", source="review"):
+        return {"id": fid, "title": title, "severity": sev, "source": source, "file": "a.js", "line": 1}
+
+    def test_dedupes_carried_ids_and_amended_rereviews(self):
+        from crucible import stats as ST
+        with tempfile.TemporaryDirectory() as root:
+            # round 1: two findings + one dropped; a scanner finding never counts
+            self._store(root, "o__p", "s1", [self._f("CR-1", "Off-by-one in loop", "medium"),
+                                             self._f("CR-2", "No test for clamp"), self._f("SC-1", "TODO", source="scanner")],
+                        [self._f("CR-3", "Style nit")], answers={"CR-1": {"disposition": "refuted", "at": "2026-11-05T01"}})
+            # round 2 (incremental): CR-1 carried with its id and re-answered fixed later; CR-3 now kept
+            self._store(root, "o__p", "s2", [self._f("CR-1", "Off-by-one in loop", "medium"), self._f("CR-3", "Style nit")],
+                        answers={"CR-1": {"disposition": "fixed", "at": "2026-11-05T02"}})
+            # round 3 (amended commit, full re-review): same title, new id, title differs only in case/punctuation
+            self._store(root, "o__p", "s3", [self._f("CR-9", "no test for clamp.")],
+                        answers={"CR-9": {"disposition": "deferred", "at": "2026-11-05T03"}})
+            # the same title in another project is a different finding; always dropped there
+            self._store(root, "o__q", "t1", dropped=[self._f("CR-5", "No test for clamp")])
+            self._store(root, "JROtto5__crucible", "c1", [self._f("CR-7", "self")])
+            self._store(root, "o__p", "s4", [self._f("CR-8", "x")])
+            os.remove(os.path.join(root, "o__p", "s4", "review.json"))     # an unfinished review dir is ignored
+            s = ST.collect(root)
+            o = s["overall"]
+            self.assertEqual((o["unique"], o["kept"], o["dropped"]), (4, 3, 1))
+            self.assertEqual((o["fixed"], o["deferred"], o["refuted"], o["unanswered"]), (1, 1, 0, 1))
+            self.assertEqual(dict(o["kept_by_severity"]), {"medium": 1, "low": 2})
+            self.assertEqual((o["reviews"], o["cost"]), (4, 4.0))
+            self.assertEqual(sorted(s["projects"]), ["o__p", "o__q"])
+            self.assertEqual(ST.held_up(o), (2, 2))
+            self.assertIsNone(ST.held_up(s["projects"]["o__q"]))
+            self.assertEqual(ST.collect(root, include_self=True)["overall"]["unique"], 5)
+            self.assertEqual(list(ST.collect(root, project="o/q")["projects"]), ["o__q"])
+            text = ST.report(s)
+            self.assertIn("o/p", text)
+            self.assertIn("2/2 (100%)", text)
+            self.assertIn("verification kept 3 (75%) and dropped 1", text)
+            self.assertEqual(json.loads(ST.to_json(s))["overall"]["kept_by_severity"], {"medium": 1, "low": 2})
+
+    def test_cli(self):
+        with tempfile.TemporaryDirectory() as home:
+            self._store(os.path.join(home, "reviews"), "o__p", "s1", [self._f("CR-1", "t")])
+            out = subprocess.run([sys.executable, "-m", "crucible", "stats", "--json"], capture_output=True, text=True,
+                                 env=dict(os.environ, CRUCIBLE_HOME=home), cwd=os.path.dirname(os.path.dirname(__file__)))
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertEqual(json.loads(out.stdout)["overall"]["unique"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

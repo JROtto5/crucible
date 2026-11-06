@@ -13,6 +13,7 @@
   crucible proposals PROJECT [--accept N]                         review proposed memory entries
   crucible eval    [--cases ...] [--no-tiers] [--label L]         score the reviewer on labelled fixtures (eval/)
   crucible routing-replay [--include-self]                        what cost-routing rules would lose, on stored reviews
+  crucible stats   [--project P] [--include-self] [--json]        real-PR precision: unique kept/dropped/fixed/refuted
 
 crucible never pushes, comments, approves or posts. A human submits."""
 import argparse, datetime as dt, os, sys
@@ -152,6 +153,12 @@ def cmd_routing_replay(a):
     print(routing.replay_report(routing.replay(os.path.join(HOME, "reviews"), include_self=a.include_self)))
 
 
+def cmd_stats(a):
+    from . import stats
+    s = stats.collect(os.path.join(HOME, "reviews"), include_self=a.include_self, project=a.project)
+    print(stats.to_json(s) if a.json else stats.report(s))
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="crucible", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--version", action="version", version=__version__)
@@ -182,6 +189,10 @@ def main(argv=None):
     pp = s.add_parser("proposals"); pp.add_argument("project"); pp.add_argument("--accept", type=int)
     rr = s.add_parser("routing-replay", help="replay stored reviews offline: what each cost-routing rule would lose")
     rr.add_argument("--include-self", action="store_true", help="include crucible's reviews of itself")
+    sa = s.add_parser("stats", help="real-PR precision log from stored reviews: unique kept/dropped/fixed/deferred/refuted")
+    sa.add_argument("--project", help="owner/name (default: every project)")
+    sa.add_argument("--include-self", action="store_true", help="include crucible's reviews of itself")
+    sa.add_argument("--json", action="store_true")
     ev = s.add_parser("eval", help="run the review on labelled fixture changes (eval/cases) and score it")
     ev.add_argument("--cases", nargs="*", help="substrings of case names to run (default: all)")
     ev.add_argument("--review-model"); ev.add_argument("--verify-model"); ev.add_argument("--cheap-model")
@@ -192,7 +203,7 @@ def main(argv=None):
     a = p.parse_args(argv)
     {"review": cmd_review, "status": cmd_status, "answer": cmd_answer, "waive": cmd_waive, "learn": cmd_learn, "prep": cmd_prep,
      "polish": cmd_polish, "reply": cmd_reply, "vote": cmd_vote, "remember": cmd_remember, "proposals": cmd_proposals, "eval": cmd_eval,
-     "routing-replay": cmd_routing_replay}[a.cmd](a)
+     "routing-replay": cmd_routing_replay, "stats": cmd_stats}[a.cmd](a)
 
 
 if __name__ == "__main__":
