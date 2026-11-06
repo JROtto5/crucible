@@ -211,7 +211,7 @@ def _matrix_scalars(raw):
 
 def matrix_axes(text):
     """{axis: [values]} from every `matrix:` block of a workflow file. Reads flow lists (`k: [a, b]`) and block lists
-    (`k:` then `- a`); `include`/`exclude` entries and `${{ }}` expressions are skipped. No YAML dependency."""
+    (`k:` then `- a`, indented or not), including a flow list split over lines; `include`/`exclude` entries and `${{ }}` expressions are skipped. No YAML dependency."""
     axes, lines, i = {}, text.splitlines(), 0
     while i < len(lines):
         m = re.match(r"^(\s*)matrix:\s*(#.*)?$", lines[i])
@@ -228,18 +228,25 @@ def matrix_axes(text):
             li = len(ln) - len(ln.lstrip())
             if li <= ind:
                 break
+            if s.startswith("- "):
+                # a block-list item, indented under its key or at the key's own indent (indentless YAML)
+                if cur and li >= key_ind:
+                    axes.setdefault(cur, []).extend(_matrix_scalars([re.sub(r"\s+#.*$", "", s[2:])]))
+                i += 1
+                continue
             key_ind = li if key_ind is None else key_ind
             if li == key_ind:
                 cur = None
                 km = re.match(r"^([\w.-]+)\s*:\s*(.*?)\s*(?:#.*)?$", s)
                 if km and km.group(1) not in ("include", "exclude"):
                     k, v = km.groups()
+                    while v.startswith("[") and "]" not in v and i + 1 < len(lines):  # flow list over several lines
+                        i += 1
+                        v += " " + re.sub(r"\s+#.*$", "", lines[i].strip())
                     if v.startswith("[") and v.endswith("]"):
                         axes.setdefault(k, []).extend(_matrix_scalars(v[1:-1].split(",")))
                     elif not v:
                         cur = k
-            elif cur and s.startswith("- "):
-                axes.setdefault(cur, []).extend(_matrix_scalars([re.sub(r"\s+#.*$", "", s[2:])]))
             i += 1
     return axes
 
@@ -277,13 +284,16 @@ def declared_deps(repo):
     return deps
 
 
+# Axes that vary the runtime or the platform, never a package, even when a package shares the name.
+RUNTIME_AXES = {"node", "nodejs", "python", "py", "ruby", "go", "golang", "java", "jdk", "rust", "toolchain", "php",
+                "dotnet", "deno", "bun", "os", "platform", "arch", "compiler", "cc"}
+
+
 def _axis_dep(axis, deps):
-    """The declared dependency a matrix axis varies ("three-version" → three, "django" → Django), or None."""
+    """The declared dependency a matrix axis varies ("three-version" → three, "django" → Django), or None. Exact
+    names only: a suffix match would read `node-version` as @sentry/node."""
     a = _norm_dep(re.sub(r"[-_]versions?$", "", axis, flags=re.I))
-    if a in deps:
-        return deps[a]
-    scoped = [v for k, v in deps.items() if k.endswith("/" + a) and not k.startswith("@types/")]
-    return scoped[0] if len(scoped) == 1 else None
+    return None if a in RUNTIME_AXES else deps.get(a)
 
 
 def installed_version(repo, eco, name):
@@ -335,13 +345,23 @@ def ci_matrix(repo, paths):
         return _item(name, "na", "no CI matrix over a declared dependency")
     if not untested:
         return _item(name, "pass", f"every CI matrix version of {', '.join(sorted(matched))} matches the installed one")
-    wf, eco, dname, v, have = untested[0]
     vers = ", ".join(f"{d} {ver}" for _, _, d, ver, _ in untested[:6])
-    try_cmd = (f"npm install --no-save {dname}@{v}" if eco == "npm" else f"pip install '{dname}=={v}'")
+    oldest = {}  # per dependency, the lowest untested version (matrices are often listed newest first)
+    for wf, eco, dname, v, have in untested:
+        if dname not in oldest or _version_key(v) < _version_key(oldest[dname][2]):
+            oldest[dname] = (wf, eco, v, have)
+    wf, _, dname, _, have = untested[0]
     ran = (f"local checks used {dname} {have}" if have else
            f"there's no local install of {dname} here, so check which version the tests ran on")
-    return _item(name, "warn", f"{wf} tests {vers}; {ran}. Try the oldest before submitting: `{try_cmd}`, re-run "
-                 f"the tests, then restore the lockfile install; waive this item once done")
+    cmds = "; ".join(f"`npm install --no-save {d}@{v}`" if eco == "npm" else f"`pip install '{d}=={v}'`"
+                     for d, (_, eco, v, _) in list(oldest.items())[:3])
+    return _item(name, "warn", f"{wf} tests {vers}; {ran}. Try the oldest before submitting ({cmds}), re-run the "
+                 f"tests, then restore the lockfile install. Advisory: this never blocks, and it stays until the "
+                 f"installed version matches")
+
+
+def _version_key(v):
+    return tuple(int(n) for n in re.findall(r"\d+", v)) or (float("inf"),)
 
 
 def changelog(repo, paths):

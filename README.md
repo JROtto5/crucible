@@ -48,7 +48,7 @@ The one blocking miss is the refcount case: the bug is found, but rated medium. 
    - the PR description matches the template's sections;
    - an issue is linked with a linking keyword or an issue URL (a bare `#123` is often a PR reference and doesn't count; template placeholders like `Closes #(issue_number)` are reported);
    - tests are touched when source changes;
-   - when CI runs the tests against several versions of a declared dependency (a `strategy.matrix` axis such as `three-version: [0.159.0, 0.168.0, latest]` or `django-version`, matched to package.json or the Python requirements), the versions the local install doesn't match are named with the command to try the oldest (warn only; `latest`-style values count as covered; waive it once you've run them);
+   - when CI runs the tests against several versions of a declared dependency (a `strategy.matrix` axis such as `three-version: [0.159.0, 0.168.0, latest]` or `django-version`, matched to package.json or the Python requirements), the versions the local install doesn't match are named with the command to try the oldest. Advisory only: it never blocks, `latest`-style values count as covered, runtime and platform axes (`node-version`, `python-version`, `os`) are not packages, and pyproject dependencies are read on Python 3.11+ (tomllib);
    - docs/types are touched when exported API changes;
    - a changeset/changelog is added where the repo uses one;
    - conventional commits, if commitlint is configured;

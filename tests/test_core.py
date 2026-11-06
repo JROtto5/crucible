@@ -174,6 +174,10 @@ class TestCIMatrix(unittest.TestCase):
               "  fail-fast: false\nother:\n  matrix: ${{ fromJSON(x) }}\n")
         self.assertEqual(R.matrix_axes(wf), {"django-version": ["4.2", "5.0"], "os": ["ubuntu-latest", "macos-latest"],
                                              "exp": ["1"]})
+        # indentless block list (dash at the key's indent) and a flow list split over lines
+        wf2 = ("    matrix:\n      three-version:\n      - 0.159.0\n      - latest\n      node: [\n        18,  # old\n"
+               "        20\n      ]\n      include:\n      - three-version: 0.150.0\n    steps: []\n")
+        self.assertEqual(R.matrix_axes(wf2), {"three-version": ["0.159.0", "latest"], "node": ["18", "20"]})
 
     def test_bvh_959_warns_with_untested_versions(self):
         d = self.bvh_repo()
@@ -182,6 +186,9 @@ class TestCIMatrix(unittest.TestCase):
         self.assertIn("three 0.159.0, three 0.168.0;", it["evidence"])
         self.assertIn("three 0.185.0", it["evidence"])
         self.assertIn("`npm install --no-save three@0.159.0`", it["evidence"])
+        self.assertNotIn("waive", it["evidence"])  # warn items can't be waived (only fail items are)
+        newest_first = self.BVH_WF.replace("[0.159.0, 0.168.0, latest]", "[latest, 0.168.0, 0.159.0]")
+        self.assertIn("three@0.159.0`", R.ci_matrix(self.bvh_repo(workflow=newest_first), ["src/a.js"])["evidence"])
         self.assertNotIn("latest", it["evidence"])  # a floating value is the installed release
         sh(d, "git", "checkout", "-qb", "fix"); open(os.path.join(d, "src/a.js"), "w").write("2\n")
         sh(d, "git", "commit", "-qam", "x")
@@ -199,6 +206,11 @@ class TestCIMatrix(unittest.TestCase):
         self.assertEqual(R.ci_matrix(self.bvh_repo(), ["README.md"])["status"], "na")
         runtime = "jobs:\n  t:\n    strategy:\n      matrix:\n        node-version: [18, 20, 22]\n        os: [a, b]\n"
         self.assertEqual(R.ci_matrix(self.bvh_repo(workflow=runtime), ["src/a.js"])["status"], "na")
+        # a runtime axis is never a package, even when a scoped package shares the name (@sentry/node, node: dep)
+        sentry = make_repo({"package.json": json.dumps({"dependencies": {"@sentry/node": "^8", "node": "^20"}}),
+                            "node_modules/node/package.json": json.dumps({"version": "20.1.0"}),
+                            ".github/workflows/ci.yml": runtime})
+        self.assertEqual(R.ci_matrix(sentry, ["src/a.js"])["status"], "na")
         one = self.BVH_WF.replace("[0.159.0, 0.168.0, latest]", "[0.159.0]")
         self.assertEqual(R.ci_matrix(self.bvh_repo(workflow=one), ["src/a.js"])["status"], "na")
 
