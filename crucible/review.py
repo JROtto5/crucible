@@ -214,8 +214,9 @@ def verify_prompt(f, code, since=""):
         {code}
 
         Do the falsification test for real: read the cited code and its callers/tests, and where a concrete input
-        can show it, write a tiny throwaway script or run the relevant existing test (node / npx vitest|jest|mocha /
-        npm test / pytest). Do not modify tracked files. Keep the claim only if it survives AND is caused by this change
+        can show it, run a tiny throwaway probe or the relevant existing test (node -e / npx vitest|jest|mocha /
+        npm test / python3 -c / python3 -m unittest|pytest). Do not modify tracked files; a probe that needs a
+        modified copy writes it under a fresh temp dir. Keep the claim only if it survives AND is caused by this change
         AND is reachable in real use. You may change the severity. Report method=executed only if you actually ran
         something that demonstrated the result; list exactly what you read or ran in `actions`.
         """)

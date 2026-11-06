@@ -531,6 +531,30 @@ class TestClaudeCall(unittest.TestCase):
         self.assertNotIn("PROMPT-TEXT", seen["cmd"])
 
 
+    def test_verifier_can_run_python_tests_and_probes_without_bytecode(self):
+        # 58 of 149 stored Python verifications had `python3 -m unittest` or `python3 -c` refused and fell back to
+        # reading; the verifier gets the same reach on Python as `node:*` gives it on JS
+        import json
+        from unittest import mock
+        seen = {}
+
+        def fake_run(cmd, **kw):
+            seen["cmd"], seen["env"] = cmd, kw.get("env")
+            return subprocess.CompletedProcess(cmd, 0, json.dumps({"structured_output": {"ok": True}}), "")
+
+        with mock.patch.object(U.subprocess, "run", fake_run):
+            U.claude("p", "m", {"type": "object"}, ".", tools=U.TOOLS_RUN)
+        allowed = seen["cmd"][seen["cmd"].index("--allowedTools") + 1].split(",")
+        for rule in ("Bash(python3 -m unittest:*)", "Bash(python3 -c:*)", "Bash(python -m unittest:*)",
+                     "Bash(python3 -m pytest:*)", "Bash(node:*)"):
+            self.assertIn(rule, allowed)
+        self.assertFalse(any(r.startswith(("Bash(python3:", "Bash(rm", "Bash(git commit", "Bash(git push"))
+                             for r in allowed), allowed)   # runners only, never a bare interpreter or a write verb
+        self.assertEqual(seen["env"]["PYTHONDONTWRITEBYTECODE"], "1")
+        self.assertNotIn("python3 -c", ",".join(U.TOOLS_READ))   # reviewers and tool-less calls stay read-only
+        self.assertIn("python3 -m unittest", V.verify_prompt(
+            {"title": "t", "file": "a.py", "line": 1, "severity": "low", "wrong_if": "w"}, "code"))
+
     def test_prose_answer_without_structured_output_is_typed(self):
         # bug l: the CLI reports subtype "success" with the verdict in `result` when every StructuredOutput call
         # was rejected; callers need that text, not just a generic failure

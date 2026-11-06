@@ -162,8 +162,12 @@ class Budget:
 
 TOOLS_READ = ["Read", "Grep", "Glob", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(git grep:*)",
               "Bash(git blame:*)", "Bash(ls:*)"]
+# Python gets the same reach as JS: `node:*` already runs any script, so the project's own unittest/pytest runner and
+# `-c` probes add no new class of access. Without them 58 of 149 stored Python verifications had a run refused and
+# fell back to reading (5 of 149 executed, vs 14 of 64 for JS; 2026-11-06).
+PY_RUNNERS = [f"Bash({py} {arg}:*)" for py in ("python3", "python") for arg in ("-m unittest", "-m pytest", "-c")]
 TOOLS_RUN = TOOLS_READ + ["Bash(node:*)", "Bash(npx vitest:*)", "Bash(npx jest:*)", "Bash(npx mocha:*)",
-                          "Bash(npm test:*)", "Bash(npm run test:*)", "Bash(pytest:*)", "Bash(python3 -m pytest:*)"]
+                          "Bash(npm test:*)", "Bash(npm run test:*)", "Bash(pytest:*)"] + PY_RUNNERS
 
 
 def claude(prompt, model, schema, cwd, budget=None, tools=TOOLS_READ, effort="high", timeout=1500):
@@ -171,6 +175,7 @@ def claude(prompt, model, schema, cwd, budget=None, tools=TOOLS_READ, effort="hi
     if budget and budget.exhausted():
         raise Failed("budget exhausted")
     env = dict(os.environ)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"    # a verifier's python probe must not leave __pycache__ in the checkout
     if os.environ.get("CRUCIBLE_CLAUDE_DIR"):
         env["CLAUDE_CONFIG_DIR"] = os.path.expanduser(os.environ["CRUCIBLE_CLAUDE_DIR"])
     cmd = ["claude", "-p", "--model", model, "--effort", effort, "--output-format", "json",
