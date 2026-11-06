@@ -153,6 +153,69 @@ class TestReadiness(unittest.TestCase):
         self.assertEqual(R.check_draft(d, "## Description\nx\n## Testing\nnpm test")["status"], "pass")
 
 
+class TestCIMatrix(unittest.TestCase):
+    # three-mesh-bvh's real node.js.yml: #959 was GREEN locally on three 0.185 and failed CI on 0.159.0
+    BVH_WF = ("jobs:\n  build:\n    runs-on: ubuntu-latest\n    strategy:\n      matrix:\n        node-version: [24.x]\n"
+              "        three-version: [0.159.0, 0.168.0, latest]\n\n    steps:\n    - run: npm ci\n"
+              "    - run: npm install three@${{ matrix.three-version }}\n    - run: npm test\n")
+
+    def bvh_repo(self, installed="0.185.0", workflow=None):
+        files = {"package.json": json.dumps({"peerDependencies": {"three": ">= 0.159.0"},
+                                             "devDependencies": {"three": "^0.185.0", "@types/node": "^20"}}),
+                 ".github/workflows/node.js.yml": workflow or self.BVH_WF, "src/a.js": "1\n"}
+        if installed:
+            files["node_modules/three/package.json"] = json.dumps({"name": "three", "version": installed})
+        return make_repo(files)
+
+    def test_matrix_axes_parsing(self):
+        wf = ("strategy:\n  matrix:  # versions\n    django-version:\n      - '4.2'  # LTS\n      - \"5.0\"\n"
+              "    os: [ubuntu-latest, macos-latest]\n    include:\n      - django-version: '3.2'\n"
+              "    py: ${{ fromJSON(needs.x.outputs.py) }}\n    exp: [\"${{ inputs.v }}\", '1']\n"
+              "  fail-fast: false\nother:\n  matrix: ${{ fromJSON(x) }}\n")
+        self.assertEqual(R.matrix_axes(wf), {"django-version": ["4.2", "5.0"], "os": ["ubuntu-latest", "macos-latest"],
+                                             "exp": ["1"]})
+
+    def test_bvh_959_warns_with_untested_versions(self):
+        d = self.bvh_repo()
+        it = R.ci_matrix(d, ["src/a.js"])
+        self.assertEqual(it["status"], "warn", it)
+        self.assertIn("three 0.159.0, three 0.168.0;", it["evidence"])
+        self.assertIn("three 0.185.0", it["evidence"])
+        self.assertIn("`npm install --no-save three@0.159.0`", it["evidence"])
+        self.assertNotIn("latest", it["evidence"])  # a floating value is the installed release
+        sh(d, "git", "checkout", "-qb", "fix"); open(os.path.join(d, "src/a.js"), "w").write("2\n")
+        sh(d, "git", "commit", "-qam", "x")
+        rep = R.evaluate(d, "o__r", "main", [{"path": "src/a.js", "hunks": []}], offline=True)
+        self.assertIn(("CI dependency matrix tried locally", "warn"), [(i["item"], i["status"]) for i in rep["items"]])
+        no_install = R.ci_matrix(self.bvh_repo(installed=None), ["test/a.test.js"])  # tests ran on another machine
+        self.assertEqual(no_install["status"], "warn")
+        self.assertIn("no local install of three", no_install["evidence"])
+
+    def test_falsifiers_stay_quiet(self):
+        # the oldest version is the installed one and the rest float: nothing untested
+        wf = self.BVH_WF.replace("[0.159.0, 0.168.0, latest]", "['0.159', latest]")
+        self.assertEqual(R.ci_matrix(self.bvh_repo(installed="0.159.0", workflow=wf), ["src/a.js"])["status"], "pass")
+        # docs-only change, runtime/os axes only (node-version, os: not declared dependencies), one-value axis
+        self.assertEqual(R.ci_matrix(self.bvh_repo(), ["README.md"])["status"], "na")
+        runtime = "jobs:\n  t:\n    strategy:\n      matrix:\n        node-version: [18, 20, 22]\n        os: [a, b]\n"
+        self.assertEqual(R.ci_matrix(self.bvh_repo(workflow=runtime), ["src/a.js"])["status"], "na")
+        one = self.BVH_WF.replace("[0.159.0, 0.168.0, latest]", "[0.159.0]")
+        self.assertEqual(R.ci_matrix(self.bvh_repo(workflow=one), ["src/a.js"])["status"], "na")
+
+    def test_python_dependency_axis(self):
+        d = make_repo({"requirements-dev.txt": "# dev\nDjango>=4.2\n-e .\n",
+                       ".github/workflows/ci.yml": "jobs:\n  t:\n    strategy:\n      matrix:\n"
+                                                   "        python-version: ['3.10', '3.13']\n"
+                                                   "        django-version: ['4.2', '5.0']\n",
+                       ".venv/lib/python3.13/site-packages/django-5.0.1.dist-info/METADATA": "x\n",
+                       "app/views.py": "x = 1\n"})
+        it = R.ci_matrix(d, ["app/views.py"])
+        self.assertEqual(it["status"], "warn", it)
+        self.assertIn("Django 4.2;", it["evidence"])
+        self.assertNotIn("5.0;", it["evidence"])  # 5.0.1 installed covers 5.0
+        self.assertIn("pip install 'Django==4.2'", it["evidence"])
+
+
 class TestDraftSplit(unittest.TestCase):
     # shaped like a real draft: metadata preamble, Title/Body sections, then the author's notes after a rule
     NOTED = ("# PR draft (not opened, not pushed)\n\n> Before opening, file the issue at the bottom; see #999.\n\n"

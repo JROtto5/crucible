@@ -196,6 +196,154 @@ def api_docs_touched(files):
                  f"API lines changed at {sorted(set(api))[:4]}; docs/types touched: {docs[:4] or 'none'}")
 
 
+# CI matrix values that track the newest release; the local install is usually that one too.
+FLOATING_VERSIONS = {"latest", "stable", "current", "lts", "*", "x"}
+
+
+def _matrix_scalars(raw):
+    vals = []
+    for v in raw:
+        v = v.strip().strip("'\"").strip()
+        if v and "${{" not in v:
+            vals.append(v)
+    return vals
+
+
+def matrix_axes(text):
+    """{axis: [values]} from every `matrix:` block of a workflow file. Reads flow lists (`k: [a, b]`) and block lists
+    (`k:` then `- a`); `include`/`exclude` entries and `${{ }}` expressions are skipped. No YAML dependency."""
+    axes, lines, i = {}, text.splitlines(), 0
+    while i < len(lines):
+        m = re.match(r"^(\s*)matrix:\s*(#.*)?$", lines[i])
+        i += 1
+        if not m:
+            continue
+        ind, key_ind, cur = len(m.group(1)), None, None
+        while i < len(lines):
+            ln = lines[i]
+            s = ln.strip()
+            if not s or s.startswith("#"):
+                i += 1
+                continue
+            li = len(ln) - len(ln.lstrip())
+            if li <= ind:
+                break
+            key_ind = li if key_ind is None else key_ind
+            if li == key_ind:
+                cur = None
+                km = re.match(r"^([\w.-]+)\s*:\s*(.*?)\s*(?:#.*)?$", s)
+                if km and km.group(1) not in ("include", "exclude"):
+                    k, v = km.groups()
+                    if v.startswith("[") and v.endswith("]"):
+                        axes.setdefault(k, []).extend(_matrix_scalars(v[1:-1].split(",")))
+                    elif not v:
+                        cur = k
+            elif cur and s.startswith("- "):
+                axes.setdefault(cur, []).extend(_matrix_scalars([re.sub(r"\s+#.*$", "", s[2:])]))
+            i += 1
+    return axes
+
+
+def _norm_dep(name):
+    return re.sub(r"[-_.]+", "-", name.lower())
+
+
+def declared_deps(repo):
+    """{normalized name: (ecosystem, declared name)} from package.json and Python requirement files."""
+    deps = {}
+    pkg = read_json(os.path.join(repo, "package.json"), {}) or {}
+    for k in ("dependencies", "devDependencies", "peerDependencies", "optionalDependencies"):
+        for name in (pkg.get(k) or {}) if isinstance(pkg.get(k), dict) else ():
+            deps[_norm_dep(name)] = ("npm", name)
+    reqs = []
+    for p in glob.glob(os.path.join(repo, "requirements*.txt")):
+        with open(p, errors="replace") as fh:
+            reqs += fh.read().splitlines()
+    pyproject = os.path.join(repo, "pyproject.toml")
+    if os.path.exists(pyproject):
+        try:
+            import tomllib
+            with open(pyproject, "rb") as fh:
+                proj = (tomllib.load(fh).get("project") or {})
+            reqs += list(proj.get("dependencies") or [])
+            for group in (proj.get("optional-dependencies") or {}).values():
+                reqs += list(group or [])
+        except Exception:  # Python 3.10 has no tomllib; a malformed file is not this check's business
+            pass
+    for r in reqs:
+        m = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", r)
+        if m and not r.lstrip().startswith(("#", "-")):
+            deps.setdefault(_norm_dep(m.group(1)), ("pypi", m.group(1)))
+    return deps
+
+
+def _axis_dep(axis, deps):
+    """The declared dependency a matrix axis varies ("three-version" → three, "django" → Django), or None."""
+    a = _norm_dep(re.sub(r"[-_]versions?$", "", axis, flags=re.I))
+    if a in deps:
+        return deps[a]
+    scoped = [v for k, v in deps.items() if k.endswith("/" + a) and not k.startswith("@types/")]
+    return scoped[0] if len(scoped) == 1 else None
+
+
+def installed_version(repo, eco, name):
+    if eco == "npm":
+        return (read_json(os.path.join(repo, "node_modules", name, "package.json"), {}) or {}).get("version")
+    want = _norm_dep(name)
+    for venv in (".venv", "venv", "env"):
+        for d in glob.glob(os.path.join(repo, venv, "lib", "python*", "site-packages", "*.dist-info")):
+            stem = os.path.basename(d)[:-len(".dist-info")]
+            dist, _, ver = stem.rpartition("-")
+            if dist and _norm_dep(dist) == want:
+                return ver
+    return None
+
+
+def _version_covered(value, installed):
+    v = value.lower().lstrip("^~=v").rstrip(".x*").rstrip(".")
+    if value.lower() in FLOATING_VERSIONS:
+        return True
+    return bool(installed) and (installed == v or installed.startswith(v + "."))
+
+
+def ci_matrix(repo, paths):
+    """CI that runs the tests against several versions of a dependency (three-mesh-bvh: three 0.159.0, 0.168.0,
+    latest) catches what local checks miss, since those only ran the one installed version. three-mesh-bvh #959 was
+    GREEN locally on three 0.185 and failed CI on 0.159. Names the untested versions and how to try one."""
+    name = "CI dependency matrix tried locally"
+    if not any(CODE_EXT_RX.search(p) for p in paths):
+        return _item(name, "na", "no code files changed")
+    deps, untested, seen, matched = declared_deps(repo), [], set(), set()
+    for wf in sorted(glob.glob(os.path.join(repo, ".github", "workflows", "*.y*ml"))):
+        try:
+            with open(wf, errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for axis, values in matrix_axes(text).items():
+            dep = _axis_dep(axis, deps)
+            if not dep or len(values) < 2:
+                continue
+            eco, dname = dep
+            matched.add(dname)
+            have = installed_version(repo, eco, dname)
+            for v in values:
+                if (dname, v) not in seen and not _version_covered(v, have):
+                    seen.add((dname, v))
+                    untested.append((os.path.relpath(wf, repo), eco, dname, v, have))
+    if not matched:
+        return _item(name, "na", "no CI matrix over a declared dependency")
+    if not untested:
+        return _item(name, "pass", f"every CI matrix version of {', '.join(sorted(matched))} matches the installed one")
+    wf, eco, dname, v, have = untested[0]
+    vers = ", ".join(f"{d} {ver}" for _, _, d, ver, _ in untested[:6])
+    try_cmd = (f"npm install --no-save {dname}@{v}" if eco == "npm" else f"pip install '{dname}=={v}'")
+    ran = (f"local checks used {dname} {have}" if have else
+           f"there's no local install of {dname} here, so check which version the tests ran on")
+    return _item(name, "warn", f"{wf} tests {vers}; {ran}. Try the oldest before submitting: `{try_cmd}`, re-run "
+                 f"the tests, then restore the lockfile install; waive this item once done")
+
+
 def changelog(repo, paths):
     if os.path.isdir(os.path.join(repo, ".changeset")):
         new = [p for p in paths if p.startswith(".changeset/") and p.endswith(".md")]
@@ -464,6 +612,7 @@ def evaluate(repo, project, base, files, draft=None, me="JROtto5", offline=False
                else f"the linked number(s) {['#' + str(n) for n in prs]} are pull requests, not issues" if prs
                else "no 'Fixes #N' / 'Related issue: #N' / issue URL in the draft (a bare #N doesn't count)")),
         tests_touched(paths),
+        ci_matrix(repo, paths),
         api_docs_touched(files),
         changelog(repo, paths),
         commit_style(repo, base, subjects),
