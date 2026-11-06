@@ -214,6 +214,33 @@ class TestCIMatrix(unittest.TestCase):
         one = self.BVH_WF.replace("[0.159.0, 0.168.0, latest]", "[0.159.0]")
         self.assertEqual(R.ci_matrix(self.bvh_repo(workflow=one), ["src/a.js"])["status"], "na")
 
+    def test_matrix_axes_unterminated_flow_list(self):
+        wf = "  matrix:\n    three-version: [0.159.0,\n  steps:\n    - run: x\n    matrix:\n      a: [1, 2]\n"
+        self.assertEqual(R.matrix_axes(wf), {"a": ["1", "2"]})  # the broken list is dropped, the next block still read
+
+    def test_oldest_per_dependency(self):
+        d = make_repo({"package.json": json.dumps({"devDependencies": {"three": "^0.185.0"}}),
+                       "requirements.txt": "Django\n",
+                       "node_modules/three/package.json": json.dumps({"version": "0.185.0"}),
+                       ".github/workflows/ci.yml": "jobs:\n  t:\n    strategy:\n      matrix:\n"
+                                                   "        three-version: [latest, 0.168.0, 0.159.0]\n"
+                                                   "        django-version: ['3.10', '3.9']\n"})
+        ev = R.ci_matrix(d, ["src/a.js"])["evidence"]
+        self.assertIn("(`npm install --no-save three@0.159.0`; `pip install 'Django==3.9'`)", ev)  # 3.9 < 3.10
+        self.assertIn("local checks used three 0.185.0", ev)
+
+    @unittest.skipIf(sys.version_info < (3, 11), "pyproject is read with tomllib (3.11+)")
+    def test_pyproject_dependency(self):
+        d = make_repo({"pyproject.toml": "[project]\nname = 'x'\ndependencies = ['numpy>=1.24']\n"
+                                         "[project.optional-dependencies]\ndev = ['pytest']\n",
+                       ".github/workflows/ci.yml": "jobs:\n  t:\n    strategy:\n      matrix:\n"
+                                                   "        numpy-version: ['1.24', '2.1']\n",
+                       "x.py": "1\n"})
+        self.assertEqual(set(R.declared_deps(d)), {"numpy", "pytest"})
+        it = R.ci_matrix(d, ["x.py"])
+        self.assertEqual(it["status"], "warn")
+        self.assertIn("pip install 'numpy==1.24'", it["evidence"])
+
     def test_python_dependency_axis(self):
         d = make_repo({"requirements-dev.txt": "# dev\nDjango>=4.2\n-e .\n",
                        ".github/workflows/ci.yml": "jobs:\n  t:\n    strategy:\n      matrix:\n"

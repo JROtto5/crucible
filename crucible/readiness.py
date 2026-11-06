@@ -241,6 +241,9 @@ def matrix_axes(text):
                 if km and km.group(1) not in ("include", "exclude"):
                     k, v = km.groups()
                     while v.startswith("[") and "]" not in v and i + 1 < len(lines):  # flow list over several lines
+                        nxt = lines[i + 1]
+                        if nxt.strip() and len(nxt) - len(nxt.lstrip()) <= ind:
+                            break  # unterminated: never read past the matrix block
                         i += 1
                         v += " " + re.sub(r"(^|\s+)#.*$", "", lines[i].strip())  # also a comment-only line
                     if v.startswith("[") and v.endswith("]"):
