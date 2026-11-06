@@ -1,11 +1,12 @@
 """Deterministic 'ready to submit?' checklist. Each item: {item, status: pass|fail|warn|na, evidence}."""
-import glob, os, re, time
+import glob, os, re, subprocess, time
 from . import util
 from .diff import formatting_only_hunks
 from .util import CODE_EXT_RX, ISSUE_KW, TEST_PATH_RX, gh_json, git, project_dir, read_json, upstream_slug, write_json
 
-TEMPLATES = [".github/PULL_REQUEST_TEMPLATE.md", ".github/pull_request_template.md", "PULL_REQUEST_TEMPLATE.md",
-             "docs/pull_request_template.md", ".github/PULL_REQUEST_TEMPLATE/pull_request_template.md"]
+# Where GitHub looks for a PR template, in this order; the file name is matched case-insensitively, as GitHub does.
+TEMPLATE_DIRS = (".github", "", "docs")
+TEMPLATE_NAME = "pull_request_template.md"
 CONVENTIONAL_RX = re.compile(r"^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([^)]+\))?!?: .+")
 # An issue link needs a linking keyword or an /issues/ URL. A bare "#123" is often a PR reference ("overlaps #2693"),
 # so it does not count.
@@ -102,12 +103,41 @@ def submitted_text(text):
     return (d["title"] + "\n\n" if d["title"] else "") + d["body"]
 
 
+def _dir_entries(repo, d):
+    """Names in directory `d` (relative, "" = root): on disk plus tracked in HEAD. A sparse checkout leaves tracked
+    files off disk (supabase/supabase's clone had no .github/ at all), and GitHub still uses them."""
+    names = set()
+    try:
+        names.update(os.listdir(os.path.join(repo, d) if d else repo))
+    except OSError:
+        pass
+    out = git(repo, "ls-tree", "--name-only", "-z", "HEAD", "--", d + "/" if d else ".", check=False)
+    names.update(n.rsplit("/", 1)[-1] for n in out.split("\0") if n)
+    return names
+
+
+def _read_tracked(repo, rel):
+    p = os.path.join(repo, rel)
+    if os.path.isfile(p):
+        return open(p, errors="replace").read()
+    r = subprocess.run(["git", "-C", repo, "show", "HEAD:" + rel], capture_output=True)
+    return r.stdout.decode(errors="replace") if r.returncode == 0 else None
+
+
 def template_text(repo):
     """-> (relative path, raw text) of the repo's PR template, or (None, "")."""
-    for t in TEMPLATES:
-        p = os.path.join(repo, t)
-        if os.path.exists(p):
-            return t, open(p, errors="replace").read()
+    tried = []
+    for d in TEMPLATE_DIRS:
+        tried += [(d, n) for n in sorted(_dir_entries(repo, d)) if n.lower() == TEMPLATE_NAME]
+    # Multiple-template form: .github/PULL_REQUEST_TEMPLATE/*.md (only used via ?template=, so it comes last).
+    for sub in sorted(n for n in _dir_entries(repo, ".github") if n.lower() == "pull_request_template"):
+        tried += [(".github/" + sub, n) for n in sorted(_dir_entries(repo, ".github/" + sub))
+                  if n.lower() == TEMPLATE_NAME]
+    for d, n in tried:
+        rel = f"{d}/{n}" if d else n
+        raw = _read_tracked(repo, rel)
+        if raw is not None:
+            return rel, raw
     return None, ""
 
 

@@ -152,6 +152,36 @@ class TestReadiness(unittest.TestCase):
         self.assertEqual(R.check_draft(d, "## Description\nx")["status"], "fail")
         self.assertEqual(R.check_draft(d, "## Description\nx\n## Testing\nnpm test")["status"], "pass")
 
+    def test_template_tracked_but_not_on_disk(self):
+        # supabase/supabase #53101: a sparse checkout had no .github/ on disk, and readiness said "no PR template"
+        d = make_repo({".github/pull_request_template.md": "## What kind of change\n\n## What is the current behavior\n",
+                       "apps/docs/a.mdx": "x\n"})
+        sh(d, "git", "sparse-checkout", "set", "apps/docs")
+        self.assertFalse(os.path.exists(os.path.join(d, ".github")))
+        self.assertEqual(R.template_text(d)[0], ".github/pull_request_template.md")
+        item = R.check_draft(d, "## What kind of change\ndocs\n")
+        self.assertEqual(item["status"], "fail")
+        self.assertIn("What is the current behavior", item["evidence"])
+
+    def test_template_name_any_case_and_location(self):
+        for rel in ("Pull_Request_Template.md", "docs/PULL_REQUEST_TEMPLATE.md",
+                    ".github/PULL_REQUEST_TEMPLATE/pull_request_template.md"):
+            d = make_repo({rel: "## Summary\n"})
+            self.assertEqual(R.template_text(d), (rel, "## Summary\n"), rel)
+        # .github wins over the root, as on GitHub
+        d = make_repo({"pull_request_template.md": "## Root\n", ".github/pull_request_template.md": "## Hub\n"})
+        self.assertEqual(R.template_text(d)[0], ".github/pull_request_template.md")
+        # falsifiers: near-miss names and other templates are not the PR template
+        d = make_repo({".github/pull_request_template.md.bak": "## A\n", ".github/ISSUE_TEMPLATE/bug.md": "## B\n",
+                       "src/pull_request_template.md": "## C\n"})
+        self.assertEqual(R.template_text(d), (None, ""))
+        self.assertEqual(R.check_draft(d, "x" * 300)["status"], "pass")
+        # a directory that isn't a git repo still works from disk
+        d = tempfile.mkdtemp(prefix="crucible-nogit-")
+        os.makedirs(os.path.join(d, ".github"))
+        open(os.path.join(d, ".github", "PULL_REQUEST_TEMPLATE.md"), "w").write("## X\n")
+        self.assertEqual(R.template_text(d)[0], ".github/PULL_REQUEST_TEMPLATE.md")
+
 
 class TestCIMatrix(unittest.TestCase):
     # three-mesh-bvh's real node.js.yml: #959 was GREEN locally on three 0.185 and failed CI on 0.159.0
