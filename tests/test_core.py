@@ -217,6 +217,8 @@ class TestCIMatrix(unittest.TestCase):
     def test_matrix_axes_unterminated_flow_list(self):
         wf = "  matrix:\n    three-version: [0.159.0,\n  steps:\n    - run: x\n    matrix:\n      a: [1, 2]\n"
         self.assertEqual(R.matrix_axes(wf), {"a": ["1", "2"]})  # the broken list is dropped, the next block still read
+        dedented = "  matrix:\n    py: ['3.10',\n# 3.11 is flaky upstream\n      '3.12']\n"  # a column-0 comment isn't the end
+        self.assertEqual(R.matrix_axes(dedented), {"py": ["3.10", "3.12"]})
 
     def test_oldest_per_dependency(self):
         d = make_repo({"package.json": json.dumps({"devDependencies": {"three": "^0.185.0"}}),

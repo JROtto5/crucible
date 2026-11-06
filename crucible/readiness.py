@@ -242,7 +242,7 @@ def matrix_axes(text):
                     k, v = km.groups()
                     while v.startswith("[") and "]" not in v and i + 1 < len(lines):  # flow list over several lines
                         nxt = lines[i + 1]
-                        if nxt.strip() and len(nxt) - len(nxt.lstrip()) <= ind:
+                        if nxt.strip() and not nxt.lstrip().startswith("#") and len(nxt) - len(nxt.lstrip()) <= ind:
                             break  # unterminated: never read past the matrix block
                         i += 1
                         v += " " + re.sub(r"(^|\s+)#.*$", "", lines[i].strip())  # also a comment-only line
