@@ -88,7 +88,7 @@ def replay(root, include_self=False):
          "low_cheap": {"decided": 0, "lost": collections.Counter(),
                        "downgraded": collections.Counter(), "extra_kept": 0, "lost_fixed": [], "examples": [],
                        "sightings": 0, "sightings_lost": 0, "sightings_extra": 0},
-         "repeat_full": {"reviews": 0, "cost": 0.0}}
+         "repeat_full": {"reviews": 0, "cost": 0.0}, "amend_incremental": {"reviews": 0, "cost": 0.0}}
     seen, decided, fixed = set(), {}, set()
     for p, rev in sorted(_reviews(root, include_self), key=lambda x: x[1].get("started", "")):
         r["reviews"] += 1
@@ -106,6 +106,9 @@ def replay(root, include_self=False):
         if key in seen and not rev.get("incremental"):
             r["repeat_full"]["reviews"] += 1
             r["repeat_full"]["cost"] += rev.get("cost_usd") or 0
+        if (rev.get("incremental") or {}).get("amended"):
+            r["amend_incremental"]["reviews"] += 1
+            r["amend_incremental"]["cost"] += rev.get("cost_usd") or 0
         seen.add(key)
         if change_kind(_files(rev)) == "docs":
             r["docs"]["reviews"] += 1
@@ -168,7 +171,7 @@ def safe(lost, downgraded=None):
 def replay_report(r):
     n, ns = r["reviews"] or 1, r["split"] or 1
     raw = r["raw"] or 1
-    lc, dc, rf = r["low_cheap"], r["docs"], r["repeat_full"]
+    lc, dc, rf, ai = r["low_cheap"], r["docs"], r["repeat_full"], r["amend_incremental"]
     after_dropped = r["dropped"] - lc["sightings_extra"] + lc["sightings_lost"]
     sev = lambda c: ", ".join(f"{c[s]} {s}" for s in SEV if c[s]) or "none"
     lines = [
@@ -194,5 +197,6 @@ def replay_report(r):
         lines.append(f"  - [{s}] {t[:90]} ({repo.replace('__', '/')})")
     lines += ["",
               f"Repeat full reviews (an amended commit on a branch already reviewed on the same base, so not "
-              f"incremental): {rf['reviews']} of {r['reviews']} reviews, ${rf['cost']:.2f} of ${r['cost']:.2f}."]
+              f"incremental): {rf['reviews']} of {r['reviews']} reviews, ${rf['cost']:.2f} of ${r['cost']:.2f}. "
+              f"Amended commits re-reviewed incrementally: {ai['reviews']} (${ai['cost']:.2f})."]
     return "\n".join(lines)

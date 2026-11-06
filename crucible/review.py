@@ -295,8 +295,17 @@ def verify_tiered(f, code, repo, budget, tiers, fresh=False, since=""):
     return v, trail
 
 
+def is_ancestor(repo, a, b):
+    return subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", a, b], capture_output=True).returncode == 0
+
+
 def previous_review(repo, project, sha, base):
-    """The newest complete review of an ancestor commit on this branch with the same merge-base, or (None, None)."""
+    """The newest complete review of an earlier commit on this branch with the same merge-base, or (None, None).
+    The commit needn't be an ancestor of HEAD: after `git commit --amend` (or a squash) it has left HEAD's history,
+    but with the same merge-base `git diff prev..HEAD` (two-dot compares trees) is still exactly what changed between
+    the rounds. Before this, 38 of 57 upstream reviews were full re-reviews of an amended commit (67% of spend).
+    The old commit must still exist (not garbage-collected), and a non-ancestor must share a changed file with HEAD:
+    a branch name reused for an unrelated change starts over with a full review."""
     branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD", check=False)
     hist = (read_json(os.path.join(project_dir(project), "branches.json"), {}) or {}).get(branch, [])
     for prev in reversed(hist):
@@ -307,8 +316,12 @@ def previous_review(repo, project, sha, base):
             continue
         if rev.get("budget_exhausted"):
             continue
-        if subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", prev, sha]).returncode != 0:
+        if subprocess.run(["git", "-C", repo, "cat-file", "-e", f"{prev}^{{commit}}"], capture_output=True).returncode:
             continue
+        if not is_ancestor(repo, prev, sha):
+            names = lambda r: {p for p in git(repo, "diff", "--name-only", "-z", f"{base}..{r}", check=False).split("\0") if p}
+            if not names(prev) & names(sha):
+                continue
         return prev, rev
     return None, None
 
@@ -493,10 +506,11 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             carried, reverify = split_prev(prev_rev.get("findings", []), ranges, hunks, prev_sha, changed, known)
             carried_dropped, _ = split_prev(prev_rev.get("dropped", []), ranges, hunks, prev_sha)
             chunks, uncovered = diff_mod.chunk(dfiles)
-            log(f"  incremental: since {prev_sha[:10]} · {len(dfiles)} changed file(s) to review · "
+            amended = not is_ancestor(repo, prev_sha, sha)     # an amend or squash of the reviewed commit
+            log(f"  incremental: since {prev_sha[:10]}{' (amended)' if amended else ''} · {len(dfiles)} changed file(s) to review · "
                 f"{len(carried)} finding(s) carried · {len(reverify)} to re-verify (use --full for a full review)")
             record["incremental"] = {"from": prev_sha, "files": [f["path"] for f in dfiles], "carried": len(carried),
-                                     "reverified": len(reverify)}
+                                     "reverified": len(reverify), "amended": amended}
         else:
             chunks, uncovered = diff_mod.chunk(files)
         tiers = verify_tiers(verify_model, no_tiers)

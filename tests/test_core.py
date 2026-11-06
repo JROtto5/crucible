@@ -790,7 +790,7 @@ class TestIncremental(unittest.TestCase):
             self.assertIsNone(V.absence_anchor({"title": t}), t)
         self.assertEqual(V.absence_anchor({"title": "x", "anchor_files": ["t.py", "", 3]}), ["t.py"])
 
-    def test_previous_review_requires_ancestor_same_base_and_complete(self):
+    def test_previous_review_same_base_complete_and_still_present(self):
         with tempfile.TemporaryDirectory() as d:
             home = os.path.join(d, "home"); repo = os.path.join(d, "r"); os.makedirs(repo)
             g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True,
@@ -812,6 +812,24 @@ class TestIncremental(unittest.TestCase):
                 self.assertEqual(V.previous_review(repo, proj, c2, "0" * 40), (None, None))       # base moved
                 U.write_json(os.path.join(home, "reviews", proj, c1, "review.json"), dict(rev, coverage={"complete": False}))
                 self.assertEqual(V.previous_review(repo, proj, c2, base), (None, None))          # incomplete
+                U.write_json(os.path.join(home, "reviews", proj, c1, "review.json"), rev)
+                # c1 amended (branch x reset to c1 first) is no ancestor of c1', but has the same merge-base: still the previous round
+                g("checkout", "-qB", "x", c1); open(os.path.join(repo, "f"), "w").write("1a"); g("commit", "-q", "--amend", "-am", "c1'")
+                c1a = g("rev-parse", "HEAD")
+                self.assertFalse(V.is_ancestor(repo, c1, c1a))
+                self.assertEqual(V.previous_review(repo, proj, c1a, base)[0], c1)
+                # a commit that no longer exists (garbage-collected) can't be diffed against
+                U.write_json(os.path.join(home, "projects", proj, "branches.json"), {"x": ["f" * 40, c1]})
+                os.makedirs(os.path.join(home, "reviews", proj, "f" * 40))
+                U.write_json(os.path.join(home, "reviews", proj, "f" * 40, "review.json"), rev)
+                self.assertEqual(V.previous_review(repo, proj, c1a, base)[0], c1)
+                U.write_json(os.path.join(home, "projects", proj, "branches.json"), {"x": ["f" * 40]})
+                self.assertEqual(V.previous_review(repo, proj, c1a, base), (None, None))
+                # the branch name reused for an unrelated change (no changed file in common): start over
+                U.write_json(os.path.join(home, "projects", proj, "branches.json"), {"x": [c1]})
+                g("checkout", "-qB", "x", base); open(os.path.join(repo, "other"), "w").write("o"); g("add", "other")
+                g("commit", "-qm", "unrelated"); u = g("rev-parse", "HEAD")
+                self.assertEqual(V.previous_review(repo, proj, u, base), (None, None))
             finally:
                 V.HOME, U.HOME = old
 
@@ -1109,6 +1127,72 @@ class TestRunReviewIncremental(unittest.TestCase):
                 self.assertNotIn("g returns a constant", kept_titles)        # dropped by the re-check
                 self.assertIn("g returns a constant", {f["title"] for f in r2["dropped"]})
                 self.assertTrue(r2["coverage"]["complete"])
+            finally:
+                V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
+                if olds[3] is None:
+                    os.environ.pop("CRUCIBLE_CACHE", None)
+                else:
+                    os.environ["CRUCIBLE_CACHE"] = olds[3]
+
+
+class TestRunReviewAmended(unittest.TestCase):
+    """Round 2 after `git commit --amend`: the reviewed commit is no ancestor of HEAD any more, but with the same
+    merge-base only the files changed between the rounds are reviewed again (38 of 57 upstream reviews were full
+    re-reviews of an amend)."""
+
+    def test_amend_is_incremental(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo, home = os.path.join(d, "r"), os.path.join(d, "home")
+            os.makedirs(os.path.join(repo, "src"))
+            env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",
+                       GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+            g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True, env=env).stdout.decode().strip()
+            w = lambda p, t: open(os.path.join(repo, p), "w").write(t)
+            g("init", "-q", "-b", "main"); w("src/a.js", "export const a = 1;\n"); w("src/b.js", "export const b = 1;\n")
+            g("add", "-A"); g("commit", "-qm", "base"); g("checkout", "-qb", "x")
+            w("src/a.js", "export const a = 1;\nexport function f(xs) { return xs[xs.length]; }\n")
+            w("src/b.js", "export const b = 1;\nexport function g() { return 2; }\n")
+            g("commit", "-qam", "add f and g")
+            passes = []
+
+            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
+                if "findings" in schema["properties"]:
+                    passes.append(prompt)
+                    found = [{"severity": "medium", "file": "src/b.js", "line": 2, "title": "g returns a constant",
+                              "problem": "callers expect the input back", "caused_by_this_change": True,
+                              "reachable_in_real_use": True, "wrong_if": "callers want 2", "fix": "return x"}] \
+                        if "export function g" in prompt else []
+                    return {"summary": "s", "findings": found}, 0.01
+                return {"keep": True, "severity": "medium", "method": "read", "actions": "read", "evidence": "seen",
+                        "confidence": "high"}, 0.001
+
+            olds = (V.HOME, U.HOME, V.claude, os.environ.get("CRUCIBLE_CACHE"))
+            V.HOME = U.HOME = home
+            os.environ["CRUCIBLE_CACHE"] = os.path.join(home, "cache")
+            V.claude = fake
+            try:
+                d1 = V.run_review(repo, "main", offline=True, skip_checks=True, no_tiers=True, log=lambda *_: None)
+                r1 = U.read_json(os.path.join(d1, "review.json"))
+                self.assertEqual(r1["status"], "done", r1.get("reason"))
+                # round 2: amend a.js only; the round-1 commit leaves HEAD's history
+                w("src/a.js", "export const a = 1;\nexport function f(xs) { return xs[xs.length - 1]; }\n")
+                g("commit", "-q", "--amend", "-am", "add f and g")
+                passes.clear()
+                d2 = V.run_review(repo, "main", offline=True, skip_checks=True, no_tiers=True, log=lambda *_: None)
+                r2 = U.read_json(os.path.join(d2, "review.json"))
+                self.assertEqual(r2["status"], "done", r2.get("reason"))
+                inc = r2.get("incremental") or {}
+                self.assertEqual((inc.get("from"), inc.get("files"), inc.get("amended")), (r1["sha"], ["src/a.js"], True))
+                self.assertEqual(len(passes), 1)
+                self.assertNotIn("export function g", passes[0])           # b.js's diff isn't sent again
+                self.assertEqual(inc.get("carried"), 1)                     # b.js untouched by the amend
+                self.assertIn("g returns a constant", {f["title"] for f in r2["findings"]})
+                self.assertTrue(r2["coverage"]["complete"])
+                # --full still reviews everything
+                passes.clear()
+                d3 = V.run_review(repo, "main", offline=True, skip_checks=True, no_tiers=True, full=True, force=True,
+                                  log=lambda *_: None)
+                self.assertNotIn("incremental", U.read_json(os.path.join(d3, "review.json")))
             finally:
                 V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
                 if olds[3] is None:
@@ -1581,11 +1665,13 @@ class TestRouting(unittest.TestCase):
             self._store(root, "o__p", "s1", "2026-11-05T01", [low_lost, med_down, settled], [extra, not_low])
             self._store(root, "o__p", "s2", "2026-11-05T02", [med_lost], answers={"CR-2": {"disposition": "fixed"}})
             self._store(root, "o__p", "s3", "2026-11-05T03", files=["README.md"])
+            self._store(root, "o__p", "s5", "2026-11-05T05", cost_usd=0.25,     # an amend re-reviewed incrementally
+                        incremental={"from": "s3", "files": ["src/a.js"], "amended": True})
             self._store(root, "JROtto5__crucible", "s4", "2026-11-05T04",
                         [self._f("CR-9", "important", "self", {"keep": False, "severity": "low"},
                                  {"keep": True, "severity": "important"})])
             r = RT.replay(root)
-            self.assertEqual(r["reviews"], 3)                     # crucible's own reviews are left out by default
+            self.assertEqual(r["reviews"], 4)                     # crucible's own reviews are left out by default
             lc = r["low_cheap"]
             self.assertEqual(lc["decided"], 3)                    # CR-1, "cost grows" (2 sightings), CR-3
             self.assertEqual(lc["sightings"], 4)
@@ -1595,12 +1681,14 @@ class TestRouting(unittest.TestCase):
             self.assertEqual([t for _, _, t in lc["lost_fixed"]], ["cost grows"])
             self.assertFalse(RT.safe(lc["lost"], lc["downgraded"]))
             self.assertEqual((r["docs"]["reviews"], r["repeat_full"]["reviews"]), (1, 2))
+            self.assertEqual(r["amend_incremental"], {"reviews": 1, "cost": 0.25})
             self.assertEqual(r["raw"], 6)
             self.assertEqual(r["dropped"], 2)
             text = RT.replay_report(r)
             self.assertIn("Fails the bar: stays off", text)
             self.assertIn("lost and later fixed by the author: [medium] cost grows", text)
             self.assertIn("Refuted share would go 33% → 50%", text)   # (2 dropped - 1 extra kept + 2 lost) of 6
+            self.assertIn("Amended commits re-reviewed incrementally: 1 ($0.25)", text)
             self.assertEqual(RT.replay(root, include_self=True)["low_cheap"]["lost"]["important"], 1)
 
     def test_safe_bar(self):
