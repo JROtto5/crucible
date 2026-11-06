@@ -1,7 +1,8 @@
 """Deterministic 'ready to submit?' checklist. Each item: {item, status: pass|fail|warn|na, evidence}."""
-import glob, os, re
+import glob, os, re, time
+from . import util
 from .diff import formatting_only_hunks
-from .util import CODE_EXT_RX, ISSUE_KW, TEST_PATH_RX, gh_json, git, project_dir, read_json, upstream_slug
+from .util import CODE_EXT_RX, ISSUE_KW, TEST_PATH_RX, gh_json, git, project_dir, read_json, upstream_slug, write_json
 
 TEMPLATES = [".github/PULL_REQUEST_TEMPLATE.md", ".github/pull_request_template.md", "PULL_REQUEST_TEMPLATE.md",
              "docs/pull_request_template.md", ".github/PULL_REQUEST_TEMPLATE/pull_request_template.md"]
@@ -274,7 +275,7 @@ SHARED_FILE_RX = re.compile(r"(^|/)(CHANGELOG[^/]*|CHANGES[^/]*|HISTORY[^/]*|NEW
 OPEN_PRS_QUERY = """query($owner:String!,$name:String!,$after:String){repository(owner:$owner,name:$name){
  pullRequests(states:OPEN,first:100,after:$after,orderBy:{field:UPDATED_AT,direction:DESC}){
   totalCount pageInfo{hasNextPage endCursor}
-  nodes{number url isDraft author{login __typename} files(first:100){nodes{path}}}}}}"""
+  nodes{number url isDraft headRefOid author{login __typename} files(first:100){nodes{path}}}}}}"""
 OPEN_PR_PAGES = 3  # the 300 most recently updated open PRs, at most 3 GraphQL calls
 
 
@@ -297,6 +298,7 @@ def open_prs(slug, pages=OPEN_PR_PAGES):
         for n in conn.get("nodes") or []:
             author = n.get("author") or {}
             prs.append({"number": n.get("number"), "url": n.get("url"), "draft": bool(n.get("isDraft")),
+                        "head": n.get("headRefOid"),
                         "author": author.get("login"), "bot": author.get("__typename") == "Bot",
                         "paths": [f["path"] for f in (n.get("files") or {}).get("nodes") or []]})
         page = conn.get("pageInfo") or {}
@@ -324,13 +326,31 @@ def _changed_old_lines(hunks):
     return out
 
 
-def _pr_hunks(slug, number):
-    """{path: [(start, end)] on the base side, 3 context lines included} for one PR, or None if it can't be read.
-    A pure rename maps to []. Any other file GitHub sends without a patch (binary, mode-only, or a diff too large to
-    show) maps to None: it can't be compared."""
+FETCH_FAILED = "fetch failed"  # _pr_hunks: the API call itself failed (rate limit, network), unlike "no patch"
+HUNK_CACHE_TTL = 7 * 86400  # a PR's diff is fixed by its head SHA; the TTL only bounds a retargeted base branch
+
+
+def _hunk_cache_path(slug, number):
+    d = os.path.join(util.HOME, "cache", "pr-hunks", slug.replace("/", "__"))
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, f"{int(number)}.json")
+
+
+def _pr_hunks(slug, number, head=None):
+    """{path: [(start, end)] on the base side, 3 context lines included} for one PR, or FETCH_FAILED if the API call
+    failed. A pure rename maps to []. Any other file GitHub sends without a patch (binary, mode-only, or a diff too
+    large to show) maps to None: it can't be compared.
+
+    With the PR's head SHA the result is cached (one file per PR, overwritten when the head moves), so later review
+    rounds on a busy repo don't refetch up to OVERLAP_CANDIDATES patches over REST each time."""
+    path = _hunk_cache_path(slug, number) if head else None
+    if path:
+        hit = read_json(path) or {}
+        if hit.get("head") == head and time.time() - hit.get("at", 0) < HUNK_CACHE_TTL and isinstance(hit.get("hunks"), dict):
+            return {f: (None if r is None else [tuple(x) for x in r]) for f, r in hit["hunks"].items()}
     data = gh_json(f"repos/{slug}/pulls/{number}/files?per_page=100")
     if not isinstance(data, list):
-        return None
+        return FETCH_FAILED
     out = {}
     for f in data:
         found = HUNK_RX.findall(f.get("patch") or "")
@@ -340,6 +360,11 @@ def _pr_hunks(slug, number):
             out[f.get("filename")] = [(int(a), int(a) + max(int(n) if n else 1, 1) - 1) for a, n in found]
         else:
             out[f.get("filename")] = None
+    if path:
+        try:
+            write_json(path, {"head": head, "at": time.time(), "hunks": out})
+        except OSError:
+            pass  # a read-only home only costs the refetch next round
     return out
 
 
@@ -376,11 +401,11 @@ def overlapping_prs(repo, files, me=None):
     cands.sort(key=lambda c: -len(c[1]) / max(len(c[0]["paths"]), 1))
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(8) as ex:
-        patches = list(ex.map(lambda c: _pr_hunks(slug, c[0]["number"]), cands[:OVERLAP_CANDIDATES]))
-    hits, distant, unread = [], [], []
+        patches = list(ex.map(lambda c: _pr_hunks(slug, c[0]["number"], c[0].get("head")), cands[:OVERLAP_CANDIDATES]))
+    hits, distant, unread, failed = [], [], [], []
     for (pr, same), hunks in zip(cands, patches):
-        if hunks is None:
-            unread.append(pr["number"])
+        if hunks is FETCH_FAILED:
+            failed.append(pr["number"])
             continue
         meet = [p for p in same if p in added or any(a <= n <= b for a, b in hunks.get(p) or [] for n in ours[p])]
         if meet:
@@ -398,8 +423,11 @@ def overlapping_prs(repo, files, me=None):
                      f"({nums([c[0]['number'] for c in cands[OVERLAP_CANDIDATES:]])})")
     if unread:
         notes.append(f"{len(unread)} couldn't be compared, no readable patch ({nums(unread)})")
+    if failed:
+        notes.append(f"{len(failed)} couldn't be fetched, the GitHub API call failed (rate limit or network; "
+                     f"re-run later) ({nums(failed)})")
     if not hits:
-        uncompared = unread or len(cands) > OVERLAP_CANDIDATES
+        uncompared = unread or failed or len(cands) > OVERLAP_CANDIDATES
         return _item(name, "warn" if uncompared else "pass", "; ".join(notes))
     shown = "; ".join(f"#{pr['number']}{' (draft)' if pr['draft'] else ''} by {pr['author']} "
                       f"({len(meet)} of its {len(pr['paths'])} files): "

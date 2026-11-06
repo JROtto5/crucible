@@ -1080,10 +1080,49 @@ class TestOverlappingPRs(unittest.TestCase):
                            "c2": self.page([], 999, "c3"), "c3": self.page([], 999, "c4")}, {})
         prs, total = R.open_prs("o/r")
         self.assertEqual((prs, total, len(calls)), ([], 999, R.OPEN_PR_PAGES))
-        calls = self.stub({None: self.page([(7003, "b", "User", ["src/Library.tsx"])], 1)}, {})  # patch unreadable
+        calls = self.stub({None: self.page([(7003, "b", "User", ["src/Library.tsx"])], 1)}, {})  # files call fails
         it = R.overlapping_prs(".", self.OURS, "me")
         self.assertEqual(it["status"], "warn")
-        self.assertIn("1 couldn't be compared, no readable patch (#7003)", it["evidence"])
+        # An API failure (gamescope, 2026-11-06: REST quota out) is not a fact about the PR's patch
+        self.assertIn("1 couldn't be fetched, the GitHub API call failed", it["evidence"])
+        self.assertNotIn("no readable patch", it["evidence"])
+
+    def test_patches_are_cached_by_head_sha(self):
+        """Review rounds on a busy repo (gamescope: 151 open PRs, 70 sharing a file) used to refetch the same 20
+        patches over REST every round. A PR's diff is fixed by its head SHA, so only a moved head is refetched."""
+        def page(heads):
+            pg = self.page([(n, "u", "User", ["src/Library.tsx"]) for n in sorted(heads)], len(heads))
+            for node in pg["data"]["repository"]["pullRequests"]["nodes"]:
+                node["headRefOid"] = heads[node["number"]]
+            return pg
+        near = [{"filename": "src/Library.tsx", "patch": "@@ -378,6 +378,6 @@"}]
+        far = [{"filename": "src/Library.tsx", "patch": "@@ -10,6 +10,6 @@"}]
+        rest = lambda calls: sorted(int(c[0].split("/pulls/")[1].split("/")[0]) for c in calls if c[0] != "graphql")
+        calls = self.stub({None: page({8001: "a1", 8002: "b1"})}, {8001: far, 8002: far})
+        self.assertEqual(R.overlapping_prs(".", self.OURS, "me")["status"], "pass")
+        self.assertEqual(rest(calls), [8001, 8002])
+        calls = self.stub({None: page({8001: "a1", 8002: "b1"})}, {8001: near, 8002: near})  # same heads
+        self.assertEqual(R.overlapping_prs(".", self.OURS, "me")["status"], "pass")   # cached hunks, not refetched
+        self.assertEqual(rest(calls), [])
+        calls = self.stub({None: page({8001: "a1", 8002: "b2"})}, {8001: near, 8002: near})  # 8002 pushed again
+        it = R.overlapping_prs(".", self.OURS, "me")
+        self.assertEqual(rest(calls), [8002])
+        self.assertTrue(it["evidence"].startswith("#8002 by u"), it["evidence"])
+        # A failed fetch is never cached: the next round asks again
+        calls = self.stub({None: page({8003: "c1"})}, {})
+        self.assertIn("couldn't be fetched", R.overlapping_prs(".", self.OURS, "me")["evidence"])
+        calls = self.stub({None: page({8003: "c1"})}, {8003: far})
+        self.assertEqual(R.overlapping_prs(".", self.OURS, "me")["status"], "pass")
+        self.assertEqual(rest(calls), [8003])
+        # The cache is per repository
+        calls = self.stub({None: page({8001: "a1"})}, {8001: far})
+        orig = R.upstream_slug
+        R.upstream_slug = lambda repo: "other/r"
+        try:
+            R.overlapping_prs(".", self.OURS, "me")
+        finally:
+            R.upstream_slug = orig
+        self.assertEqual(rest(calls), [8001])
 
     def test_only_shared_files_is_na(self):
         self.stub({}, {})

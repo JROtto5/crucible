@@ -40,3 +40,8 @@ Target: about 2027-01-04. 1.0 means a maintainer or a first-time contributor can
 - [x] Model calls isolated from the project's `.claude/` settings and the user's MCP servers
 - [x] Budget cap that leaves the review incomplete rather than GREEN
 - [ ] A test asserting that no command path calls `gh` with a write verb
+
+## Overlap check and the GitHub REST quota (found 2026-11-06, gamescope; done 2026-11-06)
+- [x] Reported: six review rounds on gamescope (151 open PRs) in ~1 h, REST quota at 0 by 09:06 EST. Measured: the check makes at most OVERLAP_CANDIDATES (20) REST calls a round (6 rounds ≤ 120 of 5,000), so it was not the main consumer. The real bugs: every round refetched the same 20 patches, and in 3 of the 6 stored rounds the failed fetches were reported as "no readable patch" (in the other 3 the same PRs were "elsewhere").
+- Fix: GraphQL also returns each PR's `headRefOid`; its hunks are cached under `~/.crucible/cache/pr-hunks/` keyed by that SHA (7-day TTL), so only a moved head is refetched. A failed API call is reported as "couldn't be fetched … re-run later" and never cached. Live on gamescope: round 1 20 REST calls, round 2 0, same evidence. Tests: cache hit, moved head refetched (falsifier), failure not cached, per-repo cache.
+- Open: who did burn the quota (lane, pr-watch, queue-pos) is outside crucible; a `gh api rate_limit` reading in each shift log would show it.
