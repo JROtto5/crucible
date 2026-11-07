@@ -1660,6 +1660,9 @@ class TestVerifyFailedRetried(unittest.TestCase):
             self.assertEqual(r["findings"][0]["verification"]["attempts"], 1)   # its own budget, not the old code's
             V.run_review(repo, "main", offline=True, skip_checks=True, no_tiers=True, log=lambda *_: None)
             self.assertEqual(len(verifies), n + 2)                  # so a plain re-run retries it
+            for _ in range(V.VERIFY_ATTEMPTS):                      # ...until that budget is spent too
+                V.run_review(repo, "main", offline=True, skip_checks=True, no_tiers=True, log=lambda *_: None)
+            self.assertEqual(len(verifies), n + V.VERIFY_ATTEMPTS)
         finally:
             V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
             if olds[3] is None:

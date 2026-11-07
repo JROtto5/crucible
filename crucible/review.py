@@ -657,7 +657,9 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             with cf.ThreadPoolExecutor(max_workers=4) as ex:
                 for f, v, trail, err in ex.map(verify, to_verify):
                     if v is None:                      # fail closed: keep, marked unverified
-                        n = f["verification"].get("attempts", 1) if verify_failed(f) else attempts.get(f["id"], 0)
+                        # re-runs of this commit split against the same earlier review every time, so its count
+                        # alone would never grow: this commit's own stored count wins when larger
+                        n = max(f["verification"].get("attempts", 1) if verify_failed(f) else 0, attempts.get(f["id"], 0))
                         f["verification"] = {"status": "unverified", "reason": err, "attempts": n + 1}
                         kept.append(f)
                     elif v.get("salvaged") and not v["keep"]:   # second-hand: a transcription never drops a finding
