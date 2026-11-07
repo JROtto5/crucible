@@ -88,7 +88,7 @@ Learning reads the project's most recent merged PRs through `gh` and writes thre
   - the voice, comment conventions, how reviewers are called out, and what regulars never do;
   - three real example bodies with links.
 
-These are snapshots: they keep their numbers until you run `learn` again. Both JSON files record the `learn` version that wrote them. When a later crucible computes one of them differently, readiness shows "⚠️ learned project data is current" with what the old file is missing; re-run `crucible learn` to refresh. It's also worth re-running every month or two on an active project, as its recent PRs change.
+These are snapshots: they keep their numbers until you run `learn` again. Both JSON files record the `learn` version that wrote them. When a later crucible computes one of them differently, readiness shows "⚠️ learned project data is current" with what the old file is missing; re-run `crucible learn` to refresh. Nothing warns when the project itself moves on (new merged PRs shift the medians), so the file's `learned` date is the thing to check.
 
 ## Your PR draft and your notes
 
