@@ -171,6 +171,10 @@ def check_draft(repo, draft_text):
         ok = len(draft_text) > 200
         return _item("PR description drafted", "pass" if ok else "warn",
                      f"no PR template in repo; draft is {len(draft_text)} chars")
+    if not heads:                                  # e.g. itsdangerous's checklist-only template: "all 0 sections present"
+        ok = len(draft_text) > 200
+        return _item("PR description drafted", "pass" if ok else "warn",
+                     f"{tpl} has no section headings to check; draft is {len(draft_text)} chars")
     low = draft_text.lower()
     missing = [h for h in heads if h.lower() not in low]
     return _item("PR description follows template", "fail" if missing else "pass",

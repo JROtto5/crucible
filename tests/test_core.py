@@ -152,6 +152,14 @@ class TestReadiness(unittest.TestCase):
         self.assertEqual(R.check_draft(d, "## Description\nx")["status"], "fail")
         self.assertEqual(R.check_draft(d, "## Description\nx\n## Testing\nnpm test")["status"], "pass")
 
+    def test_template_without_headings(self):
+        # quickstart run on itsdangerous: a checklist-only template read "all 0 sections present"
+        d = make_repo({".github/pull_request_template.md": "- [ ] Add tests\n- [ ] Add a changelog entry\n"})
+        item = R.check_draft(d, "Fixes #1. " + "word " * 50)
+        self.assertEqual((item["item"], item["status"]), ("PR description drafted", "pass"))
+        self.assertIn("has no section headings to check", item["evidence"])
+        self.assertEqual(R.check_draft(d, "Fixes #1.")["status"], "warn")
+
     def test_template_tracked_but_not_on_disk(self):
         # supabase/supabase #53101: a sparse checkout had no .github/ on disk, and readiness said "no PR template"
         d = make_repo({".github/pull_request_template.md": "## What kind of change\n\n## What is the current behavior\n",
