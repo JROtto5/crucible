@@ -1,13 +1,13 @@
 # Quickstart
 
-A real run on a public repo, timed. Measured 2026-11-06 with crucible 0.3.0 on a fresh install; your times and costs will differ with the size of the change.
+A real run on a public repo, timed. Measured 2026-11-06 on a fresh install (crucible 0.3.0; 0.4.0 adds only this guide and the version bump); your times and costs will differ with the size of the change.
 
 You need Python 3.10+, git, `gh` (logged in) and the [Claude Code](https://claude.com/claude-code) CLI.
 
 ## 1. Install (4 s)
 
 ```sh
-pipx install git+https://github.com/JROtto5/crucible
+pipx install git+https://github.com/JROtto5/crucible@v0.4.0
 ```
 
 ## 2. Make a change to review
