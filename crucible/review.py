@@ -451,8 +451,7 @@ def stale_inputs(prev, inputs):
     Reviews written before inputs were recorded can't prove they saw this draft, so they are redone."""
     if not prev or prev.get("status") != "done":
         return ""
-    # a pass that failed (usage limit, timeout) left files unreviewed; re-running is the fix, so don't reuse it
-    # (files too big to chunk are also incomplete, but a re-run can't change that)
+    # a failed pass (usage limit) is retried; a file too big to chunk isn't, a re-run can't change that
     failed = [c for c in (prev.get("coverage") or {}).get("chunks") or [] if c.get("status") == "failed"]
     if failed:
         return f"its review pass failed ({(failed[0].get('reason') or 'no reason recorded')[:160]})"

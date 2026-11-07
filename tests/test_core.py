@@ -1566,8 +1566,8 @@ class TestRunReviewAbsenceAnchor(unittest.TestCase):
                 self.assertIn("No code changed since", run()["summary"])
                 w("boom.py", "BOOM = 1\n"); g("add", "-A"); g("commit", "-qm", "boom")   # code changed, its pass failed
                 r5 = run()
-                self.assertEqual(r5["summary"], "The review pass failed for boom.py (model call failed), so this review is incomplete; "
-                         "a plain re-run retries it.")
+                self.assertEqual(r5["summary"],
+                         "The review pass failed for boom.py (model call failed), so this review is incomplete; a plain re-run retries it.")
                 self.assertFalse(r5["coverage"]["complete"])
 
 
@@ -1606,6 +1606,43 @@ class TestRerunSameCommit(unittest.TestCase):
         self.assertIn("usage limit reached", V.stale_inputs(limit, inp))
         too_big = dict(done, coverage={"complete": False, "chunks": [{"files": ["a.js"], "status": "reviewed"}]})
         self.assertIsNone(V.stale_inputs(too_big, inp))                            # nothing a re-run would change
+        bare = dict(done, coverage={"chunks": [{"files": ["a.js"], "status": "failed", "reason": ""}]})
+        self.assertEqual(V.stale_inputs(bare, inp), "its review pass failed (no reason recorded)")
+
+    def test_one_failed_chunk_of_two(self):
+        # the failure leads the summary, the good chunk's summary follows, and a re-run redoes only the failed chunk
+        repo = make_repo({"a.js": "export const a = 1;\n", "b.js": "export const b = 1;\n"},
+                         {"a.js": "export const a = 2;\n", "b.js": "export const b = 2;\n"})
+        calls = []
+
+        def fake(prompt, model, schema, cwd, *a, **kw):
+            if "findings" in schema["properties"]:
+                calls.append("b.js" if "+++ b/b.js" in prompt else "a.js")
+                if calls[-1] == "b.js" and len(calls) < 3:
+                    raise U.Failed("model call failed: usage limit")
+                return {"summary": "a looks fine", "findings": []}, 0.01
+            return {"keep": True, "severity": "low", "method": "read", "actions": "", "evidence": "", "confidence": "high"}, 0
+        home = tempfile.mkdtemp(prefix="crucible-home-")
+        olds = (V.HOME, U.HOME, V.claude, os.environ.get("CRUCIBLE_CACHE"), V.diff_mod.chunk)
+        V.HOME = U.HOME = home
+        os.environ["CRUCIBLE_CACHE"] = os.path.join(home, "cache")
+        V.claude = fake
+        V.diff_mod.chunk = lambda files, max_chars=45000: olds[4](files, max_chars=150)  # one chunk per file
+        try:
+            d = V.run_review(repo, "main", offline=True, skip_checks=True, log=lambda *_: None)
+            r = U.read_json(os.path.join(d, "review.json"))
+            self.assertEqual(sorted(calls), ["a.js", "b.js"])
+            self.assertTrue(r["summary"].startswith("The review pass failed for b.js (model call failed: usage limit)"), r)
+            self.assertTrue(r["summary"].endswith("a looks fine"), r["summary"])
+            V.run_review(repo, "main", offline=True, skip_checks=True, log=lambda *_: None)
+            self.assertEqual(calls[2:], ["b.js"])                   # a.js's pass came from the cache
+            self.assertTrue(U.read_json(os.path.join(d, "review.json"))["coverage"]["complete"])
+        finally:
+            V.HOME, U.HOME, V.claude, V.diff_mod.chunk = olds[0], olds[1], olds[2], olds[4]
+            if olds[3] is None:
+                os.environ.pop("CRUCIBLE_CACHE", None)
+            else:
+                os.environ["CRUCIBLE_CACHE"] = olds[3]
 
     def test_notes_only_edit_keeps_the_hash(self):
         repo = make_repo({"a.js": "x\n"})
@@ -1663,7 +1700,6 @@ class TestRerunSameCommit(unittest.TestCase):
             run()                                                   # a failed review is retried, not reused
             self.assertEqual(U.read_json(rp)["status"], "done")
             self.assertEqual(len(seen), n)                          # ...from the cache, so no new model call
-            rp_full = U.read_json(rp)
             limited = [True]
 
             def limit(prompt, model, schema, cwd, *a, **kw):
@@ -1671,7 +1707,9 @@ class TestRerunSameCommit(unittest.TestCase):
                     raise U.Failed("model call failed: Claude usage limit reached, resets 5am")
                 return fake(prompt, model, schema, cwd, *a, **kw)
             V.claude = limit
-            run(fresh=True)                                         # the pass hits the usage limit
+            logs = []
+            V.run_review(repo, "main", offline=True, skip_checks=True, fresh=True, log=logs.append)  # hits the limit
+            self.assertTrue(any("review pass FAILED for 1 file(s): model call failed: Claude usage" in l for l in logs), logs)
             r = U.read_json(rp)
             self.assertFalse(r["coverage"]["complete"], r)
             self.assertIn("usage limit reached", r["summary"])      # the reason is shown, not just "incomplete"
@@ -1679,7 +1717,7 @@ class TestRerunSameCommit(unittest.TestCase):
             logs = []
             V.run_review(repo, "main", offline=True, skip_checks=True, log=logs.append)   # a plain re-run retries it
             self.assertTrue(any("re-reviewing this commit: its review pass failed" in l for l in logs), logs)
-            self.assertTrue(U.read_json(rp)["coverage"]["complete"], rp_full)
+            self.assertTrue(U.read_json(rp)["coverage"]["complete"])
         finally:
             V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
             if olds[3] is None:
