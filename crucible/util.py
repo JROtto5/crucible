@@ -13,6 +13,22 @@ TEST_PATH_RX = re.compile(r"(^|/)(tests?|__tests__|spec|specs|fixtures?|testdata
                           r"\.(test|spec)\.[cm]?[jt]sx?$|_test\.(py|go)$|(^|/)test_[^/]+\.py$")
 CODE_EXT_RX = re.compile(r"\.(c|cc|cpp|h|hpp|cs|go|java|kt|rs|swift|py|rb|php|[cm]?[jt]sx?|vue|svelte|glsl|wgsl|frag|vert)$")
 
+# Version of what `crucible learn` writes (meta.json, style.json). Bump it when a fix changes how a learned number is
+# computed, and say what changed: stored files keep the old numbers until `learn` re-runs (umu's style.json kept a
+# Dependabot-polluted 879-word median for a day after bug j was fixed), so readiness names what an old file misses.
+# Version 1 is every file written before the stamp existed.
+LEARN_VERSION = 3
+LEARN_CHANGES = {
+    2: "bot PRs and comments are skipped and code is sampled from the upstream branch, not your unpushed commits",
+    3: "PR-body length is judged against outside contributors' merged PRs, not the maintainers' own",
+}
+
+
+def learn_version(data):
+    """The `crucible learn` version that wrote a meta.json/style.json dict (1 = written before stamping)."""
+    v = data.get("learn_version") if isinstance(data, dict) else None
+    return v if isinstance(v, int) and not isinstance(v, bool) else 1
+
 
 # Words that make "#123" an issue link (shared by readiness and polish, so they always agree).
 ISSUE_KW = r"(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?|related(?:\s+issues?|\s+to)?|refs?|issues?)"

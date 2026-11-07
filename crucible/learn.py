@@ -1,6 +1,7 @@
 """`crucible learn`: extract what this project's maintainers actually ask for, from merged PR reviews."""
 import datetime as dt, os, statistics, textwrap
-from .util import Budget, Failed, claude, gh_json, is_bot, project_dir, project_key, upstream_slug, write_json
+from .util import (LEARN_VERSION, Budget, Failed, claude, gh_json, is_bot, project_dir, project_key, upstream_slug,
+                   write_json)
 
 MAINTAINERS = {"OWNER", "MEMBER", "COLLABORATOR"}
 RULES_SCHEMA = {"type": "object", "properties": {"rules": {"type": "array", "maxItems": 25, "items": {
@@ -50,7 +51,7 @@ def run_learn(repo, n=25, model="claude-sonnet-5-5", budget_usd=2.0, style=True,
     log(f"learning {slug} from the last {n} merged PRs")
     merged, comments, sizes = collect(slug, n, log)
     docs = docs_text(slug)
-    meta = {"slug": slug, "learned": dt.date.today().isoformat(), "prs_sampled": len(merged),
+    meta = {"slug": slug, "learned": dt.date.today().isoformat(), "learn_version": LEARN_VERSION, "prs_sampled": len(merged),
             "maintainer_comments": len(comments), "median_merged_pr_lines": int(statistics.median(sizes)) if sizes else None,
             "p75_merged_pr_lines": int(statistics.quantiles(sizes, n=4)[2]) if len(sizes) >= 4 else None}
     write_json(os.path.join(project_dir(project), "meta.json"), meta)

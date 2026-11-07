@@ -459,6 +459,30 @@ def size(project, files):
     return _item("size vs project norm", st, f"{n} changed lines vs median merged PR {med}")
 
 
+def learned_data(project):
+    """Readiness reads the size norm from meta.json and the style checks read style.json. Both keep whatever the
+    `crucible learn` of their day computed, so a fixed `learn` bug lives on in old files until `learn` re-runs."""
+    name = "learned project data is current"
+    paths = {f: os.path.join(project_dir(project), f) for f in ("meta.json", "style.json")}
+    found = {f: read_json(p, {}) for f, p in paths.items() if os.path.exists(p)}
+    if not found:
+        return _item(name, "na", "not learned yet; run `crucible learn` for the project's size and style norms")
+    old = []
+    for f, d in found.items():
+        d = d if isinstance(d, dict) else {}           # unreadable: re-learning is the fix either way
+        if util.learn_version(d) < util.LEARN_VERSION:
+            # an unstamped file may come from any earlier version, so it's listed as such, not as "v1"
+            stamp = f"v{d['learn_version']}" if type(d.get("learn_version")) is int else "unstamped"
+            old.append((f, util.learn_version(d), stamp + (f", learned {d['learned']}" if d.get("learned") else "")))
+    if not old:
+        return _item(name, "pass", f"{' and '.join(found)} from `crucible learn` v{util.LEARN_VERSION}")
+    oldest = min(v for _, v, _ in old)
+    missed = [util.LEARN_CHANGES[v] for v in range(oldest + 1, util.LEARN_VERSION + 1) if v in util.LEARN_CHANGES]
+    return _item(name, "warn", ", ".join(f"{f} ({label})" for f, _, label in old)
+                 + f"; `crucible learn` is now v{util.LEARN_VERSION}, and since v{oldest + 1}: " + "; ".join(missed)
+                 + ". Re-run `crucible learn` so these checks use the corrected numbers")
+
+
 def unclaimed(repo, issue, me=None):
     slug = upstream_slug(repo)
     if not issue or not slug:
@@ -708,6 +732,7 @@ def evaluate(repo, project, base, files, draft=None, me="JROtto5", offline=False
         commit_attribution(repo, base),
         _item("no formatting-only churn", "fail" if fmt else "pass", f"whitespace-only hunks: {fmt[:5]}" if fmt else "none"),
         size(project, files),
+        learned_data(project),
         _item("issue still unclaimed", "na", "offline") if offline else unclaimed(repo, issue, me),
         _item("no open PR changes the same lines", "na", "offline") if offline else overlapping_prs(repo, files, me),
     ]

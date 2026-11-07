@@ -517,6 +517,71 @@ class TestStyle(unittest.TestCase):
 
 
 
+class TestLearnedDataVersion(unittest.TestCase):
+    """umu's style.json kept a Dependabot-polluted 879-word median after bug j was fixed, because nothing re-ran
+    `learn`. Learned files are stamped with the `learn` version, and readiness says what an older file misses."""
+    def write(self, project, fname, data):
+        with open(os.path.join(U.project_dir(project), fname), "w") as fh:
+            fh.write(data if isinstance(data, str) else json.dumps(data))
+
+    def test_not_learned(self):
+        self.assertEqual(R.learned_data("lv__none")["status"], "na")
+
+    def test_unstamped_files_warn_with_everything_they_miss(self):
+        self.write("lv__old", "meta.json", {"learned": "2026-11-04", "median_merged_pr_lines": 40})
+        self.write("lv__old", "style.json", {"body": {"median_words": 879}})
+        it = R.learned_data("lv__old")
+        self.assertEqual(it["status"], "warn")
+        self.assertIn("meta.json (unstamped, learned 2026-11-04), style.json (unstamped)", it["evidence"])
+        for v in range(2, U.LEARN_VERSION + 1):
+            self.assertIn(U.LEARN_CHANGES[v], it["evidence"])
+        self.assertIn("Re-run `crucible learn`", it["evidence"])
+
+    def test_names_only_the_changes_since_the_stamp(self):
+        self.write("lv__v2", "style.json", {"learn_version": 2})
+        self.write("lv__v2", "meta.json", {"learn_version": U.LEARN_VERSION})
+        it = R.learned_data("lv__v2")
+        self.assertEqual(it["status"], "warn")
+        self.assertNotIn("meta.json", it["evidence"])
+        self.assertNotIn(U.LEARN_CHANGES[2], it["evidence"])
+        self.assertIn("style.json (v2); `crucible learn` is now v3, and since v3: " + U.LEARN_CHANGES[3], it["evidence"])
+
+    def test_current_stamp_passes_and_a_bump_makes_it_stale(self):
+        self.write("lv__cur", "style.json", {"learn_version": U.LEARN_VERSION})
+        self.assertEqual(R.learned_data("lv__cur")["status"], "pass")
+        orig = (U.LEARN_VERSION, U.LEARN_CHANGES)
+        try:  # falsifier: the same file is stale once a later `learn` fix bumps the version
+            U.LEARN_VERSION, U.LEARN_CHANGES = orig[0] + 1, {**orig[1], orig[0] + 1: "a later fix"}
+            it = R.learned_data("lv__cur")
+            self.assertEqual(it["status"], "warn")
+            self.assertIn("a later fix", it["evidence"])
+        finally:
+            U.LEARN_VERSION, U.LEARN_CHANGES = orig
+
+    def test_unreadable_or_odd_stamps_count_as_v1(self):
+        self.write("lv__bad", "style.json", "{not json")
+        self.write("lv__bad", "meta.json", {"learn_version": True})
+        it = R.learned_data("lv__bad")
+        self.assertEqual(it["status"], "warn")
+        self.assertIn("meta.json (unstamped), style.json (unstamped)", it["evidence"])
+
+    def test_every_version_says_what_changed(self):
+        self.assertEqual(sorted(U.LEARN_CHANGES), list(range(2, U.LEARN_VERSION + 1)))
+
+    def test_run_learn_stamps_meta(self):
+        from crucible import learn as L
+        repo = make_repo({"a.py": "x = 1\n"})
+        sh(repo, "git", "remote", "add", "origin", "https://github.com/o/lv.git")
+        orig = (L.collect, L.docs_text)
+        L.collect, L.docs_text = (lambda slug, n, log: ([], [], [10, 20])), (lambda slug: "")
+        try:
+            meta = L.run_learn(repo, style=False, log=lambda *_: None)
+        finally:
+            L.collect, L.docs_text = orig
+        self.assertEqual(meta["learn_version"], U.LEARN_VERSION)
+        self.assertEqual(R.learned_data(U.project_key(repo))["status"], "pass")
+
+
 class TestLearnStyleSources(unittest.TestCase):
     """Bug j: `learn` measured Dependabot PR bodies and quoted the contributor's own unpushed commit as house style."""
     def setUp(self):
@@ -560,6 +625,8 @@ class TestLearnStyleSources(unittest.TestCase):
         self.assertIn("upstream comment", self.prompts[0])
         self.assertNotIn("LOCAL", self.prompts[0])
         self.assertEqual(m["comment_density_median"], 50.0)
+        self.assertEqual(m["learn_version"], U.LEARN_VERSION)  # a fresh learn is never reported as stale
+        self.assertEqual(R.learned_data("o__r_bugj")["status"], "pass")
 
     def test_length_baseline_from_outside_contributors(self):
         """three-mesh-bvh 2026-11-06: the repeat-author sample is the owner's own one-line PRs (median 17), so a
