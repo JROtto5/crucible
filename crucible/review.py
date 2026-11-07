@@ -680,7 +680,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 except Failed:
                     return f, None
             with cf.ThreadPoolExecutor(max_workers=4) as ex:
-                for f, v in ex.map(recheck, list(carried)):
+                # a capped failure would fail again (and can't be settled by a keep), so it isn't paid for each commit
+                for f, v in ex.map(recheck, [f for f in carried if not verify_failed(f)]):
                     if v and not v["keep"] and v.get("confidence") == "high":
                         kept.remove(f)
                         f["verification"] = {"status": "dropped", "method": v["method"], "actions": v["actions"],
@@ -694,10 +695,13 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         if unsettled:                                  # inserted first, so a failed review pass still leads
             why = (unsettled[0]["verification"].get("reason") or "no reason recorded")[:300]
             log(f"  verification FAILED for {len(unsettled)} finding(s): {why}")
-            again = "a plain re-run retries them" if any(verify_retryable(f) for f in unsettled) else \
-                f"they failed {VERIFY_ATTEMPTS} times, so a plain re-run won't retry them (--force does)"
-            summaries.insert(0, f"{len(unsettled)} finding(s) couldn't be verified ({why}); they are kept as unverified "
-                                f"and {again}.")
+            spent = sum(not verify_retryable(f) for f in unsettled)
+            again = "; ".join(x for x in (
+                f"a plain re-run retries {len(unsettled) - spent}" if spent < len(unsettled) else "",
+                f"{spent} failed {VERIFY_ATTEMPTS}+ times and won't be retried by a plain re-run (--force does)" if spent else ""
+            ) if x)
+            summaries.insert(0, f"{len(unsettled)} finding(s) couldn't be verified ({why}); they are kept as unverified: "
+                                f"{again}.")
         # an incremental round summarizes only its own changes: repeating the earlier round's summary restated
         # problems that were already fixed (seen in the bug j self-review)
         failed = [p for c in chunk_status if c["status"] == "failed" for p in c["files"]]

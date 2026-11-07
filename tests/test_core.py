@@ -1639,9 +1639,23 @@ class TestVerifyFailedRetried(unittest.TestCase):
             self.assertEqual(len(verifies), V.VERIFY_ATTEMPTS)    # then reused, not paid for again
             r = U.read_json(os.path.join(d, "review.json"))
             self.assertEqual(r["findings"][0]["verification"]["attempts"], V.VERIFY_ATTEMPTS)
-            self.assertIn("a plain re-run won't retry them (--force does)", r["summary"])
+            self.assertIn("1 failed 3+ times and won't be retried by a plain re-run (--force does)", r["summary"])
             V.run_review(repo, "main", offline=True, skip_checks=True, no_tiers=True, force=True, log=lambda *_: None)
             self.assertEqual(len(verifies), V.VERIFY_ATTEMPTS + 1)
+            # a later commit elsewhere: the capped finding is carried with no call, the tiered re-check included
+            open(os.path.join(repo, "b.js"), "w").write("export const b = 1;\n")
+            sh(repo, "git", "add", "b.js"); sh(repo, "git", "commit", "-qm", "add b")
+            n = len(verifies)
+            d = V.run_review(repo, "main", offline=True, skip_checks=True, log=lambda *_: None)
+            r = U.read_json(os.path.join(d, "review.json"))
+            self.assertEqual((r["incremental"]["carried"], r["incremental"]["reverified"]), (1, 0))
+            self.assertEqual(len(verifies), n)
+            # a commit that changes its code is new code to judge, so the cap doesn't stop that re-verification
+            open(os.path.join(repo, "a.js"), "w").write("export const a = 1;\nexport const f = (xs) => xs[xs.length + 0];\n")
+            sh(repo, "git", "commit", "-qam", "edit f")
+            d = V.run_review(repo, "main", offline=True, skip_checks=True, no_tiers=True, log=lambda *_: None)
+            self.assertEqual(len(verifies), n + 1)
+            self.assertEqual(U.read_json(os.path.join(d, "review.json"))["incremental"]["reverified"], 1)
         finally:
             V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
             if olds[3] is None:
@@ -1678,7 +1692,8 @@ class TestVerifyFailedRetried(unittest.TestCase):
             r = U.read_json(os.path.join(d, "review.json"))
             self.assertEqual(status(d), ["unverified"])
             self.assertTrue(r["summary"].startswith("1 finding(s) couldn't be verified (model call failed (success): "
-                                                    "You've hit your 5-hour limit)"), r["summary"])
+                                                    "You've hit your 5-hour limit); they are kept as unverified: a plain "
+                                                    "re-run retries 1."), r["summary"])
             self.assertTrue(any("verification FAILED for 1 finding(s)" in l for l in logs), logs)
             limited[0] = False
             logs, n = [], len(verifies)
