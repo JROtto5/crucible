@@ -451,6 +451,11 @@ def stale_inputs(prev, inputs):
     Reviews written before inputs were recorded can't prove they saw this draft, so they are redone."""
     if not prev or prev.get("status") != "done":
         return ""
+    # a pass that failed (usage limit, timeout) left files unreviewed; re-running is the fix, so don't reuse it
+    # (files too big to chunk are also incomplete, but a re-run can't change that)
+    failed = [c for c in (prev.get("coverage") or {}).get("chunks") or [] if c.get("status") == "failed"]
+    if failed:
+        return f"its review pass failed ({(failed[0].get('reason') or 'no reason recorded')[:160]})"
     old = prev.get("inputs")
     if old is None:
         return "the last review didn't record which draft it judged"
@@ -661,8 +666,11 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         # an incremental round summarizes only its own changes: repeating the earlier round's summary restated
         # problems that were already fixed (seen in the bug j self-review)
         failed = [p for c in chunk_status if c["status"] == "failed" for p in c["files"]]
-        if not summaries and failed:
-            summaries.append(f"The review pass failed for {', '.join(failed)[:300]}, so this review is incomplete.")
+        if failed:
+            why = next(c.get("reason") for c in chunk_status if c["status"] == "failed") or "no reason recorded"
+            log(f"  review pass FAILED for {len(failed)} file(s): {why[:300]}")
+            summaries.insert(0, f"The review pass failed for {', '.join(failed)[:300]} ({why[:300]}), so this review is "
+                                "incomplete; a plain re-run retries it.")
         elif prev_sha and not chunks:
             summaries.append(f"No code changed since {prev_sha[:10]}; its findings were carried or re-checked.")
         record.update(status="done", summary=" ".join(summaries)[:3000], findings=kept, dropped=dropped,

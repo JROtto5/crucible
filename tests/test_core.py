@@ -1566,7 +1566,8 @@ class TestRunReviewAbsenceAnchor(unittest.TestCase):
                 self.assertIn("No code changed since", run()["summary"])
                 w("boom.py", "BOOM = 1\n"); g("add", "-A"); g("commit", "-qm", "boom")   # code changed, its pass failed
                 r5 = run()
-                self.assertEqual(r5["summary"], "The review pass failed for boom.py, so this review is incomplete.")
+                self.assertEqual(r5["summary"], "The review pass failed for boom.py (model call failed), so this review is incomplete; "
+                         "a plain re-run retries it.")
                 self.assertFalse(r5["coverage"]["complete"])
 
 
@@ -1599,6 +1600,12 @@ class TestRerunSameCommit(unittest.TestCase):
         self.assertEqual(V.stale_inputs(done, dict(inp, draft_sha="h2")), "the draft changed since its last review")
         self.assertEqual(V.stale_inputs(done, dict(inp, base="b2")), "the base changed since its last review")
         self.assertIn("didn't record", V.stale_inputs({"status": "done"}, inp))   # written before inputs existed
+        # DRG-11 o: a pass that hit a usage limit was cached, and the next run said "already reviewed this commit"
+        limit = dict(done, coverage={"complete": False, "chunks": [
+            {"files": ["a.js"], "status": "failed", "reason": "model call failed: Claude usage limit reached"}]})
+        self.assertIn("usage limit reached", V.stale_inputs(limit, inp))
+        too_big = dict(done, coverage={"complete": False, "chunks": [{"files": ["a.js"], "status": "reviewed"}]})
+        self.assertIsNone(V.stale_inputs(too_big, inp))                            # nothing a re-run would change
 
     def test_notes_only_edit_keeps_the_hash(self):
         repo = make_repo({"a.js": "x\n"})
@@ -1656,6 +1663,23 @@ class TestRerunSameCommit(unittest.TestCase):
             run()                                                   # a failed review is retried, not reused
             self.assertEqual(U.read_json(rp)["status"], "done")
             self.assertEqual(len(seen), n)                          # ...from the cache, so no new model call
+            rp_full = U.read_json(rp)
+            limited = [True]
+
+            def limit(prompt, model, schema, cwd, *a, **kw):
+                if "findings" in schema["properties"] and limited[0]:
+                    raise U.Failed("model call failed: Claude usage limit reached, resets 5am")
+                return fake(prompt, model, schema, cwd, *a, **kw)
+            V.claude = limit
+            run(fresh=True)                                         # the pass hits the usage limit
+            r = U.read_json(rp)
+            self.assertFalse(r["coverage"]["complete"], r)
+            self.assertIn("usage limit reached", r["summary"])      # the reason is shown, not just "incomplete"
+            limited[0] = False
+            logs = []
+            V.run_review(repo, "main", offline=True, skip_checks=True, log=logs.append)   # a plain re-run retries it
+            self.assertTrue(any("re-reviewing this commit: its review pass failed" in l for l in logs), logs)
+            self.assertTrue(U.read_json(rp)["coverage"]["complete"], rp_full)
         finally:
             V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
             if olds[3] is None:
