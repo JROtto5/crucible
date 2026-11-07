@@ -57,10 +57,7 @@ def run_learn(repo, n=25, model="claude-sonnet-5-5", budget_usd=2.0, style=True,
     write_json(os.path.join(project_dir(project), "meta.json"), meta)
     if not comments and not docs:
         log("no maintainer comments or docs found; wrote size stats only")
-        if style:
-            from .style import learn_style
-            learn_style(os.path.abspath(repo), slug, project, log=log)
-        return meta
+        return _with_style(meta, repo, slug, project, style, log)
     prompt = textwrap.dedent(f"""\
         From these real maintainer review comments on merged pull requests to {slug}, and the project's contribution
         docs, extract the RECURRING things maintainers ask contributors for or push back on: tests, examples, docs/types,
@@ -74,17 +71,28 @@ def run_learn(repo, n=25, model="claude-sonnet-5-5", budget_usd=2.0, style=True,
         Maintainer comments (pr, url, path, body):
         {chr(10).join(f"- #{c['pr']} {c['url']} {c['path'] or ''}: {c['body']}" for c in comments)[:60000]}
         """)
-    out, cost = claude(prompt, model, RULES_SCHEMA, repo, Budget(budget_usd), tools=None, effort="medium")
+    budget = Budget(budget_usd)
+    out, _ = claude(prompt, model, RULES_SCHEMA, repo, budget, tools=None, effort="medium")
     md = [f"# Maintainer preferences: {slug}", "",
           f"Learned {meta['learned']} from {len(merged)} merged PRs ({len(comments)} maintainer comments). "
           f"Median merged PR: {meta['median_merged_pr_lines']} changed lines.", ""]
     for r in out["rules"]:
         md.append(f"- **{r['rule']}**: {r['why']} ({', '.join(r['sources'][:3])})")
     open(os.path.join(project_dir(project), "rules.md"), "w").write("\n".join(md) + "\n")
-    meta["rules"] = len(out["rules"]); meta["cost_usd"] = round(cost, 4)
+    meta["rules"] = len(out["rules"]); meta["cost_usd"] = round(budget.spent, 4)
     write_json(os.path.join(project_dir(project), "meta.json"), meta)
     log(f"wrote {len(out['rules'])} rules → {os.path.join(project_dir(project), 'rules.md')}")
+    return _with_style(meta, repo, slug, project, style, log)
+
+
+def _with_style(meta, repo, slug, project, style, log):
+    """Run the style pass and report the whole learn's spend. Each call's cost stays in the file it produced
+    (meta.json: rules, style.json: conventions); the total is returned and logged, not stored twice."""
+    rules = meta.get("cost_usd", 0)
+    style_cost = 0
     if style:
         from .style import learn_style
-        learn_style(os.path.abspath(repo), slug, project, log=log)
-    return meta
+        style_cost = learn_style(os.path.abspath(repo), slug, project, log=log).get("cost_usd", 0)
+    total = round(rules + style_cost, 4)
+    log(f"learn cost ${total} (rules ${rules}, style ${style_cost})")
+    return {**meta, "total_cost_usd": total}

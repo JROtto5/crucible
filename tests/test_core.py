@@ -690,6 +690,48 @@ class TestLearnStyleSources(unittest.TestCase):
         self.assertNotIn("outside_median_words", m["body"])
         self.assertEqual(dict(S.ai_tells("word " * 183, m)).get("length"), "183 words vs project median 12")
 
+    def _metered(self, cost, fail=False):
+        """A stand-in for util.claude: the budget is charged before the result is checked, as in the real call."""
+        def fake(prompt, model, schema, cwd, budget=None, **k):
+            budget.add(cost)
+            if fail:
+                raise U.Failed("model call failed (error_max_turns)")
+            if "rules" in schema.get("properties", {}):
+                return {"rules": [{"rule": "r", "why": "w", "sources": ["s"]}]}, cost
+            return {"tone": "t", "comment_conventions": "c", "callouts": "x", "avoid": "y"}, cost
+        return fake
+
+    def test_style_call_cost_is_recorded(self):
+        """11-07 exchange miss: the style call's cost was discarded, so 9 style calls went unmetered."""
+        S.claude = self._metered(0.37)
+        m = S.learn_style(self.c, "o/r", "o__r_cost", log=lambda *_: None)
+        self.assertEqual(m["cost_usd"], 0.37)
+        self.assertEqual(U.read_json(os.path.join(S.project_dir("o__r_cost"), "style.json"))["cost_usd"], 0.37)
+
+    def test_failed_style_call_is_still_metered(self):
+        S.claude = self._metered(0.12, fail=True)
+        m = S.learn_style(self.c, "o/r", "o__r_cost_fail", log=lambda *_: None)
+        self.assertIn("convention extraction failed", m["conventions"]["tone"])
+        self.assertEqual(m["cost_usd"], 0.12)
+
+    def test_run_learn_reports_rules_plus_style_spend(self):
+        from crucible import learn as L
+        S.claude = self._metered(0.37)
+        orig = (L.collect, L.docs_text, L.claude, L.upstream_slug)
+        L.collect = lambda slug, n, log: ([{"number": 1}], [{"pr": 1, "url": "u", "path": "", "body": "b"}], [10, 20])
+        L.docs_text, L.claude, L.upstream_slug = (lambda slug: ""), self._metered(0.41), (lambda repo: "o/r")
+        logs = []
+        try:
+            meta = L.run_learn(self.c, log=logs.append)
+        finally:
+            L.collect, L.docs_text, L.claude, L.upstream_slug = orig
+        self.assertEqual(meta["total_cost_usd"], 0.78)
+        self.assertIn("learn cost $0.78 (rules $0.41, style $0.37)", logs)
+        d = S.project_dir(U.project_key(self.c))
+        self.assertEqual(U.read_json(os.path.join(d, "meta.json"))["cost_usd"], 0.41)
+        self.assertNotIn("total_cost_usd", U.read_json(os.path.join(d, "meta.json")))
+        self.assertEqual(U.read_json(os.path.join(d, "style.json"))["cost_usd"], 0.37)
+
     def test_falls_back_to_head_without_a_base_branch(self):
         d = make_repo({"x.py": "# hi\nx = 1\n"})
         sh(d, "git", "branch", "-m", "main", "topic")

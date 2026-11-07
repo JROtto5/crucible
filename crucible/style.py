@@ -195,6 +195,8 @@ def learn_style(repo, slug, project, n=20, model="claude-sonnet-5-5", budget_usd
     m["code_ref"] = ref
     write_json(os.path.join(project_dir(project), "style.json"), m)
     conv = {"tone": "", "comment_conventions": "", "callouts": "", "avoid": ""}
+    # metered from the budget, not the call's return value: a call that fails after the model ran was still paid for
+    budget = Budget(budget_usd)
     try:
         samp = "\n\n".join(f"### {e['title']} ({e['url']})\n{e['body']}" for e in m["examples"])
         code = "\n\n".join(f"--- {f} ---\n" + read(f)[:3000]
@@ -213,11 +215,12 @@ def learn_style(repo, slug, project, n=20, model="claude-sonnet-5-5", budget_usd
             Code sample:
             {code[:9000]}
             """), model, {"type": "object", "properties": {k: {"type": "string"} for k in conv}, "required": list(conv)},
-            repo, Budget(budget_usd), tools=None, effort="medium")
+            repo, budget, tools=None, effort="medium")
         conv = out
     except Exception as e:  # noqa: BLE001 - measurements are still useful
         conv["tone"] = f"(convention extraction failed: {e})"
     m["conventions"] = conv
+    m["cost_usd"] = round(budget.spent, 4)
     write_json(os.path.join(project_dir(project), "style.json"), m)
     b, t, c = m["body"], m["title"], m["commit"]
     L = [f"# House style: {slug}", "", f"Measured from {len(sample)} recently merged PRs (repeat contributors first).", "",
@@ -237,7 +240,7 @@ def learn_style(repo, slug, project, n=20, model="claude-sonnet-5-5", budget_usd
     for e in m["examples"]:
         L += [f"### [{e['title']}]({e['url']})", "", "> " + e["body"][:700].replace("\n", "\n> "), ""]
     open(os.path.join(project_dir(project), "STYLE.md"), "w").write("\n".join(L) + "\n")
-    log(f"wrote STYLE.md ({len(sample)} PRs, body median {b['median_words']} words)")
+    log(f"wrote STYLE.md ({len(sample)} PRs, body median {b['median_words']} words) · ${m['cost_usd']}")
     return m
 
 
