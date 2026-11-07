@@ -232,13 +232,25 @@ def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, hou
         """)
 
 
-def verify_prompt(f, code, since=""):
+def draft_scope(f, draft_label):
+    """For a claim about the PR description: the description IS the draft under review. On Lutris #7004 the verifier
+    found a newer PR_BODY.v2.md in the clone, judged that instead, and dropped a true "the description still describes
+    the reverted design" finding against the stale PR_DRAFT.md that was actually reviewed."""
+    if not draft_label or f.get("file") != draft_label:
+        return ""
+    return (f"This claim is about the PR description. The description under review is exactly the text of "
+            f"{draft_label} shown below (author notes excluded). Judge the claim against that text only: other "
+            "description-like files in the checkout (PR_BODY*.md, older or newer drafts) are not the PR being "
+            "reviewed, and a better one existing elsewhere does not falsify a claim about this one.\n")
+
+
+def verify_prompt(f, code, since="", draft_label=None):
     return textwrap.dedent(f"""\
         You are verifying ONE claim about a code change in this checkout. Try hard to DISPROVE it.
         {since}
         Claim: {f['title']} (at {f['file']}:{f['line']}, proposed severity {f['severity']})
         Falsification test: {f['wrong_if']}
-
+        {draft_scope(f, draft_label)}
         Code around the cited line at HEAD:
         {code}
 
@@ -297,11 +309,11 @@ def needs_escalation(v):
     return bool(v["keep"]) and v["severity"] in BLOCKING
 
 
-def verify_tiered(f, code, repo, budget, tiers, fresh=False, since=""):
+def verify_tiered(f, code, repo, budget, tiers, fresh=False, since="", draft_label=None):
     """-> (verdict, trail). trail lists each tier's model, keep, severity and confidence.
     `since` describes later commits for a re-check, so it never replays the cached verdict of the earlier round."""
     trail, v = [], None
-    prompt = verify_prompt(f, code, since)
+    prompt = verify_prompt(f, code, since, draft_label)
     for i, model in enumerate(tiers):
         key = "v-" + hashlib.sha256((model + prompt).encode()).hexdigest()[:32]
         use_cache = not fresh and os.environ.get("CRUCIBLE_CACHE_VERIFY", "1") != "0"
@@ -649,7 +661,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             since = anchor_since(repo, prev_sha, f) if f.get("anchor_changed") else ""
             try:
                 return (f,) + verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo, budget, tiers, fresh,
-                                            since) + (None,)
+                                            since, dctx and dctx[0]) + (None,)
             except Failed as e:
                 return f, None, [], str(e)
         if to_verify:
@@ -684,7 +696,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
 
             def recheck(f):
                 try:
-                    v, trail = verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo, budget, tiers[:1], fresh, since)
+                    v, trail = verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo, budget, tiers[:1], fresh, since,
+                                            dctx and dctx[0])
                     return f, v
                 except Failed:
                     return f, None

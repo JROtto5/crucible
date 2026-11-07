@@ -708,6 +708,60 @@ def commit_attribution(repo, base):
                  "unless the project's contribution policy asks for AI disclosure")
 
 
+# Files an author keeps a PR body in. polish's output (*.polished.md, *.polish-notes.md) is newer by design: not a rival.
+BODY_FILE_RX = re.compile(r"^(pr|pull[_-]?request)[_-]?(draft|body|description|desc)\b.*\.md$", re.I)
+
+
+def newer_draft(repo, draft_path):
+    """Is the judged draft the newest PR body here? On Lutris #7004 the review judged a PR_DRAFT.md from Nov 4 while
+    the body about to be submitted was PR_BODY.v2.md from Nov 7, so the description findings were about the wrong
+    text. Looks next to the draft and in the repo root for untracked PR_DRAFT*/PR_BODY*/PR_DESCRIPTION*.md files
+    edited later than it whose text isn't already in it (a body copied out of the draft is fine). Advisory: the
+    author may keep old versions on purpose."""
+    name = "judged draft is the newest PR body"
+    if not draft_path:
+        return _item(name, "na", "no draft")
+    try:
+        mine = os.path.getmtime(draft_path)
+    except OSError:
+        return _item(name, "na", "draft not readable")
+    tracked = set(git(repo, "ls-files", check=False).split("\n"))
+    norm = lambda t: " ".join(t.split())
+    judged = norm(open(draft_path, errors="replace").read())
+    seen, newer = set(), []
+    for d in {os.path.dirname(os.path.abspath(draft_path)), os.path.abspath(repo)}:
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        for n in names:
+            p = os.path.join(d, n)
+            if not BODY_FILE_RX.match(n) or "polish" in n.lower() or p in seen or not os.path.isfile(p):
+                continue
+            seen.add(p)
+            if os.path.samefile(p, draft_path) or os.path.relpath(p, repo) in tracked:
+                continue
+            t = os.path.getmtime(p)
+            if t <= mine + 60:                         # a minute's slack: files written together by one edit
+                continue
+            text = norm(open(p, errors="replace").read())
+            if text and text in judged:                # a copy of the reviewed body (open-pr.sh submits PR_BODY.md)
+                continue
+            newer.append((t, p))
+    if not newer:
+        return _item(name, "pass", f"no other PR body file here is newer than {os.path.basename(draft_path)} "
+                     "with different text")
+    newer.sort(reverse=True)
+    stamp = lambda t: time.strftime("%Y-%m-%d %H:%M", time.localtime(t))
+    rel = lambda p: os.path.relpath(p, repo) if os.path.abspath(p).startswith(os.path.abspath(repo) + os.sep) else p
+    t, p = newer[0]
+    more = f" (and {len(newer) - 1} more)" if len(newer) > 1 else ""
+    return _item(name, "warn", f"{rel(p)} ({stamp(t)}){more} is newer than the judged {rel(draft_path)} "
+                 f"({stamp(mine)}) and says something else. If that's the body you'll submit, re-run with "
+                 f"`--draft {rel(p)}` or copy it over {os.path.basename(draft_path)}: the description findings are "
+                 "about the judged file only")
+
+
 def evaluate(repo, project, base, files, draft=None, me="JROtto5", offline=False):
     paths = [f["path"] for f in files]
     draft_path, full = find_draft(repo, draft)
@@ -720,6 +774,7 @@ def evaluate(repo, project, base, files, draft=None, me="JROtto5", offline=False
         check_draft(repo, draft_text) if draft_text.strip() or not full.strip() else
         _item("PR description drafted", "fail", f"{os.path.basename(draft_path)} exists, but nothing is left before the "
               f"author-notes boundary at line {split_draft(full)['notes_line']}; put the body above it or under `## Body`"),
+        newer_draft(repo, draft_path),
         _item("issue linked", "pass" if issue else "fail", f"#{issue}" if issue else
               (f"template placeholder still in the draft: {issue_placeholder(draft_text)!r}" if issue_placeholder(draft_text)
                else f"the linked number(s) {['#' + str(n) for n in prs]} are pull requests, not issues" if prs

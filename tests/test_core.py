@@ -2616,12 +2616,88 @@ class TestDraftCitation(unittest.TestCase):
             self.assertRegex(prompts["verify"][0], r"(?m)^\s*7  Fixes #7$")
             self.assertNotIn("PRIVATE NOTE", prompts["verify"][0])
             self.assertNotIn("file not present", prompts["verify"][0])
+            # Lutris #7004: the verifier judged a newer PR_BODY.v2.md instead of the reviewed draft
+            self.assertIn("exactly the text of PR_BODY.md", prompts["verify"][0])
         finally:
             V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
             if olds[3] is None:
                 os.environ.pop("CRUCIBLE_CACHE", None)
             else:
                 os.environ["CRUCIBLE_CACHE"] = olds[3]
+
+
+class TestDraftScope(unittest.TestCase):
+    """Lutris #7004 (2026-11-07): the review judged a stale PR_DRAFT.md; the verifier found the newer PR_BODY.v2.md,
+    judged that instead and dropped a true finding. The verifier is held to the judged draft, and readiness says when
+    a newer body file sits next to it."""
+    F = {"title": "t", "file": "a.py", "line": 3, "severity": "low", "wrong_if": "w"}
+
+    def test_verifier_scope_only_for_description_findings(self):
+        self.assertEqual(V.verify_prompt(self.F, "code"), V.verify_prompt(self.F, "code", draft_label="PR_DRAFT.md"))
+        d = dict(self.F, file="PR_DRAFT.md")
+        self.assertIn("exactly the text of PR_DRAFT.md", V.verify_prompt(d, "code", draft_label="PR_DRAFT.md"))
+        self.assertNotIn("exactly the text", V.verify_prompt(d, "code"))
+        # still a dedented prompt: the inserted text must not break the template's layout
+        self.assertRegex(V.verify_prompt(d, "code", draft_label="PR_DRAFT.md"), r"(?m)^Do the falsification test")
+
+    def _repo(self):
+        repo = make_repo({"a.py": "a = 1\n"}, {"a.py": "a = 2\n"})
+        draft = os.path.join(repo, "PR_DRAFT.md")
+        open(draft, "w").write("Fixes #1\n\nold design\n")
+        os.utime(draft, (1_700_000_000, 1_700_000_000))
+        return repo, draft
+
+    def test_newer_body_file_warns(self):
+        repo, draft = self._repo()
+        open(os.path.join(repo, "PR_BODY.v2.md"), "w").write("new design\n")
+        open(os.path.join(repo, "PR_DRAFT.polished.md"), "w").write("polish proposal\n")  # polish output: never a rival
+        open(os.path.join(repo, "PR_DRAFT.polish-notes.md"), "w").write("polish notes\n")
+        it = R.newer_draft(repo, draft)
+        self.assertEqual(it["status"], "warn", it)
+        self.assertIn("PR_BODY.v2.md", it["evidence"])
+        self.assertIn("--draft PR_BODY.v2.md", it["evidence"])
+        self.assertNotIn("polish", it["evidence"])
+        self.assertNotIn("more)", it["evidence"])
+
+    def test_copy_of_the_judged_body_passes(self):
+        # open-pr.sh submits PR_BODY.md, written out of the reviewed draft: same text, re-wrapped, is not a rival
+        repo, draft = self._repo()
+        open(os.path.join(repo, "PR_BODY.md"), "w").write("old\n   design\n")
+        self.assertEqual(R.newer_draft(repo, draft)["status"], "pass", R.newer_draft(repo, draft))
+        open(os.path.join(repo, "PR_BODY.md"), "w").write("old design, edited after the review\n")
+        self.assertEqual(R.newer_draft(repo, draft)["status"], "warn")
+
+    def test_older_tracked_or_unrelated_files_pass(self):
+        repo, draft = self._repo()
+        for n in ("PR_BODY.md", "NOTES.md", "PREP.md", "pr_template_notes.md"):
+            open(os.path.join(repo, n), "w").write("x\n")
+        os.utime(os.path.join(repo, "PR_BODY.md"), (1_600_000_000, 1_600_000_000))   # older than the draft
+        os.makedirs(os.path.join(repo, "docs"))
+        open(os.path.join(repo, "PULL_REQUEST_DESCRIPTION.md"), "w").write("tracked\n")
+        sh(repo, "git", "add", "PULL_REQUEST_DESCRIPTION.md"); sh(repo, "git", "commit", "-qm", "tracked doc")
+        self.assertEqual(R.newer_draft(repo, draft)["status"], "pass", R.newer_draft(repo, draft))
+        self.assertEqual(R.newer_draft(repo, None)["status"], "na")
+
+    def test_draft_kept_outside_the_repo(self):
+        # the lanes keep drafts in a work dir next to the clone: look beside the draft too
+        repo, _ = self._repo()
+        work = tempfile.mkdtemp(prefix="crucible-work-")
+        draft = os.path.join(work, "PR_DRAFT.md")
+        open(draft, "w").write("x\n")
+        os.utime(draft, (1_700_000_000, 1_700_000_000))
+        open(os.path.join(work, "PR_BODY.v2.md"), "w").write("y\n")
+        it = R.newer_draft(repo, draft)
+        self.assertEqual(it["status"], "warn", it)
+        self.assertIn(os.path.join(work, "PR_BODY.v2.md"), it["evidence"])
+        # explicitly judging the newest file is fine
+        self.assertEqual(R.newer_draft(repo, os.path.join(work, "PR_BODY.v2.md"))["status"], "pass")
+
+    def test_listed_in_readiness(self):
+        repo, draft = self._repo()
+        open(os.path.join(repo, "PR_BODY.v2.md"), "w").write("new\n")
+        files = [{"path": "a.py", "hunks": [], "added": 1, "removed": 1}]
+        items = {i["item"]: i for i in R.evaluate(repo, "o__r", "main", files, draft=draft, offline=True)["items"]}
+        self.assertEqual(items["judged draft is the newest PR body"]["status"], "warn")
 
 
 class TestAIAttribution(unittest.TestCase):
