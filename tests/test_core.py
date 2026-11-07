@@ -6,6 +6,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from crucible import diff as D, readiness as R, review as V, routing as RT, style as S, util as U  # noqa: E402
 
+# util reads CRUCIBLE_HOME once, at import. If crucible was imported before this module (a probe that imports it and
+# then runs the tests), every fixture would land in the user's real ~/.crucible and show up in `crucible stats`
+# (2026-11-07 01:24: crucible-repo-*, o__r, t__polish). Stop instead of writing there.
+if os.path.realpath(U.HOME) != os.path.realpath(_TMP_HOME):
+    raise RuntimeError(f"crucible was imported before the tests set CRUCIBLE_HOME; refusing to write to {U.HOME}")
+
 
 def sh(cwd, *cmd):
     return subprocess.run(cmd, cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
