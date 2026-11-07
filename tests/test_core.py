@@ -1587,6 +1587,93 @@ class TestEvalFixtureJunk(unittest.TestCase):
             self.assertEqual(E._git_ls(repo), ["a.py"])
 
 
+class TestVerifyFailedRetried(unittest.TestCase):
+    """A finding left unverified because its verifier call failed (supavisor #1142 review2 hit the 5-hour limit) is
+    re-verified by a plain re-run of the same commit and on the next commit, instead of staying unverified for good.
+    A transcribed "does not hold" was an answer, so it is neither retried nor re-verified just for being unverified."""
+
+    def test_stale_inputs_and_split_prev(self):
+        inp = {"base": "b1", "draft": None, "draft_sha": None}
+        failed = {"severity": "low", "file": "a.js", "line": 1, "title": "t", "source": "review",
+                  "verification": {"status": "unverified", "reason": "model call failed (success): You've hit your 5-hour limit"}}
+        salvaged = dict(failed, verification={"status": "unverified", "reason": "its prose says no", "tiers": [{"model": "m"}]})
+        done = {"status": "done", "inputs": dict(inp)}
+        self.assertIn("1 finding(s) weren't verified (model call failed (success): You've hit your 5-hour limit)",
+                      V.stale_inputs(dict(done, findings=[failed, salvaged]), inp))
+        self.assertIsNone(V.stale_inputs(dict(done, findings=[salvaged]), inp))
+        carried, touched = V.split_prev([failed, salvaged], {}, {}, "f" * 40)
+        self.assertEqual([f["verification"].get("tiers") for f in touched], [None])
+        self.assertEqual(len(carried), 1)
+        self.assertEqual(carried[0]["verification"]["reason"], "its prose says no")
+
+    def test_rerun_and_next_commit_reverify(self):
+        repo = make_repo({"a.js": "export const a = 1;\n", "b.js": "export const b = 1;\n"},
+                         {"a.js": "export const a = 1;\nexport const f = (xs) => xs[xs.length];\n"})
+        limited, verifies = [True], []
+
+        def fake(prompt, model, schema, cwd, *a, **kw):
+            if "findings" in schema["properties"]:
+                hit = "+++ b/a.js" in prompt
+                return {"summary": "s", "findings": [{"severity": "medium", "file": "a.js", "line": 2,
+                        "title": "f reads past the end", "problem": "p", "caused_by_this_change": True,
+                        "reachable_in_real_use": True, "wrong_if": "w", "fix": "x"}] if hit else []}, 0.01
+            verifies.append(prompt)
+            if limited[0]:
+                raise U.Failed("model call failed (success): You've hit your 5-hour limit")
+            return {"keep": True, "severity": "medium", "method": "read", "actions": "a", "evidence": "holds",
+                    "confidence": "high"}, 0.01
+        home = tempfile.mkdtemp(prefix="crucible-home-")
+        olds = (V.HOME, U.HOME, V.claude, os.environ.get("CRUCIBLE_CACHE"))
+        V.HOME = U.HOME = home
+        os.environ["CRUCIBLE_CACHE"] = os.path.join(home, "cache")
+        V.claude = fake
+        run = lambda logs: V.run_review(repo, "main", offline=True, skip_checks=True, no_tiers=True, log=logs.append)
+        status = lambda d: [f["verification"]["status"] for f in U.read_json(os.path.join(d, "review.json"))["findings"]]
+        try:
+            logs = []
+            d = run(logs)
+            r = U.read_json(os.path.join(d, "review.json"))
+            self.assertEqual(status(d), ["unverified"])
+            self.assertTrue(r["summary"].startswith("1 finding(s) couldn't be verified (model call failed (success): "
+                                                    "You've hit your 5-hour limit)"), r["summary"])
+            self.assertTrue(any("verification FAILED for 1 finding(s)" in l for l in logs), logs)
+            limited[0] = False
+            logs, n = [], len(verifies)
+            run(logs)                                               # a plain re-run of the same commit retries it
+            self.assertTrue(any("re-reviewing this commit: 1 finding(s) weren't verified" in l for l in logs), logs)
+            self.assertEqual(len(verifies), n + 1)
+            self.assertEqual(status(d), ["verified"])
+            logs, n = [], len(verifies)
+            run(logs)                                               # now settled: reused, no model call
+            self.assertTrue(any("already reviewed this commit" in l for l in logs), logs)
+            self.assertEqual(len(verifies), n)
+
+            # next commit: a fresh branch whose first round fails verification, then a commit that leaves a.js alone
+            # re-verifies the unverified finding instead of carrying it
+            sh(repo, "git", "checkout", "-qb", "fix2", "main")       # other code, so no cached verdict answers it
+            open(os.path.join(repo, "a.js"), "w").write("export const a = 1;\nexport const f = (ys) => ys[ys.length];\n")
+            sh(repo, "git", "commit", "-qam", "again")
+            limited[0] = True
+            d1 = V.run_review(repo, "main", offline=True, skip_checks=True, no_tiers=True, fresh=True, log=lambda *_: None)
+            self.assertEqual(status(d1), ["unverified"])
+            limited[0] = False
+            open(os.path.join(repo, "b.js"), "w").write("export const b = 2;\n")
+            sh(repo, "git", "commit", "-qam", "touch b only")
+            n = len(verifies)
+            d2 = V.run_review(repo, "main", offline=True, skip_checks=True, no_tiers=True, log=lambda *_: None)
+            r2 = U.read_json(os.path.join(d2, "review.json"))
+            self.assertEqual(r2["incremental"]["from"][:10], U.read_json(os.path.join(d1, "review.json"))["sha"][:10])
+            self.assertEqual((r2["incremental"]["carried"], r2["incremental"]["reverified"]), (0, 1))
+            self.assertEqual(len(verifies), n + 1)
+            self.assertEqual(status(d2), ["verified"])
+        finally:
+            V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
+            if olds[3] is None:
+                os.environ.pop("CRUCIBLE_CACHE", None)
+            else:
+                os.environ["CRUCIBLE_CACHE"] = olds[3]
+
+
 class TestRerunSameCommit(unittest.TestCase):
     """Real-use bug i: a rerun on the same commit reused the verdict even when the untracked PR_DRAFT.md (or the
     base) had changed, and --fresh without --force did too. The verdict is reused only for identical inputs."""

@@ -407,6 +407,10 @@ def split_prev(findings, ranges, hunks, prev_sha, changed=(), known=None):
         if rs and diff_mod.region_touched(rs, f["line"]):
             touched.append(dict(f, reverified_from=prev_sha[:10]))
             continue
+        if verify_failed(f):                           # never judged: carrying it would keep it unverified for good
+            moved = diff_mod.map_line(hunks.get(f["file"], []), f["line"]) if f["file"] in hunks else f["line"]
+            touched.append(dict(f, line=f["line"] if moved is None else moved, reverified_from=prev_sha[:10]))
+            continue
         anchor = absence_anchor(f)
         hit = anchor_hits(anchor, changed, known) if anchor is not None else []
         if hit:
@@ -446,6 +450,13 @@ def review_inputs(repo, base, draft=None):
             "draft_sha": hashlib.sha256(text.encode()).hexdigest()[:16] if path else None}
 
 
+def verify_failed(f):
+    """True when the finding is unverified because its verifier call failed (usage limit, rejected structured output),
+    so a re-run can settle it. A transcribed "does not hold" is unverified too, but that was an answer (it has tiers)."""
+    v = f.get("verification") or {}
+    return v.get("status") == "unverified" and "tiers" not in v
+
+
 def stale_inputs(prev, inputs):
     """None if `prev` is a finished review of exactly these inputs, else why it can't be reused ("" = no usable review).
     Reviews written before inputs were recorded can't prove they saw this draft, so they are redone."""
@@ -455,6 +466,12 @@ def stale_inputs(prev, inputs):
     failed = [c for c in (prev.get("coverage") or {}).get("chunks") or [] if c.get("status") == "failed"]
     if failed:
         return f"its review pass failed ({(failed[0].get('reason') or 'no reason recorded')[:160]})"
+    # same for a verifier call: supavisor #1142's round 2 hit the 5-hour limit mid-verification, and its findings
+    # stayed "unverified" until a --force run
+    unsettled = [f for f in prev.get("findings") or [] if verify_failed(f)]
+    if unsettled:
+        why = (unsettled[0]["verification"].get("reason") or "no reason recorded")[:160]
+        return f"{len(unsettled)} finding(s) weren't verified ({why})"
     old = prev.get("inputs")
     if old is None:
         return "the last review didn't record which draft it judged"
@@ -662,6 +679,12 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                     elif v and not v.get("salvaged"):      # a transcription can't drop it, so it settled nothing
                         f["rechecked"] = tiers[0]
         kept.sort(key=lambda f: (SEV.index(f["severity"]), (f.get("verification") or {}).get("method") != "executed"))
+        unsettled = [f for f in kept if verify_failed(f)]
+        if unsettled:                                  # inserted first, so a failed review pass still leads
+            why = (unsettled[0]["verification"].get("reason") or "no reason recorded")[:300]
+            log(f"  verification FAILED for {len(unsettled)} finding(s): {why}")
+            summaries.insert(0, f"{len(unsettled)} finding(s) couldn't be verified ({why}); they are kept as unverified "
+                                "and a plain re-run retries them.")
         # an incremental round summarizes only its own changes: repeating the earlier round's summary restated
         # problems that were already fixed (seen in the bug j self-review)
         failed = [p for c in chunk_status if c["status"] == "failed" for p in c["files"]]
