@@ -2127,8 +2127,22 @@ class TestDraftCitation(unittest.TestCase):
         self.assertEqual(V.cite_draft({"file": "body.md"}, "/x/body.md", repo)["file"], "/x/body.md")
         self.assertEqual(V.cite_draft({"file": "src/a.c"}, "PR_BODY.md", repo)["file"], "src/a.c")
         self.assertEqual(V.cite_draft({"file": "PR_DRAFT.md"}, "PR_DRAFT.md", repo)["file"], "PR_DRAFT.md")
-        # a real file that shares the draft's name keeps its finding
+        # a real file that shares the draft's name keeps its finding, also when it's tracked but not on disk
         self.assertEqual(V.cite_draft({"file": "CHANGELOG.md"}, "/x/CHANGELOG.md", repo)["file"], "CHANGELOG.md")
+        self.assertEqual(V.cite_draft({"file": "NEWS.md"}, "/x/NEWS.md", repo, {"NEWS.md"})["file"], "NEWS.md")
+
+    def test_draft_file_line(self):
+        plain = "Fixes #7\n\nbody line\n"
+        self.assertEqual(R.draft_file_line(plain, 3), 3)
+        layout = "## Title\n\nset a to 2\n\n## Body\n\nFixes #7\n\nbody line\n\n## Explain it to me\n\nnote\n"
+        sub = R.submitted_text(layout).split("\n")
+        raw = layout.split("\n")
+        for n, t in enumerate(sub, 1):                  # every submitted line maps to the same text in the file
+            if t:
+                self.assertEqual(raw[R.draft_file_line(layout, n) - 1].strip("` "), t, n)
+        h1 = "# Title here\n\n\nFirst body line\n"
+        self.assertEqual(R.draft_file_line(h1, 1), 1)
+        self.assertEqual(R.draft_file_line(h1, 3), 4)
 
     def test_region_reads_the_untracked_draft(self):
         repo = make_repo({"a.c": "int a;\n"})
@@ -2177,10 +2191,11 @@ class TestDraftCitation(unittest.TestCase):
             files = {f["file"] for f in r["findings"] if f["title"] == "body doesn't say why a is 2"}
             self.assertEqual(files, {"PR_BODY.md"})
             self.assertTrue(prompts["verify"])
-            # numbered as the reviewer saw it (the submitted text), without the author's notes
-            sub = R.submitted_text(open(os.path.join(repo, "PR_BODY.md")).read()).split("\n")
-            self.assertIn(f"    1  {sub[0]}", prompts["verify"][0])
-            self.assertIn("Fixes #7", prompts["verify"][0])
+            # the reviewer's line 1 (the title) is cited at the file's own line 3, shown with the file's numbering,
+            # without the author's notes
+            self.assertEqual({f["line"] for f in r["findings"] if f["file"] == "PR_BODY.md" and f["source"] == "review"}, {3})
+            self.assertRegex(prompts["verify"][0], r"(?m)^\s*3  set a to 2$")
+            self.assertRegex(prompts["verify"][0], r"(?m)^\s*7  Fixes #7$")
             self.assertNotIn("PRIVATE NOTE", prompts["verify"][0])
             self.assertNotIn("file not present", prompts["verify"][0])
         finally:

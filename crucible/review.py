@@ -127,12 +127,13 @@ def draft_label(repo, draft_path):
     return full if rel == ".." or rel.startswith(".." + os.sep) else rel
 
 
-def cite_draft(f, label, repo):
+def cite_draft(f, label, repo, tracked=()):
     """A reviewer that still cites PR_DRAFT.md for a draft kept elsewhere means the draft; so does the draft's bare
-    name, unless a file of that name exists in the repo (`--draft notes/CHANGELOG.md` vs a real CHANGELOG.md)."""
+    name, unless the repo has a file of that name, on disk or tracked but not checked out (sparse checkouts):
+    `--draft notes/CHANGELOG.md` vs a real CHANGELOG.md."""
     name = f.get("file")
-    if name != label and (name == "PR_DRAFT.md" or
-                          (name == os.path.basename(label) and not os.path.exists(os.path.join(repo, name)))):
+    real = name in tracked or os.path.exists(os.path.join(repo, name or ""))
+    if name != label and (name == "PR_DRAFT.md" or (name == os.path.basename(label) and not real)):
         f["file"] = label
     return f
 
@@ -506,11 +507,13 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         record["readiness"] = ready
         draft_path, draft_full = readiness.find_draft(repo, draft)
         draft_text = readiness.submitted_text(draft_full)
-        dlabel = draft_label(repo, draft_path)
-        # the submitted text, as the reviewer saw it: its line numbers are the ones findings cite, and the author's
-        # private notes stay out of the verifier's view too
-        dctx = (dlabel, draft_text) if draft_path else None
         cut = readiness.split_draft(draft_full)["notes_line"]
+        dlabel = draft_label(repo, draft_path)
+        # the verifier sees the draft file with its own line numbers (findings are mapped to them below), cut where
+        # the author's private notes start, since those aren't submitted
+        dctx = (dlabel, "\n".join(draft_full.split("\n")[:cut - 1] if cut else draft_full.split("\n"))) \
+            if draft_path else None
+        tracked = set(git(repo, "ls-files", "-z").split("\0"))
         if cut:
             log(f"  draft: author notes from {os.path.basename(draft_path)}:{cut} on are not judged as the PR body")
         style_json = read_json(os.path.join(project_dir(project), "style.json"), {}) or {}
@@ -578,7 +581,10 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             chunk_status.append({"files": ch["files"], "status": "reviewed", "cached": bool(hit)})
             summaries.append(out["summary"])
             for f in out["findings"][:10]:
-                cands.append(cite_draft(dict(f, source="review"), dlabel, repo))
+                f = cite_draft(dict(f, source="review"), dlabel, repo, tracked)
+                if f["file"] == dlabel and draft_path:
+                    f["line"] = readiness.draft_file_line(draft_full, f["line"])
+                cands.append(f)
         reviewed = {p for c in chunk_status if c["status"] == "reviewed" for p in c["files"]}
         if prev_sha:                                   # files untouched since the previous complete review stay covered
             reviewed |= set(code_files) - set(record["incremental"]["files"])

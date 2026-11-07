@@ -75,26 +75,39 @@ def split_draft(text):
     head = [i for i in open_lines if i < end]
     body_at = next((i for i in head if BODY_HEAD_RX.match(lines[i])), None)
     title_at = next((i for i in head if TITLE_HEAD_RX.match(lines[i]) and (body_at is None or i < body_at)), None)
-    title, start, preamble = "", 0, []
+    title, start, preamble, title_line = "", 0, [], None
     if title_at is not None:
         stop = body_at if body_at is not None else end
         val = next((i for i in range(title_at + 1, stop) if lines[i].strip()), None)
         if val is not None and not lines[val].startswith("#"):
             title = lines[val].strip().strip("`").strip()
-            start = val + 1
+            start, title_line = val + 1, val + 1
         else:
             start = title_at + 1
         preamble = lines[:title_at]
     elif body_at is None and lines and re.match(r"^#\s+\S", lines[0]):
-        title, start = lines[0][1:].strip(), 1
+        title, start, title_line = lines[0][1:].strip(), 1, 1
     if body_at is not None:
         preamble, start = lines[:body_at], body_at + 1
     body = "\n".join(lines[start:end])
+    lead = next((k for k, t in enumerate(lines[start:end]) if t), end - start)   # blank lines the strip below drops
     # a trailing horizontal rule usually separated the body from the notes
     body = re.sub(r"(\n\s*(-{3,}|\*{3,}|_{3,})\s*)+\s*$", "", "\n" + body).strip("\n")
     rest = lines[end + 1:] if end < len(lines) and NOTES_MARKER_RX.match(lines[end]) else lines[end:]
     notes = "\n\n".join(x for x in ("\n".join(preamble).strip("\n"), "\n".join(rest).strip("\n")) if x)
-    return {"title": title, "body": body, "notes": notes, "notes_line": end + 1 if end < len(lines) else None}
+    return {"title": title, "body": body, "notes": notes, "notes_line": end + 1 if end < len(lines) else None,
+            "title_line": title_line, "body_line": start + lead + 1}
+
+
+def draft_file_line(text, n):
+    """The file line of line n of submitted_text(text): findings are written against the submitted text, but cite
+    the draft file, where a `## Title` / `## Body` layout puts the same line further down."""
+    d = split_draft(text)
+    if d["title"]:
+        if n <= 2:                                     # the title, or the blank line submitted_text puts after it
+            return d["title_line"]
+        n -= 2
+    return d["body_line"] + max(n, 1) - 1
 
 
 def submitted_text(text):
