@@ -1605,6 +1605,41 @@ class TestVerifyFailedRetried(unittest.TestCase):
         self.assertEqual([f["verification"].get("tiers") for f in touched], [None])
         self.assertEqual(len(carried), 1)
         self.assertEqual(carried[0]["verification"]["reason"], "its prose says no")
+        spent = dict(failed, verification=dict(failed["verification"], attempts=V.VERIFY_ATTEMPTS))
+        self.assertIsNone(V.stale_inputs(dict(done, findings=[spent]), inp))      # gave up: reused as is
+        self.assertEqual([len(x) for x in V.split_prev([spent], {}, {}, "f" * 40)], [1, 0])
+
+    def test_recurring_failure_stops_after_the_cap(self):
+        repo = make_repo({"a.js": "export const a = 1;\n"}, {"a.js": "export const a = 1;\nexport const f = (xs) => xs[xs.length];\n"})
+        verifies = []
+
+        def fake(prompt, model, schema, cwd, *a, **kw):
+            if "findings" in schema["properties"]:
+                return {"summary": "s", "findings": [{"severity": "low", "file": "a.js", "line": 2, "title": "f reads past the end",
+                        "problem": "p", "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "w",
+                        "fix": "x"}]}, 0.01
+            verifies.append(1)
+            raise U.Failed("model call failed (error_max_structured_output_retries): None")
+        home = tempfile.mkdtemp(prefix="crucible-home-")
+        olds = (V.HOME, U.HOME, V.claude, os.environ.get("CRUCIBLE_CACHE"))
+        V.HOME = U.HOME = home
+        os.environ["CRUCIBLE_CACHE"] = os.path.join(home, "cache")
+        V.claude = fake
+        try:
+            for _ in range(V.VERIFY_ATTEMPTS + 2):
+                d = V.run_review(repo, "main", offline=True, skip_checks=True, no_tiers=True, log=lambda *_: None)
+            self.assertEqual(len(verifies), V.VERIFY_ATTEMPTS)    # then reused, not paid for again
+            r = U.read_json(os.path.join(d, "review.json"))
+            self.assertEqual(r["findings"][0]["verification"]["attempts"], V.VERIFY_ATTEMPTS)
+            self.assertIn("a plain re-run won't retry them (--force does)", r["summary"])
+            V.run_review(repo, "main", offline=True, skip_checks=True, no_tiers=True, force=True, log=lambda *_: None)
+            self.assertEqual(len(verifies), V.VERIFY_ATTEMPTS + 1)
+        finally:
+            V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
+            if olds[3] is None:
+                os.environ.pop("CRUCIBLE_CACHE", None)
+            else:
+                os.environ["CRUCIBLE_CACHE"] = olds[3]
 
     def test_rerun_and_next_commit_reverify(self):
         repo = make_repo({"a.js": "export const a = 1;\n", "b.js": "export const b = 1;\n"},
