@@ -99,7 +99,14 @@ def cache_put(key, val):
     write_json(os.path.join(cache_dir(), key + ".json"), val)
 
 
-def region(repo, sha, path, line, pad=40):
+def region(repo, sha, path, line, pad=40, draft=None):
+    """Numbered lines around path:line at sha. The PR draft is untracked, so a finding on it (draft = (label, text))
+    is shown from the file as judged; git would say "(file not present at this commit)" and the verifier then refuted
+    the finding for citing a missing file (gamescope #2516)."""
+    if draft and path == draft[0]:
+        lines = draft[1].split("\n")
+        a, b = max(1, line - pad), min(len(lines), line + pad)
+        return "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(a, b + 1))
     try:
         txt = git(repo, "show", f"{sha}:{path}")
     except Failed:
@@ -107,6 +114,24 @@ def region(repo, sha, path, line, pad=40):
     lines = txt.split("\n")
     a, b = max(1, line - pad), min(len(lines), line + pad)
     return "\n".join(f"{i:>5}  {lines[i - 1]}" for i in range(a, b + 1))
+
+
+def draft_label(repo, draft_path):
+    """How findings cite the PR draft: its path relative to the repo, so the verifier (which runs there) can open it,
+    or the absolute path for a draft kept outside the repo. It used to be "PR_DRAFT.md" always, so with
+    `--draft PR_BODY.md` every description finding cited a file that didn't exist (gamescope #2516)."""
+    if not draft_path:
+        return "PR_DRAFT.md"
+    full = os.path.abspath(draft_path)
+    rel = os.path.relpath(full, os.path.abspath(repo))
+    return full if rel == ".." or rel.startswith(".." + os.sep) else rel
+
+
+def cite_draft(f, label):
+    """A reviewer that still cites PR_DRAFT.md (or the draft's bare name) for a draft kept elsewhere means the draft."""
+    if f.get("file") != label and f.get("file") in ("PR_DRAFT.md", os.path.basename(label)):
+        f["file"] = label
+    return f
 
 
 def similar(a, b):
@@ -154,7 +179,7 @@ def assign_ids(findings):
 
 
 # ---------- pipeline ----------
-def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, house="", draft=""):
+def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, house="", draft="", draft_file="PR_DRAFT.md"):
     return textwrap.dedent(f"""\
         You are a strict senior maintainer of {project.replace('__', '/')} reviewing an outside contributor's change
         BEFORE it is submitted upstream. The checkout is at the change's HEAD ({sha[:10]}); the base is {base[:10]}.
@@ -176,10 +201,10 @@ def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, hou
         than the file's own style; MISSING comments where logic is non-obvious (invariants, ordering, GPU/netcode or
         concurrency subtleties, magic numbers); naming inconsistent with nearby code; and in the PR description:
         missing reviewer call-outs (risky lines or trade-offs, before/after numbers, how it was tested), generated-
-        sounding prose, or length far from the project norm. Use file "PR_DRAFT.md" for description findings.
+        sounding prose, or length far from the project norm. Use file "{draft_file}" for description findings.
         {house}
 
-        PR description draft, as it will be submitted (the author's private notes in PR_DRAFT.md are excluded and
+        PR description draft, as it will be submitted (the author's private notes in {draft_file} are excluded and
         are not part of the PR, so don't count them toward length or style):
         {draft[:5000] or '(none)'}
 
@@ -478,11 +503,13 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         record["readiness"] = ready
         draft_path, draft_full = readiness.find_draft(repo, draft)
         draft_text = readiness.submitted_text(draft_full)
+        dlabel = draft_label(repo, draft_path)
+        dctx = (dlabel, draft_full) if draft_path else None
         cut = readiness.split_draft(draft_full)["notes_line"]
         if cut:
             log(f"  draft: author notes from {os.path.basename(draft_path)}:{cut} on are not judged as the PR body")
         style_json = read_json(os.path.join(project_dir(project), "style.json"), {}) or {}
-        house_findings = style_mod.check(repo, base, files, draft_path, draft_text, style_json,
+        house_findings = style_mod.check(repo, base, files, dlabel, draft_text, style_json,
                                          title=readiness.split_draft(draft_full)["title"])
 
         scanner = diff_mod.scan(files)
@@ -525,11 +552,11 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         fkey, review_cost = facts_key(chk), 0.0
         for i, ch in enumerate(chunks, 1):
             prompt = review_prompt(project, sha, base, ch, rules, mem, facts, clog, all_files, house,
-                                   draft_text if i == 1 else "(reviewed in pass 1)")
+                                   draft_text if i == 1 else "(reviewed in pass 1)", dlabel)
             # keyed on the prompt with check output reduced to outcomes: a template change invalidates the cache, but
             # volatile output (timings) doesn't, so --force on the same commit is stable
             key_prompt = review_prompt(project, sha, base, ch, rules, mem, fkey, clog, all_files, house,
-                                       draft_text if i == 1 else "(reviewed in pass 1)")
+                                       draft_text if i == 1 else "(reviewed in pass 1)", dlabel)
             key = hashlib.sha256((review_model + "\0" + key_prompt).encode()).hexdigest()[:32]
             hit = None if fresh else cache_get(key)
             if hit:
@@ -546,7 +573,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             chunk_status.append({"files": ch["files"], "status": "reviewed", "cached": bool(hit)})
             summaries.append(out["summary"])
             for f in out["findings"][:10]:
-                cands.append(dict(f, source="review"))
+                cands.append(cite_draft(dict(f, source="review"), dlabel))
         reviewed = {p for c in chunk_status if c["status"] == "reviewed" for p in c["files"]}
         if prev_sha:                                   # files untouched since the previous complete review stay covered
             reviewed |= set(code_files) - set(record["incremental"]["files"])
@@ -569,7 +596,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         def verify(f):
             since = anchor_since(repo, prev_sha, f) if f.get("anchor_changed") else ""
             try:
-                return (f,) + verify_tiered(f, region(repo, sha, f["file"], f["line"]), repo, budget, tiers, fresh,
+                return (f,) + verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo, budget, tiers, fresh,
                                             since) + (None,)
             except Failed as e:
                 return f, None, [], str(e)
@@ -602,7 +629,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
 
             def recheck(f):
                 try:
-                    v, trail = verify_tiered(f, region(repo, sha, f["file"], f["line"]), repo, budget, tiers[:1], fresh, since)
+                    v, trail = verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo, budget, tiers[:1], fresh, since)
                     return f, v
                 except Failed:
                     return f, None

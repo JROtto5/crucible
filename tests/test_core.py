@@ -2107,3 +2107,78 @@ class TestStats(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestDraftCitation(unittest.TestCase):
+    """gamescope #2516: with `--draft PR_BODY.md`, description findings cited PR_DRAFT.md:1, the verifier was shown
+    "(file not present at this commit)", and 4 verifiers refuted findings because "PR_DRAFT.md does not exist"."""
+
+    def test_label(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo = os.path.join(d, "r"); os.makedirs(os.path.join(repo, "notes"))
+            self.assertEqual(V.draft_label(repo, None), "PR_DRAFT.md")
+            self.assertEqual(V.draft_label(repo, os.path.join(repo, "PR_DRAFT.md")), "PR_DRAFT.md")
+            self.assertEqual(V.draft_label(repo, os.path.join(repo, "notes", "body.md")), os.path.join("notes", "body.md"))
+            out = os.path.join(d, "elsewhere.md")                       # outside the repo: absolute, so it can be opened
+            self.assertEqual(V.draft_label(repo, out), out)
+            self.assertEqual(V.draft_label(repo, os.path.join(d, "r..md")), os.path.join(d, "r..md"))
+
+    def test_cite_draft(self):
+        self.assertEqual(V.cite_draft({"file": "PR_DRAFT.md"}, "PR_BODY.md")["file"], "PR_BODY.md")
+        self.assertEqual(V.cite_draft({"file": "body.md"}, "/x/body.md")["file"], "/x/body.md")
+        self.assertEqual(V.cite_draft({"file": "src/a.c"}, "PR_BODY.md")["file"], "src/a.c")
+        self.assertEqual(V.cite_draft({"file": "PR_DRAFT.md"}, "PR_DRAFT.md")["file"], "PR_DRAFT.md")
+
+    def test_region_reads_the_untracked_draft(self):
+        repo = make_repo({"a.c": "int a;\n"})
+        self.assertEqual(V.region(repo, "HEAD", "PR_BODY.md", 1), "(file not present at this commit)")
+        got = V.region(repo, "HEAD", "PR_BODY.md", 1, draft=("PR_BODY.md", "Fixes #1\n\nbody"))
+        self.assertIn("    1  Fixes #1", got)
+        self.assertIn("int a;", V.region(repo, "HEAD", "a.c", 1, draft=("PR_BODY.md", "x")))
+
+    def test_prompt_wording_unchanged_for_the_default_draft(self):
+        # the review cache is keyed on the prompt: the default must not invalidate every cached pass
+        ch = {"files": ["a.c"], "text": "diff"}
+        p = V.review_prompt("o__r", "a" * 40, "b" * 40, ch, "", "", "", "", ["a.c"])
+        self.assertIn('Use file "PR_DRAFT.md" for description findings', p)
+        self.assertIn('Use file "PR_BODY.md"', V.review_prompt("o__r", "a" * 40, "b" * 40, ch, "", "", "", "", ["a.c"],
+                                                                draft_file="PR_BODY.md"))
+
+    def test_run_review_cites_the_real_draft(self):
+        repo = make_repo({"src/a.js": "export const a = 1;\n"}, {"src/a.js": "export const a = 2;\n"})
+        open(os.path.join(repo, "PR_BODY.md"), "w").write("Fixes #7\n\nChanges a to 2. Tested: npm test\n")
+        prompts = {"review": [], "verify": []}
+
+        def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
+            if "findings" in schema["properties"]:
+                prompts["review"].append(prompt)
+                return {"summary": "s", "findings": [
+                    {"severity": "low", "file": "PR_DRAFT.md", "line": 1, "title": "body doesn't say why a is 2",
+                     "problem": "no reason given", "caused_by_this_change": True, "reachable_in_real_use": True,
+                     "wrong_if": "the body explains it", "fix": "say why"}]}, 0.01
+            prompts["verify"].append(prompt)
+            return {"keep": True, "severity": "low", "method": "read", "actions": "read", "evidence": "seen",
+                    "confidence": "high"}, 0.001
+
+        home = tempfile.mkdtemp(prefix="crucible-home-")
+        olds = (V.HOME, U.HOME, V.claude, os.environ.get("CRUCIBLE_CACHE"))
+        V.HOME = U.HOME = home
+        os.environ["CRUCIBLE_CACHE"] = os.path.join(home, "cache")
+        V.claude = fake
+        try:
+            out = V.run_review(repo, "main", offline=True, skip_checks=True, no_tiers=True,
+                               draft=os.path.join(repo, "PR_BODY.md"), log=lambda *_: None)
+            r = U.read_json(os.path.join(out, "review.json"))
+            self.assertEqual(r["status"], "done", r.get("reason"))
+            self.assertIn('Use file "PR_BODY.md"', prompts["review"][0])
+            files = {f["file"] for f in r["findings"] if f["title"] == "body doesn't say why a is 2"}
+            self.assertEqual(files, {"PR_BODY.md"})
+            self.assertTrue(prompts["verify"])
+            self.assertIn("    1  Fixes #7", prompts["verify"][0])
+            self.assertNotIn("file not present", prompts["verify"][0])
+        finally:
+            V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
+            if olds[3] is None:
+                os.environ.pop("CRUCIBLE_CACHE", None)
+            else:
+                os.environ["CRUCIBLE_CACHE"] = olds[3]

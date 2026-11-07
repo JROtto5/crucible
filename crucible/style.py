@@ -268,17 +268,17 @@ def ai_tells(text, style=None, allowed_headings=(), template="", title=""):
     return out
 
 
-def check(repo, base, files, draft_path, draft_text, style, title=""):
+def check(repo, base, files, draft_file, draft_text, style, title=""):
     from .readiness import template_headings, template_text
     out = []
     if draft_text:
         for kind, detail in ai_tells(draft_text, style, template_headings(repo)[1], template_text(repo)[1], title):
-            out.append(_f("medium" if kind in ("length", "boilerplate") else "low", os.path.basename(draft_path or "PR_DRAFT.md"), 1,
+            out.append(_f("medium" if kind in ("length", "boilerplate") else "low", draft_file or "PR_DRAFT.md", 1,
                           f"PR description: {kind} reads as generated", detail,
                           "Rewrite in the project's own voice (run `crucible polish`).",
                           "this project's merged PRs commonly do the same (see STYLE.md measurements)"))
         if not has_testing_evidence(draft_text):
-            out.append(_f("medium", os.path.basename(draft_path or "PR_DRAFT.md"), 1, "PR description: no testing evidence",
+            out.append(_f("medium", draft_file or "PR_DRAFT.md", 1, "PR description: no testing evidence",
                           "Reviewers can't see how this was tested.", "Add a short 'Tested:' line with the exact commands/results.",
                           "the description already states how it was tested"))
     for f in files:
