@@ -88,6 +88,8 @@ Learning reads the project's most recent merged PRs through `gh` and writes thre
   - the voice, comment conventions, how reviewers are called out, and what regulars never do;
   - three real example bodies with links.
 
+These are snapshots: they keep their numbers until you run `learn` again. Both JSON files record the `learn` version that wrote them. When a later crucible computes one of them differently, readiness shows "⚠️ learned project data is current" with what the old file is missing; re-run `crucible learn` to refresh. It's also worth re-running every month or two on an active project, as its recent PRs change.
+
 ## Your PR draft and your notes
 
 crucible reads the description from `PR_DRAFT.md` in the repo (or `--draft PATH`). `PR_DRAFT.polished.md` is only a proposal from `polish`: copy it over `PR_DRAFT.md` to accept it. Only the part you would paste into GitHub is judged. Your own notes in the same file are excluded from the style checks, the readiness checks (template sections, the linked issue) and the reviewer's description findings:
