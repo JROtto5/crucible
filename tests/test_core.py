@@ -732,6 +732,32 @@ class TestLearnStyleSources(unittest.TestCase):
         self.assertNotIn("total_cost_usd", U.read_json(os.path.join(d, "meta.json")))
         self.assertEqual(U.read_json(os.path.join(d, "style.json"))["cost_usd"], 0.37)
 
+    def test_run_learn_spend_without_comments_or_a_rules_call(self):
+        from crucible import learn as L
+        S.claude = self._metered(0.37)
+        orig = (L.collect, L.docs_text, L.upstream_slug)
+        L.collect, L.docs_text, L.upstream_slug = (lambda slug, n, log: ([], [], [10])), (lambda slug: ""), (lambda r: "o/r")
+        logs = []
+        try:
+            meta = L.run_learn(self.c, log=logs.append)
+            self.assertEqual(meta["total_cost_usd"], 0.37)
+            self.assertIn("learn cost $0.37 (rules $0, style $0.37)", logs)
+            self.assertNotIn("cost_usd", U.read_json(os.path.join(S.project_dir(U.project_key(self.c)), "meta.json")))
+            self.assertEqual(L.run_learn(self.c, style=False, log=logs.append)["total_cost_usd"], 0)
+        finally:
+            L.collect, L.docs_text, L.upstream_slug = orig
+
+    def test_failed_rules_call_reports_its_spend(self):
+        from crucible import learn as L
+        orig = (L.collect, L.docs_text, L.claude, L.upstream_slug)
+        L.collect = lambda slug, n, log: ([{"number": 1}], [{"pr": 1, "url": "u", "path": "", "body": "b"}], [10])
+        L.docs_text, L.claude, L.upstream_slug = (lambda slug: ""), self._metered(0.41, fail=True), (lambda r: "o/r")
+        try:
+            with self.assertRaisesRegex(U.Failed, r"error_max_turns.*learn cost \$0\.41 spent on the rules call"):
+                L.run_learn(self.c, log=lambda *_: None)
+        finally:
+            L.collect, L.docs_text, L.claude, L.upstream_slug = orig
+
     def test_falls_back_to_head_without_a_base_branch(self):
         d = make_repo({"x.py": "# hi\nx = 1\n"})
         sh(d, "git", "branch", "-m", "main", "topic")

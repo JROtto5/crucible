@@ -72,7 +72,10 @@ def run_learn(repo, n=25, model="claude-sonnet-5-5", budget_usd=2.0, style=True,
         {chr(10).join(f"- #{c['pr']} {c['url']} {c['path'] or ''}: {c['body']}" for c in comments)[:60000]}
         """)
     budget = Budget(budget_usd)
-    out, _ = claude(prompt, model, RULES_SCHEMA, repo, budget, tools=None, effort="medium")
+    try:
+        out, _ = claude(prompt, model, RULES_SCHEMA, repo, budget, tools=None, effort="medium")
+    except Failed as e:     # a call that fails after the model ran was still paid for; say how much
+        raise Failed(f"{e} (learn cost ${round(budget.spent, 4)} spent on the rules call)") from e
     md = [f"# Maintainer preferences: {slug}", "",
           f"Learned {meta['learned']} from {len(merged)} merged PRs ({len(comments)} maintainer comments). "
           f"Median merged PR: {meta['median_merged_pr_lines']} changed lines.", ""]
