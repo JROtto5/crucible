@@ -38,6 +38,7 @@ The one blocking miss is the refcount case: the bug is found, but rated medium. 
    - big uncommented logic in files that normally explain themselves;
    - generated-sounding descriptions: emoji, "This PR introduces…", filler, bullet bloat, a body far longer than what outside contributors' merged PRs usually have, headings the project never uses;
    - a description with no testing evidence.
+   - an AI tool attribution line in the description ("🤖 Generated with …", an AI `Co-authored-by`), cited at its own line (drop it unless the project's policy asks for AI disclosure).
 
    These are medium/low and answerable, not blocking.
 5. **Chunked review by a different model than the author.** The author model is read from `Co-Authored-By` trailers, and the reviewer is chosen to differ. Files are grouped into chunks, and big files are split by hunk. **Coverage is recorded, and anything less than 100% can't be GREEN.** The reviewer reads whole functions, callers, the matching tests and public types. It gets concrete severity definitions, at most 10 ranked findings per chunk, and the project's learned rules and repeat-mistakes memory. Every finding must name file:line and a `wrong_if`, the observation that would prove it false.
@@ -53,6 +54,7 @@ The one blocking miss is the refcount case: the bug is found, but rated medium. 
    - a changeset/changelog is added where the repo uses one;
    - conventional commits, if commitlint is configured;
    - DCO sign-off, if required;
+   - no AI co-author trailer or "Generated with …" line in the branch's commits (warn only: some projects do take them);
    - no whitespace-only churn;
    - size is compared with the project's median merged PR;
    - the issue is still open, unassigned and has no competing open PR (`gh`).
@@ -100,7 +102,7 @@ Headings from the repo's own PR template never count as "headings this project r
 
 ## Assistants (drafts only)
 
-- `polish` rewrites the body of `PR_DRAFT.md` in the house style and carries your notes over below a `<!-- crucible: notes -->` line. Issue-link lines the template requires (`Closes #12`, `Related issue: #34697`) always survive the rewrite verbatim. It keeps every fact, number and test result, adds no unprovable claims, lists anything it removed in `PR_DRAFT.polish-notes.md`, and re-scans the result for generated-text tells.
+- `polish` rewrites the body of `PR_DRAFT.md` in the house style and carries your notes over below a `<!-- crucible: notes -->` line. Issue-link lines the template requires (`Closes #12`, `Related issue: #34697`) always survive the rewrite verbatim. It keeps every fact, number and test result, adds no unprovable claims, lists anything it removed in `PR_DRAFT.polish-notes.md`, and re-scans the result for generated-text tells. An AI attribution line the rewrite adds on its own is removed (and listed); one you wrote yourself is kept.
 - `prep` predicts reviewer questions and answers them with file:line and test evidence. It also writes "explain it like you wrote it" notes.
 - `reply` fetches the comments on an open PR and drafts replies that follow [crucible/guides/answering-maintainers.md](crucible/guides/answering-maintainers.md).
 

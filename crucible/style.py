@@ -24,8 +24,7 @@ HEADING_RX = re.compile(r"(?m)^#{1,4}\s+(.+?)\s*$")
 AI_TOOLS = r"(?:claude(?:\s+code)?|chatgpt|gpt-?\d|openai|copilot|cursor|gemini|codex|devin|aider|windsurf|codeium|anthropic)"
 ATTRIBUTION_RX = re.compile(
     r"^(?:[^\w\n]|_)*(?:generated|written|created|authored|made)\s+(?:with|by|using)\s+\[?" + AI_TOOLS + r"(?![a-z0-9])"
-    r"|^\s*co-authored-by:[^\n]*(?:" + AI_TOOLS + r"(?![a-z0-9])|noreply@anthropic\.com|@openai\.com)"
-    r"|claude\.com/claude-code|claude\.ai/code", re.I | re.M)
+    r"|^\s*co-authored-by:[^\n]*(?:" + AI_TOOLS + r"(?![a-z0-9])|noreply@anthropic\.com|@openai\.com)", re.I | re.M)
 
 
 def attribution_lines(text):
@@ -259,6 +258,9 @@ def ai_tells(text, style=None, allowed_headings=(), template="", title=""):
     style = style or {}
     allowed = {norm_heading(h) for h in allowed_headings}
     out = []
+    attr = attribution_lines(text)
+    if attr:                                           # reported once, as itself, not again as its 🤖 or its length
+        text = "\n".join(l for l in text.split("\n") if not ATTRIBUTION_RX.search(l))
     em = EMOJI_RX.findall(text)
     if em and (style.get("body", {}).get("pct_with_emoji", 0) < 10):
         out.append(("emoji", f"{len(em)} emoji ({''.join(em[:5])})"))
@@ -290,7 +292,6 @@ def ai_tells(text, style=None, allowed_headings=(), template="", title=""):
             out.append(("headings", f"headings this project rarely uses: {odd[:4]}"))
     if text.count("—") >= 4:
         out.append(("em-dashes", f"{text.count(chr(0x2014))} em dashes"))
-    attr = attribution_lines(text)
     if attr:
         out.append(("AI attribution", "; ".join(a[:80] for a in attr[:3])))
     return out
@@ -419,7 +420,7 @@ def polish(repo, project, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-
     notes = "\n".join(f"- removed: {r}" for r in out["removed"]) or "- nothing removed"
     open(os.path.join(repo, "PR_DRAFT.polish-notes.md"), "w").write(f"# Polish notes\n\n{notes}\n\n## Facts kept\n\n"
                                                                     + "\n".join(f"- {k}" for k in out["kept_facts"]) + "\n")
-    leftover = ai_tells(out["body"], read_json(os.path.join(project_dir(project), "style.json"), {}), heads,
+    leftover = ai_tells(body, read_json(os.path.join(project_dir(project), "style.json"), {}), heads,
                         template_text(repo)[1])
     log(f"wrote {newp} (original kept) · {len(out['removed'])} removals listed in PR_DRAFT.polish-notes.md · "
         f"remaining tells: {leftover or 'none'} · ${round(cost, 4)}")
