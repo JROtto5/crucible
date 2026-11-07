@@ -1,4 +1,4 @@
-import json, os, re, subprocess, sys, tempfile, unittest
+import json, os, re, shutil, subprocess, sys, tempfile, unittest
 
 _TMP_HOME = tempfile.mkdtemp(prefix="crucible-test-home-")
 os.environ["CRUCIBLE_HOME"] = _TMP_HOME
@@ -2889,7 +2889,7 @@ class TestAnchorReplay(unittest.TestCase):
     def test_sample_is_taken_from_replayable_findings_only(self):
         from unittest import mock
         from crucible import anchoring as A
-        repo = make_repo({"a.py": "x = 1\n"}, {"a.py": "x = 2\n"})
+        repo = shutil.move(make_repo({"a.py": "x = 1\n"}, {"a.py": "x = 2\n"}), tempfile.mkdtemp())   # don't walk all of /tmp
         sha = sh(repo, "git", "rev-parse", "HEAD")
         with tempfile.TemporaryDirectory() as root:
             # "o__a" sorts first and its commit is in no clone: sampling first would spend the one slot on it
@@ -2933,7 +2933,7 @@ class TestAnchorReplay(unittest.TestCase):
     def test_run_checks_out_the_reviewed_commit_without_touching_the_clone(self):
         from unittest import mock
         from crucible import anchoring as A
-        repo = make_repo({"a.py": "x = 1\n"}, {"a.py": "x = 2\ny = 3\n"})
+        repo = shutil.move(make_repo({"a.py": "x = 1\n"}, {"a.py": "x = 2\ny = 3\n"}), tempfile.mkdtemp())
         sha = sh(repo, "git", "rev-parse", "HEAD")
         sh(repo, "git", "commit", "-q", "--amend", "-m", "amended")     # the reviewed round is reachable from no ref
         sh(repo, "git", "checkout", "-q", "main")
