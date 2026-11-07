@@ -1655,7 +1655,11 @@ class TestVerifyFailedRetried(unittest.TestCase):
             sh(repo, "git", "commit", "-qam", "edit f")
             d = V.run_review(repo, "main", offline=True, skip_checks=True, no_tiers=True, log=lambda *_: None)
             self.assertEqual(len(verifies), n + 1)
-            self.assertEqual(U.read_json(os.path.join(d, "review.json"))["incremental"]["reverified"], 1)
+            r = U.read_json(os.path.join(d, "review.json"))
+            self.assertEqual(r["incremental"]["reverified"], 1)
+            self.assertEqual(r["findings"][0]["verification"]["attempts"], 1)   # its own budget, not the old code's
+            V.run_review(repo, "main", offline=True, skip_checks=True, no_tiers=True, log=lambda *_: None)
+            self.assertEqual(len(verifies), n + 2)                  # so a plain re-run retries it
         finally:
             V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
             if olds[3] is None:

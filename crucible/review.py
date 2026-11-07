@@ -405,7 +405,7 @@ def split_prev(findings, ranges, hunks, prev_sha, changed=(), known=None):
         f = {k: v for k, v in f.items() if k != "anchor_changed"}     # an earlier round's, not this one's
         rs = ranges.get(f["file"], [])
         if rs and diff_mod.region_touched(rs, f["line"]):
-            touched.append(dict(f, reverified_from=prev_sha[:10]))
+            touched.append(dict(new_code(f), reverified_from=prev_sha[:10]))
             continue
         moved = diff_mod.map_line(hunks.get(f["file"], []), f["line"]) if f["file"] in hunks else f["line"]
         if verify_retryable(f):                        # never judged: carrying it would keep it unverified for good
@@ -414,14 +414,21 @@ def split_prev(findings, ranges, hunks, prev_sha, changed=(), known=None):
         anchor = absence_anchor(f)
         hit = anchor_hits(anchor, changed, known) if anchor is not None else []
         if hit:
-            touched.append(dict(f, line=f["line"] if moved is None else moved, reverified_from=prev_sha[:10],
+            touched.append(dict(new_code(f), line=f["line"] if moved is None else moved, reverified_from=prev_sha[:10],
                                 anchor_changed=hit))
             continue
         if moved is None:
-            touched.append(dict(f, reverified_from=prev_sha[:10]))
+            touched.append(dict(new_code(f), reverified_from=prev_sha[:10]))
         else:
             carried.append(dict(f, line=moved, carried_from=prev_sha[:10]))
     return carried, touched
+
+
+def new_code(f):
+    """The finding re-verified because its code (or anchor) changed: failed attempts on the old code don't count."""
+    if not verify_failed(f):
+        return f
+    return dict(f, verification=dict(f["verification"], attempts=0))
 
 
 def anchor_since(repo, prev_sha, f):
