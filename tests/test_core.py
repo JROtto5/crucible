@@ -2886,6 +2886,20 @@ class TestAnchorReplay(unittest.TestCase):
         self.assertAlmostEqual(t["with"]["cost"], 0.75)
         self.assertIn("R [refuted] without: dropped, with: kept", A.report(A.judge(es, verify), {}))
 
+    def test_sample_is_taken_from_replayable_findings_only(self):
+        from unittest import mock
+        from crucible import anchoring as A
+        repo = make_repo({"a.py": "x = 1\n"}, {"a.py": "x = 2\n"})
+        sha = sh(repo, "git", "rev-parse", "HEAD")
+        with tempfile.TemporaryDirectory() as root:
+            # "o__a" sorts first and its commit is in no clone: sampling first would spend the one slot on it
+            self._store(root, "o__a", "e" * 40, [self.F], {"CR-1": {"disposition": "refuted"}}, "2026-11-05")
+            self._store(root, "o__p", sha, [self.F], {"CR-1": {"disposition": "refuted"}}, "2026-11-05")
+            with mock.patch.object(V, "verify_tiered", lambda *a, **k: ({"keep": False}, [])):
+                rows, skipped = A.run(root, [os.path.dirname(repo)], per_class=1)
+        self.assertEqual([r["repo"] for r in rows], ["o__p"])
+        self.assertEqual(skipped["no local clone has the commit"], 1)
+
     def test_cli_passes_its_flags_through(self):
         from unittest import mock
         from crucible import anchoring as A, cli
