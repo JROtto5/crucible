@@ -2618,6 +2618,17 @@ class TestDraftCitation(unittest.TestCase):
             self.assertNotIn("file not present", prompts["verify"][0])
             # Lutris #7004: the verifier judged a newer PR_BODY.v2.md instead of the reviewed draft
             self.assertIn("exactly the text of PR_BODY.md", prompts["verify"][0])
+            # round 2 changes only code: the carried description finding's re-check is held to the draft too
+            open(os.path.join(repo, "src/a.js"), "w").write("export const a = 3;\n")
+            sh(repo, "git", "commit", "-qam", "a is 3")
+            prompts["verify"].clear()
+            out = V.run_review(repo, "main", offline=True, skip_checks=True,
+                               draft=os.path.join(repo, "PR_BODY.md"), log=lambda *_: None)
+            r = U.read_json(os.path.join(out, "review.json"))
+            self.assertEqual(r["status"], "done", r.get("reason"))
+            rechecks = [p for p in prompts["verify"] if "changed since then" in p and "PR_BODY.md:" in p]
+            self.assertTrue(rechecks, prompts["verify"])
+            self.assertTrue(all("exactly the text of PR_BODY.md" in p for p in rechecks))
         finally:
             V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
             if olds[3] is None:
@@ -2658,13 +2669,32 @@ class TestDraftScope(unittest.TestCase):
         self.assertIn("--draft PR_BODY.v2.md", it["evidence"])
         self.assertNotIn("polish", it["evidence"])
         self.assertNotIn("more)", it["evidence"])
+        open(os.path.join(repo, "PR_DRAFT_v3.md"), "w").write("newest design\n")
+        self.assertIn("(and 1 more)", R.newer_draft(repo, draft)["evidence"])
+
+    def test_body_file_names(self):
+        for n in ("PR_BODY.md", "PR_BODY.v2.md", "PR_BODY_v2.md", "PR_DRAFT2.md", "pr-body-final.md",
+                  "PULL_REQUEST_DESCRIPTION.md", "PR_DESC.md"):
+            self.assertTrue(R.BODY_FILE_RX.match(n), n)
+        for n in ("PREP.md", "NOTES.md", "PR_BODY.txt", "pr_bodycheck.md", "PRIVATE.md", "PROPOSAL.md"):
+            self.assertFalse(R.BODY_FILE_RX.match(n), n)
 
     def test_copy_of_the_judged_body_passes(self):
         # open-pr.sh submits PR_BODY.md, written out of the reviewed draft: same text, re-wrapped, is not a rival
         repo, draft = self._repo()
-        open(os.path.join(repo, "PR_BODY.md"), "w").write("old\n   design\n")
+        open(os.path.join(repo, "PR_BODY.md"), "w").write("Fixes #1\n\nold\n   design\n")
         self.assertEqual(R.newer_draft(repo, draft)["status"], "pass", R.newer_draft(repo, draft))
         open(os.path.join(repo, "PR_BODY.md"), "w").write("old design, edited after the review\n")
+        self.assertEqual(R.newer_draft(repo, draft)["status"], "warn")
+        # a cut-down body is not what was reviewed either (it dropped the Fixes line)
+        open(os.path.join(repo, "PR_BODY.md"), "w").write("old design\n")
+        self.assertEqual(R.newer_draft(repo, draft)["status"], "warn")
+        # the body without the draft's title line is a copy (the title is submitted separately)
+        open(draft, "w").write("## Title\n\nFix a\n\n## Body\n\nFixes #1\n\nold design\n\n## Explain it to me\n\nnotes\n")
+        os.utime(draft, (1_700_000_000, 1_700_000_000))
+        open(os.path.join(repo, "PR_BODY.md"), "w").write("Fixes #1\n\nold design\n")
+        self.assertEqual(R.newer_draft(repo, draft)["status"], "pass", R.newer_draft(repo, draft))
+        open(os.path.join(repo, "PR_BODY.md"), "w").write("notes\n")        # text from the private notes only
         self.assertEqual(R.newer_draft(repo, draft)["status"], "warn")
 
     def test_older_tracked_or_unrelated_files_pass(self):

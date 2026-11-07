@@ -709,14 +709,15 @@ def commit_attribution(repo, base):
 
 
 # Files an author keeps a PR body in. polish's output (*.polished.md, *.polish-notes.md) is newer by design: not a rival.
-BODY_FILE_RX = re.compile(r"^(pr|pull[_-]?request)[_-]?(draft|body|description|desc)\b.*\.md$", re.I)
+# The keyword may be followed by any separator or digit (PR_BODY.v2, PR_BODY_v2, PR_DRAFT2), not by more letters.
+BODY_FILE_RX = re.compile(r"^(pr|pull[_-]?request)[_-]?(draft|body|description|desc)(?![a-z]).*\.md$", re.I)
 
 
 def newer_draft(repo, draft_path):
     """Is the judged draft the newest PR body here? On Lutris #7004 the review judged a PR_DRAFT.md from Nov 4 while
     the body about to be submitted was PR_BODY.v2.md from Nov 7, so the description findings were about the wrong
     text. Looks next to the draft and in the repo root for untracked PR_DRAFT*/PR_BODY*/PR_DESCRIPTION*.md files
-    edited later than it whose text isn't already in it (a body copied out of the draft is fine). Advisory: the
+    edited later than it whose text differs from what it submits (the body copied out of it is fine). Advisory: the
     author may keep old versions on purpose."""
     name = "judged draft is the newest PR body"
     if not draft_path:
@@ -727,7 +728,9 @@ def newer_draft(repo, draft_path):
         return _item(name, "na", "draft not readable")
     tracked = set(git(repo, "ls-files", check=False).split("\n"))
     norm = lambda t: " ".join(t.split())
-    judged = norm(open(draft_path, errors="replace").read())
+    raw = open(draft_path, errors="replace").read()
+    # what the judged draft submits: title + body, or the body alone (the title goes in `gh pr create --title`)
+    copies = {norm(submitted_text(raw)), norm(split_draft(raw)["body"])}
     seen, newer = set(), []
     for d in {os.path.dirname(os.path.abspath(draft_path)), os.path.abspath(repo)}:
         try:
@@ -744,9 +747,8 @@ def newer_draft(repo, draft_path):
             t = os.path.getmtime(p)
             if t <= mine + 60:                         # a minute's slack: files written together by one edit
                 continue
-            text = norm(open(p, errors="replace").read())
-            if text and text in judged:                # a copy of the reviewed body (open-pr.sh submits PR_BODY.md)
-                continue
+            if norm(open(p, errors="replace").read()) in copies:   # the reviewed body copied out (open-pr.sh
+                continue                                              # submits PR_BODY.md): not a rival
             newer.append((t, p))
     if not newer:
         return _item(name, "pass", f"no other PR body file here is newer than {os.path.basename(draft_path)} "
