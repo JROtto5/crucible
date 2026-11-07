@@ -83,7 +83,19 @@ def has_commit(clone, sha):
 
 
 def checkout(clone, sha, into):
-    subprocess.run(["git", "clone", "--quiet", "--shared", "--no-checkout", clone, into], check=True, capture_output=True)
+    """A temp repo that borrows the clone's object store (an alternates file) and checks out `sha`. The commit is often
+    reachable from no ref (an amended round), so `git clone --shared`, which only copies what refs reach, can't do
+    it. A partial clone's missing blobs are fetched from its promisor remote into the temp repo, never the clone."""
+    objects = os.path.join(git(clone, "rev-parse", "--path-format=absolute", "--git-common-dir"), "objects")
+    subprocess.run(["git", "init", "--quiet", into], check=True, capture_output=True)
+    with open(os.path.join(into, ".git", "objects", "info", "alternates"), "w") as fh:
+        fh.write(objects + "\n")
+    url = git(clone, "config", "--get", "remote.origin.url", check=False).strip()
+    if url and git(clone, "config", "--get", "remote.origin.promisor", check=False).strip() == "true":
+        git(into, "remote", "add", "origin", url)
+        git(into, "config", "remote.origin.promisor", "true")
+        git(into, "config", "remote.origin.partialclonefilter",
+            git(clone, "config", "--get", "remote.origin.partialclonefilter", check=False).strip() or "blob:none")
     git(into, "checkout", "--quiet", "--detach", sha)
     return into
 
@@ -156,7 +168,8 @@ def report(rows, skipped):
 def run(root, clones, per_class=0, jobs=4, budget=None, include_self=False):
     from .review import region, verify_tiers, verify_tiered, choose_models
     entries = answered(root, include_self)
-    skipped = {"on the PR draft (its text isn't stored)": 0, "no local clone has the commit": 0}
+    skipped = {"on the PR draft (its text isn't stored)": 0, "no local clone has the commit": 0,
+               "the commit couldn't be checked out": 0}
     code = []
     for e in entries:
         if on_draft(e):
@@ -180,7 +193,12 @@ def run(root, clones, per_class=0, jobs=4, budget=None, include_self=False):
     try:
         for e in ready:
             if e["sha"] not in trees:
-                trees[e["sha"]] = checkout(where[e["sha"]], e["sha"], os.path.join(tmp, e["sha"][:12]))
+                try:
+                    trees[e["sha"]] = checkout(where[e["sha"]], e["sha"], os.path.join(tmp, e["sha"][:12]))
+                except Failed:
+                    trees[e["sha"]] = None
+        skipped["the commit couldn't be checked out"] = sum(1 for e in ready if not trees[e["sha"]])
+        ready = [e for e in ready if trees[e["sha"]]]
 
         def verify(r, argument):
             tree, f = trees[r["sha"]], r["finding"]

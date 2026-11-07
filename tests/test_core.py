@@ -2896,6 +2896,7 @@ class TestAnchorReplay(unittest.TestCase):
         from crucible import anchoring as A
         repo = make_repo({"a.py": "x = 1\n"}, {"a.py": "x = 2\ny = 3\n"})
         sha = sh(repo, "git", "rev-parse", "HEAD")
+        sh(repo, "git", "commit", "-q", "--amend", "-m", "amended")     # the reviewed round is reachable from no ref
         sh(repo, "git", "checkout", "-q", "main")
         before = sh(repo, "git", "worktree", "list") + sh(repo, "git", "status", "--porcelain")
         seen = []
@@ -2914,7 +2915,8 @@ class TestAnchorReplay(unittest.TestCase):
             with mock.patch.object(V, "verify_tiered", fake_verify):
                 rows, skipped = A.run(root, [os.path.dirname(repo), other])
             self.assertNotIn("CRUCIBLE_CACHE", os.environ)
-        self.assertEqual(skipped, {"on the PR draft (its text isn't stored)": 1, "no local clone has the commit": 1})
+        self.assertEqual(skipped, {"on the PR draft (its text isn't stored)": 1, "no local clone has the commit": 1,
+                                   "the commit couldn't be checked out": 0})
         self.assertEqual(sorted(seen), [("x = 2\ny = 3\n", 1, False, True, True), ("x = 2\ny = 3\n", 1, True, True, True)])
         self.assertEqual(sh(repo, "git", "worktree", "list") + sh(repo, "git", "status", "--porcelain"), before)
         self.assertEqual(A.tally(rows)["with"]["false_alarms_kept"], 1)
