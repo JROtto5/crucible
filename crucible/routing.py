@@ -80,6 +80,15 @@ def _files(rev):
     return [p for c in (rev.get("coverage") or {}).get("chunks", []) for p in c.get("files", [])]
 
 
+def carried_here(f, rev):
+    """True when this incremental round copied the finding (and its verdict) from the previous round unjudged.
+    Counting those again inflated the raw refuted share (63% vs 50% on 2026-11-07): a refuted finding is never fixed,
+    so it rides along every later round, while kept ones leave as they are fixed. A finding carried once and later
+    re-verified keeps that older `carried_from`, so it must match this round's `incremental.from`."""
+    frm = (rev.get("incremental") or {}).get("from") or ""
+    return bool(frm) and f.get("carried_from") == frm[:10]
+
+
 def replay(root, include_self=False):
     """Replay the stored reviews under `root` against each candidate rule. No model calls."""
     answers = _answers(root)
@@ -99,8 +108,9 @@ def replay(root, include_self=False):
             r["cost_verify"] += rev.get("cost_verify_usd") or 0
         model_found = [(f, True) for f in rev.get("findings", []) if f.get("source") == "review"] + \
                       [(f, False) for f in rev.get("dropped", []) if f.get("source") == "review"]
-        r["raw"] += len(model_found)
-        r["dropped"] += sum(1 for f, kept in model_found if not kept)
+        judged = [(f, kept) for f, kept in model_found if not carried_here(f, rev)]
+        r["raw"] += len(judged)
+        r["dropped"] += sum(1 for f, kept in judged if not kept)
         # a full review of a branch already reviewed on the same base: an amended commit, so not incremental
         key = (rev.get("repo"), rev.get("base"), (rev.get("inputs") or {}).get("draft"))
         if key in seen and not rev.get("incremental"):
@@ -127,15 +137,16 @@ def replay(root, include_self=False):
             proposed = f.get("proposed_severity") or (f["severity"] if not kept else "low")
             if cheap.get("severity") != "low" or proposed != "low":
                 continue
-            lc["sightings"] += 1                   # one strong-tier call avoided
+            here = not carried_here(f, rev)        # a carried copy made no call this round
+            lc["sightings"] += here                # one strong-tier call avoided
             if kept and not cheap.get("keep"):
                 outcome, sev_ = "lost", f["severity"]
-                lc["sightings_lost"] += 1
+                lc["sightings_lost"] += here
             elif kept and SEV.index(f["severity"]) < SEV.index("low"):
                 outcome, sev_ = "downgraded", f["severity"]
             elif not kept and cheap.get("keep"):
                 outcome, sev_ = "extra_kept", None
-                lc["sightings_extra"] += 1
+                lc["sightings_extra"] += here
             else:
                 outcome, sev_ = "same", None
             # a finding carried through several rounds counts once, at its worst outcome

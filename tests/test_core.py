@@ -2295,6 +2295,27 @@ class TestRouting(unittest.TestCase):
             self.assertIn("Amended commits re-reviewed incrementally: 1 ($0.25)", text)
             self.assertEqual(RT.replay(root, include_self=True)["low_cheap"]["lost"]["important"], 1)
 
+    def test_replay_counts_a_carried_finding_in_the_round_that_judged_it(self):
+        """11-07 exchange: the raw refuted share read 63% because each incremental round re-lists the previous round's
+        dropped findings unjudged, and refuted findings ride along forever. Counted where judged it was 50%."""
+        with tempfile.TemporaryDirectory() as root:
+            refuted = self._f("CR-1", "low", "noise", {"keep": False, "severity": "low"}, {"keep": False, "severity": "low"})
+            real = self._f("CR-2", "low", "real", {"keep": True, "severity": "low"}, {"keep": True, "severity": "low"})
+            self._store(root, "o__p", "aaaaaaaaaaaa", "2026-11-05T01", [real], [refuted])
+            self._store(root, "o__p", "bbbbbbbbbbbb", "2026-11-05T02", [dict(real, carried_from="aaaaaaaaaa")],
+                        [dict(refuted, carried_from="aaaaaaaaaa")], incremental={"from": "aaaaaaaaaaaa"})
+            # round 3: the refuted one carried again; the real one re-verified (its old carried_from is stale)
+            self._store(root, "o__p", "cccccccccccc", "2026-11-05T03",
+                        [dict(real, carried_from="aaaaaaaaaa", reverified_from="bbbbbbbbbb")],
+                        [dict(refuted, carried_from="bbbbbbbbbb")], incremental={"from": "bbbbbbbbbbbb"})
+            r = RT.replay(root)
+            self.assertEqual((r["raw"], r["dropped"]), (3, 1))   # round 1: both; round 3: the re-verified one
+            self.assertEqual(r["low_cheap"]["sightings"], 3)
+            self.assertEqual(r["low_cheap"]["decided"], 2)
+            self.assertIn("3 model findings, 1 refuted by verification (33%)", RT.replay_report(r))
+            # falsifier: a full (non-incremental) round re-judges everything, so nothing in it is a carried copy
+            self.assertFalse(RT.carried_here(dict(refuted, carried_from="bbbbbbbbbb"), {"incremental": None}))
+
     def test_safe_bar(self):
         self.assertTrue(RT.safe({"low": 3}))
         self.assertFalse(RT.safe({"medium": 1}))
