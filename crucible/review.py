@@ -127,9 +127,12 @@ def draft_label(repo, draft_path):
     return full if rel == ".." or rel.startswith(".." + os.sep) else rel
 
 
-def cite_draft(f, label):
-    """A reviewer that still cites PR_DRAFT.md (or the draft's bare name) for a draft kept elsewhere means the draft."""
-    if f.get("file") != label and f.get("file") in ("PR_DRAFT.md", os.path.basename(label)):
+def cite_draft(f, label, repo):
+    """A reviewer that still cites PR_DRAFT.md for a draft kept elsewhere means the draft; so does the draft's bare
+    name, unless a file of that name exists in the repo (`--draft notes/CHANGELOG.md` vs a real CHANGELOG.md)."""
+    name = f.get("file")
+    if name != label and (name == "PR_DRAFT.md" or
+                          (name == os.path.basename(label) and not os.path.exists(os.path.join(repo, name)))):
         f["file"] = label
     return f
 
@@ -504,7 +507,9 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         draft_path, draft_full = readiness.find_draft(repo, draft)
         draft_text = readiness.submitted_text(draft_full)
         dlabel = draft_label(repo, draft_path)
-        dctx = (dlabel, draft_full) if draft_path else None
+        # the submitted text, as the reviewer saw it: its line numbers are the ones findings cite, and the author's
+        # private notes stay out of the verifier's view too
+        dctx = (dlabel, draft_text) if draft_path else None
         cut = readiness.split_draft(draft_full)["notes_line"]
         if cut:
             log(f"  draft: author notes from {os.path.basename(draft_path)}:{cut} on are not judged as the PR body")
@@ -573,7 +578,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             chunk_status.append({"files": ch["files"], "status": "reviewed", "cached": bool(hit)})
             summaries.append(out["summary"])
             for f in out["findings"][:10]:
-                cands.append(cite_draft(dict(f, source="review"), dlabel))
+                cands.append(cite_draft(dict(f, source="review"), dlabel, repo))
         reviewed = {p for c in chunk_status if c["status"] == "reviewed" for p in c["files"]}
         if prev_sha:                                   # files untouched since the previous complete review stay covered
             reviewed |= set(code_files) - set(record["incremental"]["files"])

@@ -2105,8 +2105,6 @@ class TestStats(unittest.TestCase):
             self.assertEqual(json.loads(out.stdout)["overall"]["unique"], 1)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TestDraftCitation(unittest.TestCase):
@@ -2124,10 +2122,13 @@ class TestDraftCitation(unittest.TestCase):
             self.assertEqual(V.draft_label(repo, os.path.join(d, "r..md")), os.path.join(d, "r..md"))
 
     def test_cite_draft(self):
-        self.assertEqual(V.cite_draft({"file": "PR_DRAFT.md"}, "PR_BODY.md")["file"], "PR_BODY.md")
-        self.assertEqual(V.cite_draft({"file": "body.md"}, "/x/body.md")["file"], "/x/body.md")
-        self.assertEqual(V.cite_draft({"file": "src/a.c"}, "PR_BODY.md")["file"], "src/a.c")
-        self.assertEqual(V.cite_draft({"file": "PR_DRAFT.md"}, "PR_DRAFT.md")["file"], "PR_DRAFT.md")
+        repo = make_repo({"CHANGELOG.md": "# Changelog\n", "src/a.c": "int a;\n"})
+        self.assertEqual(V.cite_draft({"file": "PR_DRAFT.md"}, "PR_BODY.md", repo)["file"], "PR_BODY.md")
+        self.assertEqual(V.cite_draft({"file": "body.md"}, "/x/body.md", repo)["file"], "/x/body.md")
+        self.assertEqual(V.cite_draft({"file": "src/a.c"}, "PR_BODY.md", repo)["file"], "src/a.c")
+        self.assertEqual(V.cite_draft({"file": "PR_DRAFT.md"}, "PR_DRAFT.md", repo)["file"], "PR_DRAFT.md")
+        # a real file that shares the draft's name keeps its finding
+        self.assertEqual(V.cite_draft({"file": "CHANGELOG.md"}, "/x/CHANGELOG.md", repo)["file"], "CHANGELOG.md")
 
     def test_region_reads_the_untracked_draft(self):
         repo = make_repo({"a.c": "int a;\n"})
@@ -2146,7 +2147,9 @@ class TestDraftCitation(unittest.TestCase):
 
     def test_run_review_cites_the_real_draft(self):
         repo = make_repo({"src/a.js": "export const a = 1;\n"}, {"src/a.js": "export const a = 2;\n"})
-        open(os.path.join(repo, "PR_BODY.md"), "w").write("Fixes #7\n\nChanges a to 2. Tested: npm test\n")
+        open(os.path.join(repo, "PR_BODY.md"), "w").write("## Title\n\nset a to 2\n\n## Body\n\nFixes #7\n\n"
+                                                          "Changes a to 2. Tested: npm test\n\n"
+                                                          "## Explain it to me\n\nPRIVATE NOTE\n")
         prompts = {"review": [], "verify": []}
 
         def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
@@ -2174,7 +2177,11 @@ class TestDraftCitation(unittest.TestCase):
             files = {f["file"] for f in r["findings"] if f["title"] == "body doesn't say why a is 2"}
             self.assertEqual(files, {"PR_BODY.md"})
             self.assertTrue(prompts["verify"])
-            self.assertIn("    1  Fixes #7", prompts["verify"][0])
+            # numbered as the reviewer saw it (the submitted text), without the author's notes
+            sub = R.submitted_text(open(os.path.join(repo, "PR_BODY.md")).read()).split("\n")
+            self.assertIn(f"    1  {sub[0]}", prompts["verify"][0])
+            self.assertIn("Fixes #7", prompts["verify"][0])
+            self.assertNotIn("PRIVATE NOTE", prompts["verify"][0])
             self.assertNotIn("file not present", prompts["verify"][0])
         finally:
             V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
@@ -2182,3 +2189,7 @@ class TestDraftCitation(unittest.TestCase):
                 os.environ.pop("CRUCIBLE_CACHE", None)
             else:
                 os.environ["CRUCIBLE_CACHE"] = olds[3]
+
+
+if __name__ == "__main__":
+    unittest.main()
