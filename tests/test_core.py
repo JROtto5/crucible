@@ -530,49 +530,61 @@ class TestLearnedDataVersion(unittest.TestCase):
         with open(os.path.join(U.project_dir(project), fname), "w") as fh:
             fh.write(data if isinstance(data, str) else json.dumps(data))
 
+    def bumped(self, affects):
+        """LEARN_VERSION + 1 with a change that affects `affects`, restored on cleanup."""
+        orig = (U.LEARN_VERSION, U.LEARN_CHANGES)
+        self.addCleanup(lambda: (setattr(U, "LEARN_VERSION", orig[0]), setattr(U, "LEARN_CHANGES", orig[1])))
+        U.LEARN_VERSION, U.LEARN_CHANGES = orig[0] + 1, {**orig[1], orig[0] + 1: ("a later fix", affects)}
+        return orig[0]
+
     def test_not_learned(self):
         self.assertEqual(R.learned_data("lv__none")["status"], "na")
 
-    def test_unstamped_files_warn_with_everything_they_miss(self):
+    def test_unstamped_files_may_be_missing_what_affects_them(self):
         self.write("lv__old", "meta.json", {"learned": "2026-11-04", "median_merged_pr_lines": 40})
         self.write("lv__old", "style.json", {"body": {"median_words": 879}})
         it = R.learned_data("lv__old")
         self.assertEqual(it["status"], "warn")
-        self.assertIn("meta.json (unstamped, learned 2026-11-04), style.json (unstamped)", it["evidence"])
-        for v in range(2, U.LEARN_VERSION + 1):
-            self.assertIn(U.LEARN_CHANGES[v], it["evidence"])
+        meta, style = it["evidence"].split(" · ")
+        self.assertTrue(meta.startswith("meta.json (unstamped, learned 2026-11-04) may be missing: "), meta)
+        self.assertTrue(style.startswith("style.json (unstamped) may be missing: "), style)
+        for what, affects in U.LEARN_CHANGES.values():
+            self.assertEqual(what in meta, "meta.json" in affects)
+            self.assertEqual(what in style, "style.json" in affects)
         self.assertIn("Re-run `crucible learn`", it["evidence"])
 
-    def test_names_only_the_changes_since_the_stamp(self):
-        self.write("lv__v2", "style.json", {"learn_version": 2})
-        self.write("lv__v2", "meta.json", {"learn_version": U.LEARN_VERSION})
-        it = R.learned_data("lv__v2")
+    def test_stamped_file_lists_only_later_changes_to_itself(self):
+        cur = self.bumped(("style.json",))
+        self.write("lv__v", "style.json", {"learn_version": cur, "learned": "2026-11-07"})
+        self.write("lv__v", "meta.json", {"learn_version": cur})  # the bump doesn't touch meta.json: still current
+        it = R.learned_data("lv__v")
         self.assertEqual(it["status"], "warn")
+        self.assertTrue(it["evidence"].startswith(f"style.json (v{cur}, learned 2026-11-07) is missing: a later fix."),
+                        it["evidence"])
         self.assertNotIn("meta.json", it["evidence"])
-        self.assertNotIn(U.LEARN_CHANGES[2], it["evidence"])
-        self.assertIn("style.json (v2); `crucible learn` is now v3, and since v3: " + U.LEARN_CHANGES[3], it["evidence"])
+        for what, _ in U.LEARN_CHANGES.values():
+            self.assertEqual(what in it["evidence"], what == "a later fix")
 
     def test_current_stamp_passes_and_a_bump_makes_it_stale(self):
         self.write("lv__cur", "style.json", {"learn_version": U.LEARN_VERSION})
+        self.write("lv__cur", "meta.json", {"learn_version": U.LEARN_VERSION})
         self.assertEqual(R.learned_data("lv__cur")["status"], "pass")
-        orig = (U.LEARN_VERSION, U.LEARN_CHANGES)
-        try:  # falsifier: the same file is stale once a later `learn` fix bumps the version
-            U.LEARN_VERSION, U.LEARN_CHANGES = orig[0] + 1, {**orig[1], orig[0] + 1: "a later fix"}
-            it = R.learned_data("lv__cur")
-            self.assertEqual(it["status"], "warn")
-            self.assertIn("a later fix", it["evidence"])
-        finally:
-            U.LEARN_VERSION, U.LEARN_CHANGES = orig
+        self.bumped(("meta.json", "style.json"))  # falsifier: the same files are stale after a later `learn` fix
+        it = R.learned_data("lv__cur")
+        self.assertEqual((it["status"], it["evidence"].count("a later fix")), ("warn", 2))
 
-    def test_unreadable_or_odd_stamps_count_as_v1(self):
+    def test_unreadable_or_odd_stamps_count_as_unstamped(self):
         self.write("lv__bad", "style.json", "{not json")
         self.write("lv__bad", "meta.json", {"learn_version": True})
         it = R.learned_data("lv__bad")
         self.assertEqual(it["status"], "warn")
-        self.assertIn("meta.json (unstamped), style.json (unstamped)", it["evidence"])
+        self.assertIn("meta.json (unstamped) may be missing", it["evidence"])
+        self.assertIn("style.json (unstamped) may be missing", it["evidence"])
 
-    def test_every_version_says_what_changed(self):
+    def test_every_version_says_what_changed_and_where(self):
         self.assertEqual(sorted(U.LEARN_CHANGES), list(range(2, U.LEARN_VERSION + 1)))
+        for what, affects in U.LEARN_CHANGES.values():
+            self.assertTrue(what and affects and set(affects) <= {"meta.json", "style.json"})
 
     def test_run_learn_stamps_meta(self):
         from crucible import learn as L

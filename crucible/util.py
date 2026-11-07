@@ -13,14 +13,14 @@ TEST_PATH_RX = re.compile(r"(^|/)(tests?|__tests__|spec|specs|fixtures?|testdata
                           r"\.(test|spec)\.[cm]?[jt]sx?$|_test\.(py|go)$|(^|/)test_[^/]+\.py$")
 CODE_EXT_RX = re.compile(r"\.(c|cc|cpp|h|hpp|cs|go|java|kt|rs|swift|py|rb|php|[cm]?[jt]sx?|vue|svelte|glsl|wgsl|frag|vert)$")
 
-# Version of what `crucible learn` writes (meta.json, style.json). Bump it when a fix changes how a learned number is
-# computed, and say what changed: stored files keep the old numbers until `learn` re-runs (umu's style.json kept a
-# Dependabot-polluted 879-word median for a day after bug j was fixed), so readiness names what an old file misses.
-# Version 1 is every file written before the stamp existed.
+# Version of what `crucible learn` writes (meta.json, style.json). Stored files keep their numbers until `learn` re-runs
+# (umu's style.json kept a Dependabot-polluted 879-word median for a day after bug j was fixed), so a fix that changes a
+# learned number bumps this, says what changed and which files it affects. Unstamped files predate the stamp (v1 or v2).
 LEARN_VERSION = 3
 LEARN_CHANGES = {
-    2: "bot PRs and comments are skipped and code is sampled from the upstream branch, not your unpushed commits",
-    3: "PR-body length is judged against outside contributors' merged PRs, not the maintainers' own",
+    2: ("bot PRs and comments are skipped and code is sampled from the upstream branch, not your unpushed commits",
+        ("meta.json", "style.json")),
+    3: ("PR-body length is judged against outside contributors' merged PRs, not the maintainers' own", ("style.json",)),
 }
 
 

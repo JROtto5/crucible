@@ -467,20 +467,21 @@ def learned_data(project):
     found = {f: read_json(p, {}) for f, p in paths.items() if os.path.exists(p)}
     if not found:
         return _item(name, "na", "not learned yet; run `crucible learn` for the project's size and style norms")
-    old = []
+    stale = []
     for f, d in found.items():
         d = d if isinstance(d, dict) else {}           # unreadable: re-learning is the fix either way
-        if util.learn_version(d) < util.LEARN_VERSION:
-            # an unstamped file may come from any earlier version, so it's listed as such, not as "v1"
-            stamp = f"v{d['learn_version']}" if type(d.get("learn_version")) is int else "unstamped"
-            old.append((f, util.learn_version(d), stamp + (f", learned {d['learned']}" if d.get("learned") else "")))
-    if not old:
-        return _item(name, "pass", f"{' and '.join(found)} from `crucible learn` v{util.LEARN_VERSION}")
-    oldest = min(v for _, v, _ in old)
-    missed = [util.LEARN_CHANGES[v] for v in range(oldest + 1, util.LEARN_VERSION + 1) if v in util.LEARN_CHANGES]
-    return _item(name, "warn", ", ".join(f"{f} ({label})" for f, _, label in old)
-                 + f"; `crucible learn` is now v{util.LEARN_VERSION}, and since v{oldest + 1}: " + "; ".join(missed)
-                 + ". Re-run `crucible learn` so these checks use the corrected numbers")
+        missed = [what for v, (what, affects) in sorted(util.LEARN_CHANGES.items())
+                  if v > util.learn_version(d) and f in affects]
+        if not missed:
+            continue
+        when = f", learned {d['learned']}" if d.get("learned") else ""
+        if type(d.get("learn_version")) is int:
+            stale.append(f"{f} (v{d['learn_version']}{when}) is missing: " + "; ".join(missed))
+        else:  # written before the stamp, by v1 or v2, so it may already have the v2 fix
+            stale.append(f"{f} (unstamped{when}) may be missing: " + "; ".join(missed))
+    if not stale:
+        return _item(name, "pass", f"{' and '.join(found)} up to date with `crucible learn` v{util.LEARN_VERSION}")
+    return _item(name, "warn", " · ".join(stale) + ". Re-run `crucible learn` so these checks use the corrected numbers")
 
 
 def unclaimed(repo, issue, me=None):
