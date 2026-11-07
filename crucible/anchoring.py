@@ -8,7 +8,8 @@ drops, and what it cost.
 
 Only findings on tracked files are replayed. A finding on the PR draft can't be: the stored review keeps the draft's
 hash, not its text. Each commit is checked out from a local clone that has it (`--clones`, searched a few levels
-deep) into a throwaway `git clone --shared` under the temp dir, so the clone itself is never touched."""
+deep) into a throwaway repo under the temp dir that borrows the clone's object store, so the clone itself is never
+touched. Needs git 2.44+ (GIT_NO_LAZY_FETCH; --path-format=absolute is 2.31+)."""
 import concurrent.futures as cf, glob, os, shutil, subprocess, tempfile
 
 from .util import Budget, Failed, git, read_json
@@ -121,22 +122,27 @@ def judge(entries, verify, jobs=4):
 
 
 def tally(rows):
+    """Paired: only findings where both arms returned a verdict count, so the arms are compared on the same findings.
+    A finding with a failed call in either arm is counted in `excluded` (and each arm's own failures in `failed`)."""
     t = {arm: {"false_alarms_kept": 0, "refuted": 0, "real_dropped": 0, "real": 0, "failed": 0, "cost": 0.0}
          for arm in ARMS}
+    t["excluded"] = 0
     for r in rows:
+        res = {arm: r["arms"].get(arm) or {"keep": None, "cost": 0.0} for arm in ARMS}
         for arm in ARMS:
-            res, s = r["arms"].get(arm), t[arm]
-            if not res:
-                continue
-            s["cost"] += res["cost"]
-            if res["keep"] is None:
-                s["failed"] += 1
-            elif r["disposition"] == "refuted":
+            t[arm]["cost"] += res[arm]["cost"]
+            t[arm]["failed"] += res[arm]["keep"] is None
+        if any(res[arm]["keep"] is None for arm in ARMS):
+            t["excluded"] += 1
+            continue
+        for arm in ARMS:
+            s = t[arm]
+            if r["disposition"] == "refuted":
                 s["refuted"] += 1
-                s["false_alarms_kept"] += res["keep"]
+                s["false_alarms_kept"] += res[arm]["keep"]
             else:
                 s["real"] += 1
-                s["real_dropped"] += not res["keep"]
+                s["real_dropped"] += not res[arm]["keep"]
     return t
 
 
@@ -148,6 +154,8 @@ def report(rows, skipped):
     for k, v in skipped.items():
         if v:
             out.append(f"  skipped {v}: {k}")
+    if t["excluded"]:
+        out.append(f"  left out of both arms {t['excluded']}: a verifier call failed in at least one arm")
     out.append("")
     for arm in ARMS:
         s = t[arm]
@@ -176,14 +184,14 @@ def run(root, clones, per_class=0, jobs=4, budget=None, include_self=False):
             skipped["on the PR draft (its text isn't stored)"] += 1
         else:
             code.append(e)
-    picked = sample(code, per_class)
     repos = find_clones(clones)
     where = {}
-    for e in picked:
+    for e in code:          # before sampling, so --per-class N isn't spent on findings that can't be replayed
         if e["sha"] not in where:
             where[e["sha"]] = next((c for c in repos if has_commit(c, e["sha"])), None)
-    ready = [e for e in picked if where[e["sha"]]]
-    skipped["no local clone has the commit"] = len(picked) - len(ready)
+    have = [e for e in code if where[e["sha"]]]
+    skipped["no local clone has the commit"] = len(code) - len(have)
+    ready = sample(have, per_class)
     tmp = tempfile.mkdtemp(prefix="crucible-anchor-")
     trees, bud = {}, Budget(budget)
     # replayed verdicts go to a throwaway cache: written to the real one, the "without" arm would replace the verdict

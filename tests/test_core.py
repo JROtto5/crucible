@@ -2877,12 +2877,37 @@ class TestAnchorReplay(unittest.TestCase):
                 raise U.Failed("usage limit")
             return (True if argument else r["finding"]["id"] == "F"), 0.25
         t = A.tally(A.judge(es, verify, jobs=2))
+        # paired: D failed in one arm, so it is left out of both and the arms compare the same two findings
         self.assertEqual({k: t["with"][k] for k in ("false_alarms_kept", "refuted", "real_dropped", "real", "failed")},
-                         {"false_alarms_kept": 1, "refuted": 1, "real_dropped": 0, "real": 2, "failed": 0})
+                         {"false_alarms_kept": 1, "refuted": 1, "real_dropped": 0, "real": 1, "failed": 0})
         self.assertEqual({k: t["without"][k] for k in ("false_alarms_kept", "refuted", "real_dropped", "real", "failed")},
                          {"false_alarms_kept": 0, "refuted": 1, "real_dropped": 0, "real": 1, "failed": 1})
+        self.assertEqual(t["excluded"], 1)
         self.assertAlmostEqual(t["with"]["cost"], 0.75)
         self.assertIn("R [refuted] without: dropped, with: kept", A.report(A.judge(es, verify), {}))
+
+    def test_cli_passes_its_flags_through(self):
+        from unittest import mock
+        from crucible import anchoring as A, cli
+        with mock.patch.object(A, "run", return_value=([], {})) as run, mock.patch("builtins.print"):
+            cli.main(["anchor-replay", "--clones", "/c1", "/c2", "--per-class", "2", "--jobs", "3", "--budget", "1.5"])
+        self.assertEqual(run.call_args.args, (os.path.join(U.HOME, "reviews"), ["/c1", "/c2"], 2, 3, 1.5, False))
+
+    def test_checkout_of_a_partial_clone_fetches_into_the_temp_repo_only(self):
+        from crucible import anchoring as A
+        up = make_repo({"a.py": "x = 1\n"}, {"a.py": "x = 2\n"})
+        sha = sh(up, "git", "rev-parse", "HEAD")
+        with tempfile.TemporaryDirectory() as tmp:
+            clone = os.path.join(tmp, "clone")
+            sh(tmp, "git", "-c", "uploadpack.allowFilter=true", "clone", "-q", "--no-checkout", "--filter=blob:none",
+               "file://" + up, clone)
+            sh(up, "git", "config", "uploadpack.allowFilter", "true")
+            before = sh(clone, "git", "count-objects", "-v")
+            tree = A.checkout(clone, sha, os.path.join(tmp, "t"))
+            with open(os.path.join(tree, "a.py")) as fh:
+                self.assertEqual(fh.read(), "x = 2\n")
+            self.assertEqual(sh(tree, "git", "config", "remote.origin.promisor"), "true")
+            self.assertEqual(sh(clone, "git", "count-objects", "-v"), before)     # the blob landed in the temp repo
 
     def test_commit_lookup_never_fetches_from_a_promisor_remote(self):
         from unittest import mock
