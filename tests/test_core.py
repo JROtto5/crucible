@@ -523,6 +523,25 @@ class TestStyle(unittest.TestCase):
 
 
 
+class TestRealHomeGuard(unittest.TestCase):
+    """2026-11-07 01:24: fixtures leaked into ~/.crucible because crucible was imported (with the real home) before
+    this module set CRUCIBLE_HOME. The module now refuses to load in that order and loads normally otherwise."""
+    def load(self, code):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        env = {**os.environ, "CRUCIBLE_HOME": tempfile.mkdtemp(prefix="crucible-guard-home-")}
+        return subprocess.run([sys.executable, "-c", code], cwd=root, env=env, capture_output=True, text=True,
+                              timeout=60)
+
+    def test_refuses_when_crucible_was_imported_first(self):
+        r = self.load("import crucible.util, tests.test_core")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("refusing to write", r.stderr)
+
+    def test_loads_when_imported_first(self):
+        r = self.load("import tests.test_core")
+        self.assertEqual((r.returncode, r.stderr), (0, ""))
+
+
 class TestLearnedDataVersion(unittest.TestCase):
     """umu's style.json kept a Dependabot-polluted 879-word median after bug j was fixed, because nothing re-ran
     `learn`. Learned files are stamped with the `learn` version, and readiness says what an older file misses."""
