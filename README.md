@@ -114,7 +114,7 @@ Model calls run with `--setting-sources ""` and an empty MCP config. A checked-o
 
 ## Install
 
-New here? [docs/quickstart.md](docs/quickstart.md) is a timed real run from install to GREEN on a public repo.
+New here? [docs/quickstart.md](docs/quickstart.md) is a timed real run from install to GREEN on a public repo. [docs/case-studies.md](docs/case-studies.md) shows real catches (and a miss) on upstream PRs, with links.
 
 
 Requires Python 3.10+, git, `gh`, and the [Claude Code](https://claude.com/claude-code) CLI.
