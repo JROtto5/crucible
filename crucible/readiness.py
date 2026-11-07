@@ -729,8 +729,9 @@ def newer_draft(repo, draft_path):
     tracked = set(git(repo, "ls-files", check=False).split("\n"))
     norm = lambda t: " ".join(t.split())
     raw = open(draft_path, errors="replace").read()
-    # what the judged draft submits: title + body, or the body alone (the title goes in `gh pr create --title`)
-    copies = {norm(submitted_text(raw)), norm(split_draft(raw)["body"])}
+    # the draft itself (a plain `cp`), what it submits (title + body), or the body alone (the title goes in
+    # `gh pr create --title`)
+    copies = {norm(raw), norm(submitted_text(raw)), norm(split_draft(raw)["body"])}
     seen, newer = set(), []
     for d in {os.path.dirname(os.path.abspath(draft_path)), os.path.abspath(repo)}:
         try:

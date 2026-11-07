@@ -2696,6 +2696,13 @@ class TestDraftScope(unittest.TestCase):
         self.assertEqual(R.newer_draft(repo, draft)["status"], "pass", R.newer_draft(repo, draft))
         open(os.path.join(repo, "PR_BODY.md"), "w").write("notes\n")        # text from the private notes only
         self.assertEqual(R.newer_draft(repo, draft)["status"], "warn")
+        # a byte-for-byte copy of drafts with a heading title or a notes section
+        for text in ("# Fix a\n\nFixes #1\n\nold design\n", "Fixes #1\n\nbody\n\n## Explain it to me\n\nnotes\n",
+                     open(draft).read()):
+            open(draft, "w").write(text)
+            os.utime(draft, (1_700_000_000, 1_700_000_000))
+            open(os.path.join(repo, "PR_BODY.md"), "w").write(text)
+            self.assertEqual(R.newer_draft(repo, draft)["status"], "pass", text)
 
     def test_older_tracked_or_unrelated_files_pass(self):
         repo, draft = self._repo()
