@@ -519,6 +519,9 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         style_json = read_json(os.path.join(project_dir(project), "style.json"), {}) or {}
         house_findings = style_mod.check(repo, base, files, dlabel, draft_text, style_json,
                                          title=readiness.split_draft(draft_full)["title"])
+        for f in house_findings:                       # a draft finding that names a line names it in the submitted text
+            if f["file"] == dlabel and draft_path and f["line"] > 1:
+                f["line"] = readiness.draft_file_line(draft_full, f["line"])
 
         scanner = diff_mod.scan(files)
         rules, mem, facts = project_rules_text(repo, project), memory_text(project), checks_mod.facts(chk)

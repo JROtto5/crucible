@@ -662,6 +662,23 @@ def overlapping_prs(repo, files, me=None):
                                f"({'; '.join(notes)})")
 
 
+def commit_attribution(repo, base):
+    """AI co-author trailers / "Generated with ..." lines in the branch's commits. A warning, not a failure: some
+    projects ask for AI disclosure, and then the trailer may be exactly what they want (check their policy)."""
+    from .style import attribution_lines
+    name = "no AI tool attribution in commits"
+    hits = []
+    for b in git(repo, "log", "--format=%H%x00%B%x01", f"{base}..HEAD").split("\x01"):
+        sha, _, msg = b.strip().partition("\x00")
+        found = attribution_lines(msg)
+        if sha and found:
+            hits.append(f"{sha[:8]}: {found[0][:70]}")
+    if not hits:
+        return _item(name, "pass", "none")
+    return _item(name, "warn", f"{len(hits)} commit(s): {hits[:3]}. Drop the line(s) (`git commit --amend` / rebase) "
+                 "unless the project's contribution policy asks for AI disclosure")
+
+
 def evaluate(repo, project, base, files, draft=None, me="JROtto5", offline=False):
     paths = [f["path"] for f in files]
     draft_path, full = find_draft(repo, draft)
@@ -684,6 +701,7 @@ def evaluate(repo, project, base, files, draft=None, me="JROtto5", offline=False
         changelog(repo, paths),
         commit_style(repo, base, subjects),
         dco(repo, base),
+        commit_attribution(repo, base),
         _item("no formatting-only churn", "fail" if fmt else "pass", f"whitespace-only hunks: {fmt[:5]}" if fmt else "none"),
         size(project, files),
         _item("issue still unclaimed", "na", "offline") if offline else unclaimed(repo, issue, me),
