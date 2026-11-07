@@ -2824,5 +2824,101 @@ class TestAIAttribution(unittest.TestCase):
                 os.environ["CRUCIBLE_CACHE"] = olds[3]
 
 
+class TestAnchorReplay(unittest.TestCase):
+    """`crucible anchor-replay`: today's verifier prompt vs the same prompt plus the reviewer's argument."""
+    F = {"id": "CR-1", "title": "Off by one", "file": "a.py", "line": 2, "severity": "low", "source": "review",
+         "wrong_if": "the loop stops at len-1", "problem": "PERSUASIVE ARGUMENT", "fix": "use <="}
+
+    def test_prompt_withholds_the_argument_unless_asked(self):
+        plain = V.verify_prompt(self.F, "CODE")
+        self.assertNotIn("PERSUASIVE ARGUMENT", plain)
+        withp = V.verify_prompt(self.F, "CODE", argument=True)
+        self.assertIn("Problem: PERSUASIVE ARGUMENT", withp)
+        self.assertLess(withp.index("PERSUASIVE"), withp.index("Code around the cited line"))
+        # the default prompt is unchanged by the flag, so verdicts cached before it still match
+        self.assertEqual(withp.replace(withp[withp.index("The reviewer's argument"):withp.index("Code around")], ""), plain)
+
+    def _store(self, root, repo, sha, findings, answers, started):
+        d = os.path.join(root, repo, sha)
+        os.makedirs(d)
+        U.write_json(os.path.join(d, "review.json"), {"repo": repo, "sha": sha, "status": "done", "started": started,
+                                                      "findings": findings, "inputs": {"draft": "/x/PR_BODY.md"}})
+        U.write_json(os.path.join(d, "answers.json"), answers)
+
+    def test_answered_takes_the_earliest_round_and_skips_the_rest(self):
+        from crucible import anchoring as A
+        f2 = dict(self.F, id="CR-2", file="PR_BODY.md")
+        sc = dict(self.F, id="SC-1", source="scanner")
+        with tempfile.TemporaryDirectory() as root:
+            self._store(root, "o__p", "s2", [self.F], {"CR-1": {"disposition": "fixed"}}, "2026-11-06")
+            self._store(root, "o__p", "s1", [self.F, f2, sc, dict(self.F, id="CR-3")],
+                        {"CR-1": {"disposition": "fixed"}, "CR-2": {"disposition": "refuted"},
+                         "SC-1": {"disposition": "refuted"}}, "2026-11-05")
+            self._store(root, "JROtto5__crucible", "c1", [self.F], {"CR-1": {"disposition": "refuted"}}, "2026-11-05")
+            es = A.answered(root)
+            self.assertEqual([(e["finding"]["id"], e["sha"]) for e in es], [("CR-1", "s1"), ("CR-2", "s1")])
+            self.assertEqual([A.on_draft(e) for e in es], [False, True])     # the draft's text isn't stored
+            self.assertEqual(len(A.answered(root, include_self=True)), 3)
+
+    def test_sample_is_even_and_deterministic(self):
+        from crucible import anchoring as A
+        es = [{"disposition": "refuted", "n": i} for i in range(3)] + [{"disposition": "fixed", "n": i} for i in range(10)]
+        s = A.sample(es, 2)
+        self.assertEqual([(e["disposition"], e["n"]) for e in s], [("refuted", 0), ("refuted", 1), ("fixed", 0), ("fixed", 5)])
+        self.assertEqual(len(A.sample(es, 0)), 13)
+
+    def test_tally_counts_false_alarms_kept_and_real_dropped(self):
+        from crucible import anchoring as A
+        es = [{"repo": "o__p", "disposition": d, "finding": dict(self.F, id=i)}
+              for d, i in (("refuted", "R"), ("fixed", "F"), ("deferred", "D"))]
+
+        def verify(r, argument):        # with the argument the verifier is anchored: keeps everything
+            if r["finding"]["id"] == "D" and not argument:
+                raise U.Failed("usage limit")
+            return (True if argument else r["finding"]["id"] == "F"), 0.25
+        t = A.tally(A.judge(es, verify, jobs=2))
+        self.assertEqual({k: t["with"][k] for k in ("false_alarms_kept", "refuted", "real_dropped", "real", "failed")},
+                         {"false_alarms_kept": 1, "refuted": 1, "real_dropped": 0, "real": 2, "failed": 0})
+        self.assertEqual({k: t["without"][k] for k in ("false_alarms_kept", "refuted", "real_dropped", "real", "failed")},
+                         {"false_alarms_kept": 0, "refuted": 1, "real_dropped": 0, "real": 1, "failed": 1})
+        self.assertAlmostEqual(t["with"]["cost"], 0.75)
+        self.assertIn("R [refuted] without: dropped, with: kept", A.report(A.judge(es, verify), {}))
+
+    def test_commit_lookup_never_fetches_from_a_promisor_remote(self):
+        from unittest import mock
+        from crucible import anchoring as A
+        with mock.patch.object(A.subprocess, "run", return_value=mock.Mock(returncode=1)) as run:
+            self.assertFalse(A.has_commit("/clone", "abc"))
+        self.assertEqual(run.call_args.kwargs["env"].get("GIT_NO_LAZY_FETCH"), "1")
+
+    def test_run_checks_out_the_reviewed_commit_without_touching_the_clone(self):
+        from unittest import mock
+        from crucible import anchoring as A
+        repo = make_repo({"a.py": "x = 1\n"}, {"a.py": "x = 2\ny = 3\n"})
+        sha = sh(repo, "git", "rev-parse", "HEAD")
+        sh(repo, "git", "checkout", "-q", "main")
+        before = sh(repo, "git", "worktree", "list") + sh(repo, "git", "status", "--porcelain")
+        seen = []
+
+        def fake_verify(f, code, tree, budget, tiers, fresh=False, argument=False, **kw):
+            with open(os.path.join(tree, "a.py")) as fh:
+                text = fh.read()
+            seen.append((text, code.count("y = 3"), argument, fresh,
+                         os.environ["CRUCIBLE_CACHE"].startswith(tempfile.gettempdir())))
+            return {"keep": argument}, [{"cost": 0.1}]
+        with tempfile.TemporaryDirectory() as root, tempfile.TemporaryDirectory() as other:
+            self._store(root, "o__p", sha, [self.F, dict(self.F, id="CR-2", file="PR_BODY.md")],
+                        {"CR-1": {"disposition": "refuted"}, "CR-2": {"disposition": "fixed"}}, "2026-11-05")
+            self._store(root, "o__q", "f" * 40, [dict(self.F, id="CR-9")], {"CR-9": {"disposition": "fixed"}}, "2026-11-05")
+            os.environ.pop("CRUCIBLE_CACHE", None)
+            with mock.patch.object(V, "verify_tiered", fake_verify):
+                rows, skipped = A.run(root, [os.path.dirname(repo), other])
+            self.assertNotIn("CRUCIBLE_CACHE", os.environ)
+        self.assertEqual(skipped, {"on the PR draft (its text isn't stored)": 1, "no local clone has the commit": 1})
+        self.assertEqual(sorted(seen), [("x = 2\ny = 3\n", 1, False, True, True), ("x = 2\ny = 3\n", 1, True, True, True)])
+        self.assertEqual(sh(repo, "git", "worktree", "list") + sh(repo, "git", "status", "--porcelain"), before)
+        self.assertEqual(A.tally(rows)["with"]["false_alarms_kept"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

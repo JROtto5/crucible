@@ -13,6 +13,7 @@
   crucible proposals PROJECT [--accept N]                         review proposed memory entries
   crucible eval    [--cases ...] [--no-tiers] [--label L]         score the reviewer on labelled fixtures (eval/)
   crucible routing-replay [--include-self]                        what cost-routing rules would lose, on stored reviews
+  crucible anchor-replay --clones DIR [--per-class N]            verifier with vs without the reviewer's argument
   crucible stats   [--project P] [--include-self] [--json]        real-PR precision: unique kept/dropped/fixed/refuted
 
 crucible never pushes, comments, approves or posts. A human submits."""
@@ -153,6 +154,12 @@ def cmd_routing_replay(a):
     print(routing.replay_report(routing.replay(os.path.join(HOME, "reviews"), include_self=a.include_self)))
 
 
+def cmd_anchor_replay(a):
+    from . import anchoring
+    rows, skipped = anchoring.run(os.path.join(HOME, "reviews"), a.clones, a.per_class, a.jobs, a.budget, a.include_self)
+    print(anchoring.report(rows, skipped))
+
+
 def cmd_stats(a):
     from . import stats
     s = stats.collect(os.path.join(HOME, "reviews"), include_self=a.include_self, project=a.project)
@@ -189,6 +196,12 @@ def main(argv=None):
     pp = s.add_parser("proposals"); pp.add_argument("project"); pp.add_argument("--accept", type=int)
     rr = s.add_parser("routing-replay", help="replay stored reviews offline: what each cost-routing rule would lose")
     rr.add_argument("--include-self", action="store_true", help="include crucible's reviews of itself")
+    ar = s.add_parser("anchor-replay", help="re-verify answered findings with and without the reviewer's argument "
+                      "(model calls: costs money)")
+    ar.add_argument("--clones", nargs="+", required=True, help="directories holding local clones of the reviewed repos")
+    ar.add_argument("--per-class", type=int, default=0, help="at most N refuted and N held-up findings (default: all)")
+    ar.add_argument("--jobs", type=int, default=4); ar.add_argument("--budget", type=float, help="stop spending at USD")
+    ar.add_argument("--include-self", action="store_true", help="include crucible's reviews of itself")
     sa = s.add_parser("stats", help="real-PR precision log from stored reviews: unique kept/dropped/fixed/deferred/refuted")
     sa.add_argument("--project", help="owner/name (default: every project)")
     sa.add_argument("--include-self", action="store_true", help="include crucible's reviews of itself")
@@ -203,7 +216,7 @@ def main(argv=None):
     a = p.parse_args(argv)
     {"review": cmd_review, "status": cmd_status, "answer": cmd_answer, "waive": cmd_waive, "learn": cmd_learn, "prep": cmd_prep,
      "polish": cmd_polish, "reply": cmd_reply, "vote": cmd_vote, "remember": cmd_remember, "proposals": cmd_proposals, "eval": cmd_eval,
-     "routing-replay": cmd_routing_replay, "stats": cmd_stats}[a.cmd](a)
+     "routing-replay": cmd_routing_replay, "anchor-replay": cmd_anchor_replay, "stats": cmd_stats}[a.cmd](a)
 
 
 if __name__ == "__main__":
