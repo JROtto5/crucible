@@ -82,9 +82,8 @@ def _files(rev):
 
 def carried_here(f, rev):
     """True when this incremental round copied the finding (and its verdict) from the previous round unjudged.
-    Counting those again inflated the raw refuted share (63% vs 50% on 2026-11-07): a refuted finding is never fixed,
-    so it rides along every later round, while kept ones leave as they are fixed. A finding carried once and later
-    re-verified keeps that older `carried_from`, so it must match this round's `incremental.from`."""
+    Counting copies skews the shares: refuted findings ride along every later round, kept ones leave when fixed.
+    A finding carried once and later re-verified keeps that older `carried_from`, so match this round's."""
     frm = (rev.get("incremental") or {}).get("from") or ""
     return bool(frm) and f.get("carried_from") == frm[:10]
 
@@ -123,7 +122,7 @@ def replay(root, include_self=False):
         if change_kind(_files(rev)) == "docs":
             r["docs"]["reviews"] += 1
             r["docs"]["cost"] += rev.get("cost_usd") or 0
-            for f, kept in model_found:
+            for f, kept in judged:                  # a carried copy isn't re-judged, so the rule can't change it
                 if kept:
                     r["docs"]["at_risk"][f["severity"]] += 1
         lc = r["low_cheap"]
@@ -137,7 +136,7 @@ def replay(root, include_self=False):
             proposed = f.get("proposed_severity") or (f["severity"] if not kept else "low")
             if cheap.get("severity") != "low" or proposed != "low":
                 continue
-            here = not carried_here(f, rev)        # a carried copy made no call this round
+            here = int(not carried_here(f, rev))   # 0 for a carried copy: it made no call this round
             lc["sightings"] += here                # one strong-tier call avoided
             if kept and not cheap.get("keep"):
                 outcome, sev_ = "lost", f["severity"]

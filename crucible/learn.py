@@ -75,6 +75,8 @@ def run_learn(repo, n=25, model="claude-sonnet-5-5", budget_usd=2.0, style=True,
     try:
         out, _ = claude(prompt, model, RULES_SCHEMA, repo, budget, tools=None, effort="medium")
     except Failed as e:     # a call that fails after the model ran was still paid for; say how much
+        if not budget.spent:    # a timeout or unreadable output carries no cost figure: unknown, not $0
+            raise
         raise Failed(f"{e} (learn cost ${round(budget.spent, 4)} spent on the rules call)") from e
     md = [f"# Maintainer preferences: {slug}", "",
           f"Learned {meta['learned']} from {len(merged)} merged PRs ({len(comments)} maintainer comments). "

@@ -755,6 +755,10 @@ class TestLearnStyleSources(unittest.TestCase):
         try:
             with self.assertRaisesRegex(U.Failed, r"error_max_turns.*learn cost \$0\.41 spent on the rules call"):
                 L.run_learn(self.c, log=lambda *_: None)
+            L.claude = self._metered(0, fail=True)        # a timeout: no cost figure, so no "$0 spent" claim
+            with self.assertRaises(U.Failed) as cm:
+                L.run_learn(self.c, log=lambda *_: None)
+            self.assertNotIn("learn cost", str(cm.exception))
         finally:
             L.collect, L.docs_text, L.claude, L.upstream_slug = orig
 
@@ -2339,6 +2343,13 @@ class TestRouting(unittest.TestCase):
             self.assertEqual(r["low_cheap"]["sightings"], 3)
             self.assertEqual(r["low_cheap"]["decided"], 2)
             self.assertIn("3 model findings, 1 refuted by verification (33%)", RT.replay_report(r))
+            med = self._f("CR-3", "medium", "real medium", {"keep": True, "severity": "medium"})
+            self._store(root, "o__q", "dddddddddddd", "2026-11-05T04", [med])
+            self._store(root, "o__q", "eeeeeeeeeeee", "2026-11-05T05", [dict(med, carried_from="dddddddddd")],
+                        files=["README.md"], incremental={"from": "dddddddddddd", "files": ["README.md"]})
+            r = RT.replay(root)
+            self.assertEqual(r["docs"]["reviews"], 1)
+            self.assertEqual(dict(r["docs"]["at_risk"]), {})     # the docs round only carried the code finding
             # falsifier: a full (non-incremental) round re-judges everything, so nothing in it is a carried copy
             self.assertFalse(RT.carried_here(dict(refuted, carried_from="bbbbbbbbbb"), {"incremental": None}))
 
