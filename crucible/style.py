@@ -73,7 +73,8 @@ def _tpl_norm(line):
     return " ".join(CHECKBOX_RX.sub(r"\1[ ]", line.strip()).replace("*", "").split()).lower()
 
 
-_DETAILS_RX = re.compile(r"(?is)<details[^>]*>\s*(?:<summary[^>]*>((?:(?!</?summary|<details).)*)</summary>)?(?:(?!<details).)*?</details>")
+# a tag written as inline code (`<details>`) is prose about the tag, not a fold
+_DETAILS_RX = re.compile(r"(?is)(?<!`)<details[^>]*>\s*(?:<summary[^>]*>((?:(?!</?summary|<details).)*)</summary>)?(?:(?!<details).)*?</details>(?!`)")
 
 
 def body_words(text, template="", title=""):
