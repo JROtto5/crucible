@@ -1,6 +1,6 @@
 """The review pipeline: checks → scanners → chunked review → per-finding verification → verdict."""
 import concurrent.futures as cf, datetime as dt, fcntl, hashlib, os, re, subprocess, textwrap
-from . import checks as checks_mod, diff as diff_mod, readiness, routing, style as style_mod
+from . import catalog, checks as checks_mod, diff as diff_mod, readiness, routing, style as style_mod
 from .util import (BLOCKING, HOME, MODELS, PREFERENCE, SEV, TOOLS_RUN, Budget, Failed, NoStructuredOutput,
                    claude, default_base,
                    exclude_locally, git, is_dirty, norm_words, project_dir, project_key, read_json, review_dir,
@@ -344,6 +344,13 @@ def verify_tiered(f, code, repo, budget, tiers, fresh=False, since="", draft_lab
     return v, trail
 
 
+def git_blob(repo, rev, path):
+    """A file's text at a commit, unstripped (line numbers must match the file); "" when it isn't there."""
+    r = subprocess.run(["git", "-C", repo, "show", f"{rev}:{path}"], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    return r.stdout if r.returncode == 0 else ""
+
+
 def is_ancestor(repo, a, b):
     return subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", a, b], capture_output=True).returncode == 0
 
@@ -601,6 +608,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             known = [p for p in git(repo, "ls-files", "-z").split("\0") if p]
             carried, reverify = split_prev(prev_rev.get("findings", []), ranges, hunks, prev_sha, changed, known)
             carried_dropped, _ = split_prev(prev_rev.get("dropped", []), ranges, hunks, prev_sha)
+            digested = catalog.digest_files(dfiles, lambda p: git_blob(repo, prev_sha, p), lambda p: git_blob(repo, sha, p))
             chunks, uncovered = diff_mod.chunk(dfiles)
             amended = not is_ancestor(repo, prev_sha, sha)     # an amend or squash of the reviewed commit
             log(f"  incremental: since {prev_sha[:10]}{' (amended)' if amended else ''} · {len(dfiles)} changed file(s) to review · "
@@ -608,7 +616,11 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             record["incremental"] = {"from": prev_sha, "files": [f["path"] for f in dfiles], "carried": len(carried),
                                      "reverified": len(reverify), "amended": amended}
         else:
+            digested = catalog.digest_files(files, lambda p: git_blob(repo, base, p), lambda p: git_blob(repo, sha, p))
             chunks, uncovered = diff_mod.chunk(files)
+        if digested:
+            log(f"  catalogs shown as a digest of their entries, not a diff: {', '.join(digested)} "
+                f"(CRUCIBLE_CATALOG_DIGEST=0 for the raw diff)")
         tiers = verify_tiers(verify_model, no_tiers)
         tiered = len(tiers) > 1                        # before routing: a routed round keeps the carried re-check
         if route:
@@ -652,6 +664,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         missing = sorted((set(code_files) - reviewed) | set(uncovered))
         record["coverage"] = {"files": len(code_files), "reviewed": len(set(code_files) & reviewed) - len(set(uncovered) & reviewed),
                               "missing": missing, "complete": not missing, "chunks": chunk_status}
+        if digested:
+            record["coverage"]["digested"] = digested
 
         new = assign_ids(dedupe([apply_honesty(f) for f in cands]))
         taken = {f["id"] for f in carried + reverify}
@@ -860,7 +874,8 @@ def report(rev, ans, waivers=None):
          f"**Verdict: {v}** · **Ready to submit: {'yes' if v == 'GREEN' and ready_after_waivers(ready, waivers) else 'no'}**", "",
          f"- {len(rev['findings'])} findings kept · {len(rev['dropped'])} dropped by verification · "
          f"{len(blocking)} blocking open · {len(unanswered)} unanswered",
-         f"- coverage: {cov['reviewed']}/{cov['files']} files" + (f" · MISSING {cov['missing']}" if cov["missing"] else ""),
+         f"- coverage: {cov['reviewed']}/{cov['files']} files" + (f" · MISSING {cov['missing']}" if cov["missing"] else "")
+         + (f" · catalogs read as a digest of their entries: {', '.join(cov['digested'])}" if cov.get("digested") else ""),
          f"- models: review `{rev['review_model']}`, verify `{' → '.join(rev.get('verify_tiers') or [rev['verify_model']])}`"
          f" · author {rev.get('author_models') or 'unknown'}",
          f"- base `{rev['base_ref']}` (merge-base {rev['base'][:10]}) · cost ${rev['cost_usd']}"

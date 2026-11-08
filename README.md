@@ -44,6 +44,8 @@ Those 16 cases are the **build** split: crucible's prompts and verifier have bee
 
    These are medium/low and answerable, not blocking.
 5. **Chunked review by a different model than the author.** The author model is read from `Co-Authored-By` trailers, and the reviewer is chosen to differ. Files are grouped into chunks, and big files are split by hunk. **Coverage is recorded, and anything less than 100% can't be GREEN.** The reviewer reads whole functions, callers, the matching tests and public types. It gets concrete severity definitions, at most 10 ranked findings per chunk, and the project's learned rules and repeat-mistakes memory. Every finding must name file:line and a `wrong_if`, the observation that would prove it false.
+
+   **Translation catalogs** (`.po`/`.pot`) with 200 or more changed lines are shown to the reviewer as a digest of their entries instead of a diff, because a `msgmerge` refresh is mostly bookkeeping. On Lutris #6952 a one-line markup fix plus the refresh the maintainer asked for was 17k lines, and the catalogs took 31 of 33 chunks. The digest shows every translation the change edits (old and new), and every touched entry whose translation has markup, entities or format placeholders, since those can break at runtime. It counts the rest: plain-text entries whose translation didn't change, new untranslated stubs, fuzzy guesses (gettext ignores them) and obsolete `#~` blocks. Each entry carries its line in the new file, and the reviewer can open the file. The report names the digested catalogs. `CRUCIBLE_CATALOG_DIGEST=0` sends the raw diff instead.
 6. **Verification, one finding per call, in parallel, in tiers.** A cheap model (`claude-haiku-5-5` by default) checks each finding first. The strong verifier re-checks it only when the claim survived at a blocking severity or the cheap verifier wasn't confident, so verification costs about a quarter less with the same eval recall. The verifier gets only the claim, its `wrong_if` and the cited code, never the reviewer's argument, so it can't anchor on it. Its job is to *disprove* the finding. It may run `node`, the project's test runner or `pytest` to show a concrete result, and it must report exactly what it read or ran. Findings proven by execution rank first. If the verifier fails to return, the finding is kept and marked **unverified** (fail closed), and the next plain `crucible review` (same commit or a later one) verifies it again.
 7. **Honesty caps.** A finding the reviewer itself marks as not caused by this change, or not reachable in real use, is capped to non-blocking `low`.
 8. **Dedupe.** Findings with the same root cause (same file, overlapping lines, similar claim) are merged, keeping the higher severity.
@@ -142,6 +144,7 @@ Environment variables:
 - `CRUCIBLE_ASSIST_MODEL`: the model for `polish`, `prep` and `reply`.
 - `CRUCIBLE_CLAUDE_DIR`: which Claude account to bill.
 - `CRUCIBLE_VERIFY_CHEAP`: the cheap verification tier (default `claude-haiku-5-5`; `none` turns tiering off, as does `--no-tiers`).
+- `CRUCIBLE_CATALOG_DIGEST=0`: review big `.po`/`.pot` changes as a raw diff instead of the entry digest.
 - `CRUCIBLE_HOME`: where state is kept (default `~/.crucible`). `CRUCIBLE_CACHE` can point at a shared cache.
 
 Run `crucible eval` (about $3–5 for all 18 cases) after changing prompts or models.

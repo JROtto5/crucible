@@ -24,7 +24,7 @@ _TMP_HOME = tempfile.mkdtemp(prefix="crucible-test-home-")
 os.environ["CRUCIBLE_HOME"] = _TMP_HOME
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from crucible import diff as D, readiness as R, review as V, routing as RT, style as S, util as U  # noqa: E402
+from crucible import catalog as C, diff as D, readiness as R, review as V, routing as RT, style as S, util as U  # noqa: E402
 
 # util reads CRUCIBLE_HOME once, at import. If crucible was imported before this module (a probe that imports it and
 # then runs the tests), every fixture would land in the user's real ~/.crucible and show up in `crucible stats`
@@ -234,6 +234,119 @@ class TestReadiness(unittest.TestCase):
         os.makedirs(os.path.join(d, ".github"))
         open(os.path.join(d, ".github", "PULL_REQUEST_TEMPLATE.md"), "w").write("## X\n")
         self.assertEqual(R.template_text(d)[0], ".github/PULL_REQUEST_TEMPLATE.md")
+
+
+
+def _po(entries, refs_at=1):
+    """A catalog from (msgid, msgstr, flags) tuples; refs_at shifts every `#:` source line, like a refactor would."""
+    out = ['msgid ""', 'msgstr ""', '"Content-Type: text/plain; charset=UTF-8\\n"', ""]
+    for i, (mid, mstr, flags) in enumerate(entries):
+        if flags == "obsolete":
+            out += [f'#~ msgid "{mid}"', f'#~ msgstr "{mstr}"', ""]
+            continue
+        out.append(f"#: app/ui.py:{refs_at + i}")
+        if flags:
+            out.append(f"#, {flags}")
+        out += [f'msgid "{mid}"', f'msgstr "{mstr}"', ""]
+    return "\n".join(out)
+
+
+FILLER = [(f"Plain label {i}", f"Etiquette {i}", "") for i in range(120)]
+OLD_PO = _po(FILLER + [("Open <b>file</b>", "Ouvrir <b>fichier</b", ""),          # broken, and the change fixes it
+                       ("See <a href='x'>docs</a>", "Voir <a href='x'>docs<a>", ""),   # broken, only references move
+                       ("Saved %s", "Enregistré %s", ""),
+                       ("Gone soon", "Bientôt parti", "")])
+NEW_PO = _po(FILLER + [("Open <b>file</b>", "Ouvrir <b>fichier</b>", ""),
+                       ("See <a href='x'>docs</a>", "Voir <a href='x'>docs<a>", ""),
+                       ("Saved %s", "Enregistré %s", ""),
+                       ("Brand new", "", ""),
+                       ("Saved %d files", "Enregistré %s", "fuzzy"),
+                       ("Gone soon", "Bientôt parti", "obsolete")], refs_at=7)
+
+
+class TestCatalogDigest(unittest.TestCase):
+    """A msgmerge refresh is thousands of bookkeeping lines (Lutris #6952: 31 of 33 chunks, $19.45); the digest
+    keeps what a reviewer can judge and still shows the entry where that review's real catch was."""
+
+    def _files(self, old, new, path="po/fr.po"):
+        repo = make_repo({path: old}, {path: new})
+        return repo, D.parse(sh(repo, "git", "diff", "--unified=5", "main..HEAD"))
+
+    def test_parse_entries(self):
+        text = ('msgctxt "menu"\nmsgid "File"\nmsgstr "Fichier"\n#, fuzzy\nmsgid "One"\nmsgid_plural "Many"\n'
+                'msgstr[0] "Un"\nmsgstr[1] "Plusieurs"\n\n#~ msgid "Old"\n#~ msgstr "Vieux"\n\nmsgid ""\n"wrap"\n'
+                '"ped"\nmsgstr "x"\n')
+        e = C.parse(text)
+        self.assertEqual([x["key"] for x in e], [("menu", "File", None), (None, "One", "Many"), (None, "Old", None),
+                                                 (None, "wrapped", None)])
+        self.assertEqual(e[1]["strs"], ["Un", "Plusieurs"])            # no blank line between entries 1 and 2
+        self.assertTrue(e[1]["fuzzy"]); self.assertFalse(e[0]["fuzzy"])
+        self.assertTrue(e[2]["obsolete"]); self.assertEqual((e[3]["start"], e[3]["end"]), (13, 16))
+
+    def test_refresh_is_digested(self):
+        repo, files = self._files(OLD_PO, NEW_PO)
+        self.assertTrue(C.should_digest(files[0]))
+        new_lines = NEW_PO.split("\n")
+        got = C.digest_files(files, lambda p: OLD_PO, lambda p: NEW_PO)
+        self.assertEqual(got, ["po/fr.po"])
+        t = files[0]["text"]
+        self.assertNotIn("#: app/ui.py", t)                             # the bookkeeping is gone
+        self.assertNotIn("Plain label 5", t)                            # touched plain text: counted, not shown
+        self.assertIn('- msgstr "Ouvrir <b>fichier</b"', t)              # the edit, old and new
+        self.assertIn('+ msgstr "Ouvrir <b>fichier</b>"', t)
+        m = re.search(r"^L(\d+) msgid \"See <a", t, re.M)                 # the Lutris fr.po:2870 shape stays
+        self.assertTrue(m, t)
+        self.assertIn("See <a", "\n".join(new_lines[int(m.group(1)) - 1:int(m.group(1)) + 2]))  # L is a real line
+        self.assertIn('msgid "Saved %s"', t)                            # placeholders can fail at runtime
+        self.assertIn("120 touched entries whose translation is unchanged plain text", t)
+        self.assertIn("1 touched entries without a translation", t)
+        self.assertIn("1 new fuzzy guesses", t); self.assertNotIn("Saved %d files", t)
+        self.assertIn("1 entries now obsolete", t)
+        self.assertLess(len(t), len(sh(repo, "git", "diff", "main..HEAD")) / 3)
+
+    def test_falsifiers_left_as_a_diff(self):
+        from unittest import mock
+        # a hand edit to a catalog is small: reviewed as the plain diff it is
+        _, small = self._files(OLD_PO, OLD_PO.replace("Ouvrir <b>fichier</b", "Ouvrir <b>fichier</b>"))
+        self.assertFalse(C.should_digest(small[0]))
+        self.assertEqual(C.digest_files(small, lambda p: OLD_PO, lambda p: NEW_PO), [])
+        # a big change to anything that isn't a catalog is code
+        _, code = self._files(OLD_PO, NEW_PO, path="po/fr.py")
+        self.assertEqual(C.digest_files(code, lambda p: OLD_PO, lambda p: NEW_PO), [])
+        # the opt-out
+        _, big = self._files(OLD_PO, NEW_PO)
+        with mock.patch.dict(os.environ, {"CRUCIBLE_CATALOG_DIGEST": "0"}):
+            self.assertEqual(C.digest_files(big, lambda p: OLD_PO, lambda p: NEW_PO), [])
+        self.assertIn("#: app/ui.py", big[0]["text"])
+
+    def test_new_catalog_is_all_edits(self):
+        repo = make_repo({"README": "x\n"}, {"po/de.po": NEW_PO})
+        files = D.parse(sh(repo, "git", "diff", "--unified=5", "main..HEAD"))
+        self.assertTrue(files[0]["added"])
+        C.digest_files(files, lambda p: self.fail("no old side for an added file"), lambda p: NEW_PO)
+        self.assertIn("translations this change edits (old `-`, new `+`): 124", files[0]["text"])   # header + 123
+
+    def test_run_review_sends_the_digest(self):
+        from unittest import mock
+        repo = make_repo({"po/fr.po": OLD_PO, "app.py": "x = 1\n"}, {"po/fr.po": NEW_PO, "app.py": "x = 2\n"})
+        prompts = []
+
+        def fake(prompt, model, schema, cwd, *a, **kw):
+            if "findings" in schema["properties"]:
+                prompts.append(prompt)
+                return {"summary": "ok", "findings": []}, 0.01
+            return {"keep": True, "severity": "low", "method": "read", "actions": "", "evidence": "", "confidence": "high"}, 0
+        home = tempfile.mkdtemp(prefix="crucible-home-")
+        with mock.patch.object(V, "HOME", home), mock.patch.object(U, "HOME", home), \
+                mock.patch.object(V, "claude", fake), mock.patch.dict(os.environ, {"CRUCIBLE_CACHE": os.path.join(home, "c")}):
+            d = V.run_review(repo, "main", offline=True, skip_checks=True, log=lambda *_: None)
+            r = U.read_json(os.path.join(d, "review.json"))
+            report = V.report(r, {})
+        sent = "\n".join(prompts)
+        self.assertIn("is a gettext catalog", sent); self.assertNotIn("#: app/ui.py", sent)
+        self.assertIn("+x = 2", sent)                                   # code next to it is still a diff
+        self.assertEqual(r["coverage"]["digested"], ["po/fr.po"]); self.assertTrue(r["coverage"]["complete"])
+        self.assertIn("catalogs read as a digest of their entries: po/fr.po", report)
 
 
 class TestCIMatrix(unittest.TestCase):
