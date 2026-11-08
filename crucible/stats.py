@@ -149,7 +149,8 @@ def _source(w):
     newest = (w["newest"] or "never").replace("T", " ")[:16]
     undated = f", {w['undated']} undated" if w["undated"] else ""
     of = f" of {w['project']}" if w.get("project") else ""
-    return f"Read {w['stored']} finished reviews{of}{undated}; the newest is from {newest}."
+    n = w["stored"]
+    return f"Read {n} finished review{'' if n == 1 else 's'}{of}{undated}; the newest is from {newest}."
 
 
 def no_data(s):
