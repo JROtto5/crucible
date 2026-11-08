@@ -2933,6 +2933,7 @@ class TestStatsWindow(unittest.TestCase):
             text = ST.report(ST.collect(root, project="o/typo"))
             self.assertTrue(text.startswith("No data: no finished review of o/typo stored. Read 0 finished reviews of o/typo;"), text)
             self.assertIn("nothing here was reviewed", text)
+            self.assertIn("Read 4 finished reviews of o/p, 1 undated;", ST.report(ST.collect(root, project="o/p")))
 
     def test_quote_bar_boundary(self):
         from crucible import stats as ST
