@@ -17,3 +17,5 @@
 | py-test-deleted | Floor division changes nearest-cent rounding to truncation |
 | ts-api-break | Swapping the parameters of the public formatDate breaks callers |
 | js-refcount | (missed at blocking severity: found, rated medium) |
+
+- **2026-11-07, held-out split.** Cases now carry `split: build|holdout` (default build). All 16 earlier cases are build cases: prompts and the verifier were tuned while watching them. Held-out cases come from real catches and are frozen: a prompt change is never justified by one, and a held-out miss is fixed by adding a build case of the same shape. First two: `py-fix-reintroduces-hang` (gamescope #2516 round 2, rewritten in Python: the shutdown fix calls `JobSet.clear()`, whose `Job.close()` joins without a bound, before its new bounded wait; the change's own tests pass, a stuck job still hangs `shutdown(timeout=0.2)`) and its clean twin `clean-py-bounded-shutdown` (bounded wait first, then forget only finished jobs). First run (`--split holdout`, not written to the tables above): caught at blocking severity, 0 false blocking on the twin, $1.07.

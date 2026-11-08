@@ -1,0 +1,6 @@
+{
+ "kind": "clean",
+ "split": "holdout",
+ "source": "the correct version of py-fix-reintroduces-hang: bounded wait first, then forget only finished jobs",
+ "message": "pool: bound the shutdown wait so a stuck job can't hang it (#41)"
+}

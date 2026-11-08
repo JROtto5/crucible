@@ -11,7 +11,7 @@
   crucible vote    ID up|down "reason" [--repo R]                 feedback; down-votes become memory proposals
   crucible remember PROJECT "lesson"                              curated repeat-mistakes memory
   crucible proposals PROJECT [--accept N]                         review proposed memory entries
-  crucible eval    [--cases ...] [--no-tiers] [--label L]         score the reviewer on labelled fixtures (eval/)
+  crucible eval    [--cases ...] [--split build|holdout] [--label L] score the reviewer on labelled fixtures (eval/)
   crucible routing-replay [--include-self]                        what cost-routing rules would lose, on stored reviews
   crucible anchor-replay --clones DIR [--per-class N]            verifier with vs without the reviewer's argument
   crucible stats   [--project P] [--include-self] [--json]        real-PR precision: unique kept/dropped/fixed/refuted
@@ -208,6 +208,7 @@ def main(argv=None):
     sa.add_argument("--json", action="store_true")
     ev = s.add_parser("eval", help="run the review on labelled fixture changes (eval/cases) and score it")
     ev.add_argument("--cases", nargs="*", help="substrings of case names to run (default: all)")
+    ev.add_argument("--split", choices=("build", "holdout"), help="run only build or only held-out cases (default: both)")
     ev.add_argument("--review-model"); ev.add_argument("--verify-model"); ev.add_argument("--cheap-model")
     ev.add_argument("--no-tiers", action="store_true"); ev.add_argument("--budget", type=float, default=1.5)
     ev.add_argument("--jobs", type=int, default=4); ev.add_argument("--label")

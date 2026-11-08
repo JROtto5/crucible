@@ -13,13 +13,13 @@ crucible answer  CR-80b53167 fixed "restore for…of; re-added [1,2,3] test"
 crucible status                                  # GREEN / NOT_GREEN + readiness, for this exact commit
 crucible polish                                  # PR_DRAFT.md → PR_DRAFT.polished.md in the project's voice
 crucible prep                                    # likely maintainer questions + evidence-backed answers
-crucible eval                                    # score the reviewer on 16 labelled fixture changes
+crucible eval                                    # score the reviewer on 18 labelled fixture changes
 crucible reply   https://github.com/o/r/pull/12  # draft answers to real review comments (never posted)
 ```
 
 ## Measured, not guessed
 
-`crucible eval` runs the full review on 16 labelled fixture changes in JS, TS and Python. The 12 bug cases cover off-by-one, a null edge, a missing `await`, refcount/ownership, an API break, shell and SQL injection, a units mix-up, a race, pagination, a deleted test hiding a regression and a committed secret. The 4 clean cases are a refactor, a docs change, a fix with tests and an opt-in option with tests. Latest results ([eval/RESULTS.md](eval/RESULTS.md)):
+`crucible eval` runs the full review on 18 labelled fixture changes in JS, TS and Python: 16 build cases and 2 held-out ones (below). The 12 build bug cases cover off-by-one, a null edge, a missing `await`, refcount/ownership, an API break, shell and SQL injection, a units mix-up, a race, pagination, a deleted test hiding a regression and a committed secret. The 4 build clean cases are a refactor, a docs change, a fix with tests and an opt-in option with tests. Latest results ([eval/RESULTS.md](eval/RESULTS.md)):
 
 | | recall (blocking) | recall (any severity) | false blocking findings on clean changes | cost, 16 cases |
 |---|---|---|---|---|
@@ -27,6 +27,8 @@ crucible reply   https://github.com/o/r/pull/12  # draft answers to real review 
 | v0.3 tiered verification | 92% | 100% | 0 | verification $1.75 vs $2.30 |
 
 The one blocking miss is the refcount case: the bug is found, but rated medium. Every crucible change has to keep or improve these numbers.
+
+Those 16 cases are the **build** split: crucible's prompts and verifier have been tuned while watching them, so they flatter it. Cases from real catches go in a **held-out** split (`"split": "holdout"` in `expected.json`) that no prompt change may be justified by, and `crucible eval` reports held-out recall and false blocking on their own line (`--split holdout` runs only those). The first two (2026-11-07): a shutdown fix that calls a helper whose close waits without a bound before its new bounded wait, so the hang it fixes comes back (from gamescope #2516), and the correct version of the same fix. Held-out: recall 1/1, false blocking 0 on 1 clean case, $1.07.
 
 ## How a review works
 
@@ -142,7 +144,7 @@ Environment variables:
 - `CRUCIBLE_VERIFY_CHEAP`: the cheap verification tier (default `claude-haiku-5-5`; `none` turns tiering off, as does `--no-tiers`).
 - `CRUCIBLE_HOME`: where state is kept (default `~/.crucible`). `CRUCIBLE_CACHE` can point at a shared cache.
 
-Run `crucible eval` (about $2–4 for all 16 cases) after changing prompts or models.
+Run `crucible eval` (about $3–5 for all 18 cases) after changing prompts or models.
 
 Found a wrong finding, a missed bug or a crash? See [CONTRIBUTING.md](CONTRIBUTING.md): issue templates ask for exactly what's needed to turn it into a regression test.
 

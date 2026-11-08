@@ -27,7 +27,7 @@ The unit tests need only git and Python 3.10+. They stub every model call, cost 
 
 1. **A test that fails without the change.** For a bug, reproduce it first. For a false-positive fix, add the real input that was misjudged as a regression case.
 2. **Falsifiers for any new gate or heuristic.** List the inputs it must still flag and the inputs it must still let through, next to the code. Before you rely on it, check the first few real inputs it would reject by hand.
-3. **`crucible eval` when prompts, verification or tiering change.** It runs the full review on 16 labelled fixture changes and calls the model (about $2–4 for all cases; `--cases NAME…` runs a few). Recall and false-blocking numbers must not get worse. Everything else is covered by the unit tests.
+3. **`crucible eval` when prompts, verification or tiering change.** It runs the full review on 18 labelled fixture changes and calls the model (about $3–5 for all cases; `--cases NAME…` runs a few). Recall and false-blocking numbers must not get worse, on the build split or the held-out one. A case made from a real catch goes in as `"split": "holdout"`; don't tune a prompt against a held-out case, add a build case of the same shape instead. Everything else is covered by the unit tests.
 4. **One line in `CHANGELOG.md`**, dated, saying what changed for a user and why.
 5. **A self-review.** Run `crucible review . --base <the commit before yours>` and answer every finding (`crucible answer CR-… fixed|refuted|deferred "…"`) until it is GREEN.
 

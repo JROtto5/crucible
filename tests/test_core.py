@@ -1203,9 +1203,80 @@ class TestEvalScoring(unittest.TestCase):
         for name, d, exp in cases:
             self.assertIn(exp["kind"], ("bug", "clean"), name)
             self.assertTrue(os.path.isdir(os.path.join(d, "base")) and os.path.isdir(os.path.join(d, "change")), name)
+            self.assertIn(E.case_split(exp), E.SPLITS, name)
             if exp["kind"] == "bug":
                 self.assertTrue(exp["file"] and exp["lines"] and exp["keywords"], name)
                 self.assertTrue(os.path.exists(os.path.join(d, "change", exp["file"])), name)
+        held = [(n, e["kind"]) for n, d, e in E.load_cases(split="holdout")]
+        self.assertIn(("py-fix-reintroduces-hang", "bug"), held)
+        self.assertIn(("clean-py-bounded-shutdown", "clean"), held)
+        self.assertEqual(len(E.load_cases(split="build")) + len(held), len(cases))
+
+    def test_reintroduced_hang_case_scores_the_callee_not_a_neighbour(self):
+        """gamescope #2516 round 2, as a held-out case: the credited finding must name the clear()/join that still
+        waits without a bound, not just sit in pool.py."""
+        from crucible import evalrun as E
+        exp = {n: e for n, d, e in E.load_cases(["py-fix-reintroduces-hang"])}["py-fix-reintroduces-hang"]
+        line = open(os.path.join(E.EVAL_DIR, "cases", "py-fix-reintroduces-hang", "change", exp["file"])) \
+            .read().split("\n")[exp["lines"][0] - 1]
+        self.assertEqual(line.strip(), "self.jobs.clear()")
+        self.assertTrue(E.hits({"file": "workers/pool.py", "line": 25, "title": "shutdown can still hang",
+                                "problem": "clear() closes each job with an unbounded join() before the deadline"}, exp))
+        self.assertFalse(E.hits({"file": "workers/pool.py", "line": 7, "title": "magic number for the timeout",
+                                 "problem": "5.0 should be configurable"}, exp))
+
+    def test_split_filter_and_bad_split(self):
+        from crucible import evalrun as E
+        orig = E.EVAL_DIR
+        E.EVAL_DIR = tempfile.mkdtemp(prefix="crucible-evalsplit-")
+        try:
+            for name, extra in (("a", {}), ("b", {"split": "holdout"}), ("c", {"split": "build"})):
+                os.makedirs(os.path.join(E.EVAL_DIR, "cases", name))
+                json.dump({"kind": "clean", **extra}, open(os.path.join(E.EVAL_DIR, "cases", name, "expected.json"), "w"))
+            self.assertEqual([n for n, d, e in E.load_cases(split="build")], ["a", "c"])
+            self.assertEqual([n for n, d, e in E.load_cases(split="holdout")], ["b"])
+            self.assertEqual(len(E.load_cases()), 3)
+            json.dump({"kind": "clean", "split": "test"}, open(os.path.join(E.EVAL_DIR, "cases", "c", "expected.json"), "w"))
+            with self.assertRaises(SystemExit) as cm:
+                E.load_cases()
+            self.assertIn("split must be one of build, holdout", str(cm.exception))
+        finally:
+            shutil.rmtree(E.EVAL_DIR, ignore_errors=True)
+            E.EVAL_DIR = orig
+
+    def test_holdout_recall_reported_apart_from_build(self):
+        from crucible import evalrun as E
+        res = [{"case": "b1", "kind": "bug", "split": "build", "ok": True, "caught": True, "caught_any_severity": True,
+                "true_dropped": 0, "extra_blocking": 0},
+               {"case": "b2", "kind": "bug", "split": "build", "ok": True, "caught": True, "caught_any_severity": True,
+                "true_dropped": 0, "extra_blocking": 0},
+               {"case": "h1", "kind": "bug", "split": "holdout", "ok": True, "caught": False,
+                "caught_any_severity": True, "true_dropped": 1, "extra_blocking": 0},
+               {"case": "hc", "kind": "clean", "split": "holdout", "ok": True, "false_blocking": 2}]
+        s = E.summarize(res)
+        self.assertEqual(s["recall"], 0.667)                    # the headline still pools every case
+        self.assertEqual((s["by_split"]["build"]["recall"], s["by_split"]["build"]["false_blocking"]), (1.0, None))
+        ho = s["by_split"]["holdout"]
+        self.assertEqual((ho["recall"], ho["caught"], ho["bug_cases"], ho["false_blocking"]), (0.0, 0, 1, 2))
+        self.assertEqual(E._fmt_split("holdout", ho), "holdout: recall 0.0 (0/1 bug cases), false blocking 2 on 1 clean cases")
+        self.assertIn("recall n/a (no bug cases)", E._fmt_split("holdout", E.summarize(res[3:])["by_split"]["holdout"]))
+        self.assertNotIn("holdout", E.summarize(res[:2])["by_split"])
+        # rows written before splits existed have no by_split; RESULTS.md must still render them
+        orig = E.EVAL_DIR
+        E.EVAL_DIR = tempfile.mkdtemp(prefix="crucible-evalres-")
+        try:
+            old = {"at": "2026-11-06T01:25", "label": "old", "recall": 0.917, "recall_any_severity": 1.0,
+                   "false_blocking": 0, "true_dropped": 3}
+            open(os.path.join(E.EVAL_DIR, "history.jsonl"), "w").write(json.dumps(old) + "\n")
+            E.write_results("new", {"cases": 4}, s, [dict(r, kept=1, dropped=0, blocking=1, cost=0) for r in res])
+            md = open(os.path.join(E.EVAL_DIR, "RESULTS.md")).read()
+            self.assertIn("  - holdout: recall 0.0 (0/1 bug cases), false blocking 2 on 1 clean cases", md)
+            self.assertIn("| h1 | bug | holdout | caught (non-blocking) |", md)
+            self.assertIn("| new | 0.667 | 0.0 (0/1) |", md)
+            self.assertIn("| old | 0.917 | – |", md)
+        finally:
+            shutil.rmtree(E.EVAL_DIR, ignore_errors=True)
+            E.EVAL_DIR = orig
 
 
 class TestMapLine(unittest.TestCase):

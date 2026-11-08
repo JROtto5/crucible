@@ -1,0 +1,21 @@
+{
+ "kind": "bug",
+ "split": "holdout",
+ "source": "gamescope #2516 round 2 (2026-11-06): the round-1 fix called clear(), whose destructor waits without a bound, before the new bounded wait. Rewritten from scratch in Python; no upstream code.",
+ "message": "pool: bound the shutdown wait so a stuck job can't hang it (#41)",
+ "file": "workers/pool.py",
+ "lines": [
+  20
+ ],
+ "keywords": [
+  "clear()",
+  "close()",
+  "join",
+  "unbounded",
+  "without a timeout",
+  "still hang",
+  "still block",
+  "reintroduc",
+  "never return"
+ ]
+}
