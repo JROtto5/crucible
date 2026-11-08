@@ -14,7 +14,7 @@
   crucible eval    [--cases ...] [--split S] [--no-tiers] [--label L] score the reviewer on fixtures (eval/)
   crucible routing-replay [--include-self]                        what cost-routing rules would lose, on stored reviews
   crucible anchor-replay --clones DIR [--per-class N]            verifier with vs without the reviewer's argument
-  crucible stats   [--project P] [--include-self] [--json]        real-PR precision: unique kept/dropped/fixed/refuted
+  crucible stats   [--project P] [--since T] [--include-self] [--json]  real-PR precision, held up with its 95% interval
 
 crucible never pushes, comments, approves or posts. A human submits."""
 import argparse, datetime as dt, os, sys
