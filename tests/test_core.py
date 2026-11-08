@@ -3485,6 +3485,10 @@ class TestBodyWordsSkipsFoldedCode(unittest.TestCase):
         self.assertEqual(S.body_words("Intro.\n```\n~~~\ncode\n```\nEnd."), 2)   # ~~~ doesn't close ```
         # self-review round 3: tags quoted as inline code are prose, and fold nothing between them
         self.assertEqual(S.body_words("Wraps it in `<details>` so the long log folds; closes with `</details>`."), 12)
+        # self-review round 4: a real fold still folds next to, or around, a quoted tag
+        self.assertEqual(S.body_words("Mentions `<details>` here.\n<details>\nhidden hidden\n</details>\nEnd."), 4)
+        self.assertEqual(S.body_words("<details><summary>S</summary>use `<details>` here x x x x</details>"), 1)
+        self.assertEqual(S.body_words("<details><summary>Use `<b>` tags</summary>\nx x\n</details>"), 3)
 
     def test_folded_code_no_longer_trips_the_length_check(self):
         style = {"body": {"outside_median_words": 144, "outside_prs": 14}}

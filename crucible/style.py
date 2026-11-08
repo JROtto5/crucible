@@ -73,8 +73,7 @@ def _tpl_norm(line):
     return " ".join(CHECKBOX_RX.sub(r"\1[ ]", line.strip()).replace("*", "").split()).lower()
 
 
-# a tag written as inline code (`<details>`) is prose about the tag, not a fold
-_DETAILS_RX = re.compile(r"(?is)(?<!`)<details[^>]*>\s*(?:<summary[^>]*>((?:(?!</?summary|<details).)*)</summary>)?(?:(?!<details).)*?</details>(?!`)")
+_DETAILS_RX = re.compile(r"(?is)<details[^>]*>\s*(?:<summary[^>]*>((?:(?!</?summary|<details).)*)</summary>)?(?:(?!<details).)*?</details>")
 
 
 def body_words(text, template="", title=""):
@@ -86,6 +85,8 @@ def body_words(text, template="", title=""):
     t = re.sub(r"<!--.*?-->", "", text or "", flags=re.S)
     # a fence closes on a bare line of the same fence (an inner ``` inside ```` or a later ```js opener doesn't)
     t = re.sub(r"(?ms)^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?^[ \t]*\1[ \t]*$", "", t)
+    # a tag written as inline code (`<details>`) is prose about the tag, not a fold: its brackets go, its words stay
+    t = re.sub(r"`[^`\n]+`", lambda m: m.group(0).replace("<", " ").replace(">", " "), t)
     while True:                                        # innermost <details> first, so nested blocks fold whole
         t, n = _DETAILS_RX.subn(lambda m: m.group(1) or "", t)
         if not n:
