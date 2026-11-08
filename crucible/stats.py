@@ -65,6 +65,8 @@ def collect(root, include_self=False, project=None):
         for f, kept in [(f, True) for f in rev.get("findings", [])] + [(f, False) for f in rev.get("dropped", [])]:
             if f.get("source") != "review" or not f.get("id"):
                 continue
+            if (f.get("verification") or {}).get("method") == "rule":   # never judged by the verifier
+                continue
             ik, tk = ("id", repo, f["id"]), ("title", repo, _norm(f.get("title")))
             g.union(ik, tk)
             findings.append((repo, ik, kept, f.get("severity", "low")))

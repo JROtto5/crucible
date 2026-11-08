@@ -3318,10 +3318,6 @@ class TestAnchorReplay(unittest.TestCase):
         self.assertEqual(A.tally(rows)["with"]["false_alarms_kept"], 1)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestLengthLeftToHouseCheck(unittest.TestCase):
     """2026-11-08: 45 model findings on upstream reviews complained about the PR body's length, and the verifier
     dropped 36 of them. The measured check (style.ai_tells) owns length; the reviewer is no longer asked to judge it,
@@ -3344,10 +3340,14 @@ class TestLengthLeftToHouseCheck(unittest.TestCase):
             "PR body uses first person and is long for this project",
             "Commit has no body and title is far over house length",
             "Description breaks the project's heading norm", "PR body is below the median", "Description overstates the fix",
-            "PR body claims 3x speedup without numbers", "Description says the loop is too long"]
+            "PR body claims 3x speedup without numbers", "Description says the loop is too long",
+            # self-review round 1: content claims that only share words with a length complaint
+            "Description misstates the long-standing project behaviour", "Body says the project is long-lived",
+            "Description says the timeout is longer than the usual 30 s", "PR body: the median is computed wrong",
+            "Description is wrong: the loop is longer than usual"]
 
-    def _f(self, title, file="PR_DRAFT.md", source="review"):
-        return {"title": title, "file": file, "source": source}
+    def _f(self, title, file="PR_DRAFT.md", source="review", severity="low"):
+        return {"title": title, "file": file, "source": source, "severity": severity}
 
     def test_titles(self):
         for t in self.REAL:
@@ -3362,14 +3362,37 @@ class TestLengthLeftToHouseCheck(unittest.TestCase):
         self.assertFalse(V.length_only(self._f(t, file="PR_BODY.md"), "PR_DRAFT.md"))
         self.assertFalse(V.length_only(self._f(t), None))
         self.assertTrue(V.length_only(self._f(t, file="/w/PR_DRAFT.md"), "/w/PR_DRAFT.md"))
+        self.assertFalse(V.length_only(self._f(t, severity="medium"), "PR_DRAFT.md"))    # above low: verified
 
     def test_prompt_leaves_length_to_the_check(self):
-        p = V.review_prompt("o__r", "a" * 40, "b" * 40, {"files": ["a.py"], "text": "diff"}, "", "", "", "", ["a.py"])
+        args = ("o__r", "a" * 40, "b" * 40, {"files": ["a.py"], "text": "diff"}, "", "", "", "", ["a.py"])
+        p = V.review_prompt(*args)
         self.assertNotIn("length far from the project norm", p)
-        self.assertIn("Don't report the description's length", p)
-        self.assertRegex(p, r"generated-\s+sounding prose\. Don't report")   # the rest of the description list stays
+        self.assertRegex(p, r"generated-\s+sounding prose\. Don't report the description's length")
+        # nothing learned: the length check can't judge, so the reviewer still does
+        p = V.review_prompt(*args, length_measured=False)
+        self.assertIn("Also flag length far from the project norm.", p)
+        self.assertNotIn("Don't report the description's length", p)
+        self.assertTrue(V.length_measured({"body": {"median_words": 40}}))
+        self.assertTrue(V.length_measured({"body": {"outside_median_words": 40}}))
+        for sj in (None, {}, {"body": {}}, {"body": {"median_words": None}}):
+            self.assertFalse(V.length_measured(sj), sj)
 
     def test_end_to_end_no_verifier_call(self):
+        r, verified, report = self._run(learned=True)
+        self.assertEqual(verified, ["PR body is long and uses a table"])
+        self.assertEqual([f["title"] for f in r["findings"] if f["source"] == "review"], ["PR body is long and uses a table"])
+        ruled = [f for f in r["dropped"] if f["verification"].get("method") == "rule"]
+        self.assertEqual([f["title"] for f in ruled], ["PR body is about 3x the project's median length"])
+        self.assertEqual(ruled[0]["verification"]["status"], "dropped")
+        self.assertIn("not sent to the verifier", report)
+
+    def test_end_to_end_not_learned_verifies_as_before(self):
+        r, verified, _ = self._run(learned=False)
+        self.assertEqual(sorted(verified), ["PR body is about 3x the project's median length", "PR body is long and uses a table"])
+        self.assertFalse([f for f in r["dropped"] if f["verification"].get("method") == "rule"])
+
+    def _run(self, learned):
         from unittest import mock
         with tempfile.TemporaryDirectory() as d:
             repo, home = os.path.join(d, "r"), os.path.join(d, "home")
@@ -3398,15 +3421,14 @@ class TestLengthLeftToHouseCheck(unittest.TestCase):
 
             with mock.patch.object(V, "HOME", home), mock.patch.object(U, "HOME", home), \
                     mock.patch.object(V, "claude", fake), mock.patch.dict(os.environ, {"CRUCIBLE_CACHE": os.path.join(home, "c")}):
+                if learned:
+                    pd = U.project_dir(V.project_key(repo))
+                    os.makedirs(pd, exist_ok=True)
+                    json.dump({"body": {"median_words": 40}}, open(os.path.join(pd, "style.json"), "w"))
                 out = V.run_review(repo, "main", offline=True, skip_checks=True, draft=draft, log=lambda *_: None)
                 r = U.read_json(os.path.join(out, "review.json"))
             self.assertEqual(r["status"], "done", r.get("reason"))
-            self.assertEqual(verified, ["PR body is long and uses a table"])
-            self.assertEqual([f["title"] for f in r["findings"] if f["source"] == "review"], ["PR body is long and uses a table"])
-            ruled = [f for f in r["dropped"] if f["verification"].get("method") == "rule"]
-            self.assertEqual([f["title"] for f in ruled], ["PR body is about 3x the project's median length"])
-            self.assertEqual(ruled[0]["verification"]["status"], "dropped")
-            self.assertIn("not sent to the verifier", V.report(r, {}))
+            return r, verified, V.report(r, {})
 
     def test_routing_replay_does_not_count_a_rule_drop_as_refuted(self):
         with tempfile.TemporaryDirectory() as root:
@@ -3420,6 +3442,9 @@ class TestLengthLeftToHouseCheck(unittest.TestCase):
                       open(os.path.join(p, "review.json"), "w"))
             r = RT.replay(root)
             self.assertEqual((r["raw"], r["dropped"]), (1, 1))
+            from crucible import stats as ST
+            o = ST.collect(root)["overall"]
+            self.assertEqual((o["unique"], o["dropped"]), (1, 1))   # stats agrees: the rule drop wasn't judged
 
 
 class TestBodyWordsSkipsFoldedCode(unittest.TestCase):
@@ -3447,3 +3472,7 @@ class TestBodyWordsSkipsFoldedCode(unittest.TestCase):
         body = "word " * 150 + "\n\n<details><summary>Benchmark</summary>\n\n```js\n" + "a b c d\n" * 60 + "```\n</details>\n"
         self.assertFalse([k for k, _ in S.ai_tells(body, style) if k == "length"])
         self.assertTrue([k for k, _ in S.ai_tells("word " * 400, style) if k == "length"])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -183,7 +183,11 @@ def assign_ids(findings):
 
 
 # ---------- pipeline ----------
-def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, house="", draft="", draft_file="PR_DRAFT.md"):
+def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, house="", draft="", draft_file="PR_DRAFT.md",
+                  length_measured=True):
+    # with no learned median the length check can't judge, so the reviewer still may (see length_only)
+    length = ("Don't report the description's length: crucible measures it against this project's merged\n"
+              "        PRs and reports it separately." if length_measured else "Also flag length far from the project norm.")
     return textwrap.dedent(f"""\
         You are a strict senior maintainer of {project.replace('__', '/')} reviewing an outside contributor's change
         BEFORE it is submitted upstream. The checkout is at the change's HEAD ({sha[:10]}); the base is {base[:10]}.
@@ -205,8 +209,7 @@ def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, hou
         than the file's own style; MISSING comments where logic is non-obvious (invariants, ordering, GPU/netcode or
         concurrency subtleties, magic numbers); naming inconsistent with nearby code; and in the PR description:
         missing reviewer call-outs (risky lines or trade-offs, before/after numbers, how it was tested), generated-
-        sounding prose. Don't report the description's length: crucible measures it against this project's merged
-        PRs and reports it separately. Use file "{draft_file}" for description findings.
+        sounding prose. {length} Use file "{draft_file}" for description findings.
         {house}
 
         PR description draft, as it will be submitted (the author's private notes in {draft_file} are excluded and
@@ -233,24 +236,33 @@ def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, hou
         """)
 
 
-# A model finding whose whole claim is the description's length. style.check owns length: it measures the draft
-# against the project's merged PRs with a threshold. On the stored upstream reviews (2026-11-08) the verifier
-# dropped 10 of 12 such model findings, and one of the 2 it kept was refuted by the author. A title that adds
-# anything else ("... and uses a table") is not length-only and is verified as usual.
-_LEN_SUBJECT = re.compile(r"\b(body|description)\b", re.I)
-_LEN_WORD = re.compile(r"\b(long|longer|length|lengthy|verbose|wordy|words)\b", re.I)
-_LEN_NORM = re.compile(r"\b(median|norm|usual|typical|project)\b", re.I)   # a length *against the project*
-_LEN_MORE = re.compile(r"\b(and|but|with|also|plus|instead|title|commit|uses)\b|[;,&(]", re.I)
+# A low model finding whose whole claim is the description's length against the project. style.check owns length
+# when the project has a learned median: it measures the draft against the project's merged PRs with a threshold.
+# On the stored upstream reviews (2026-11-08) the verifier dropped 10 of 12 such model findings (all low), and one
+# of the 2 it kept was refuted by the author. The title must have the shape "<body|description> is ... <length word>
+# ... <median|norm|usual|typical>" and say nothing else: "Description misstates the long-standing project
+# behaviour", "... is long and uses a table" or "... is ~150 words (p75 50)" are verified as usual.
+# The cases it must match and refuse are in tests/test_core.py (TestLengthLeftToHouseCheck REAL/KEEP).
+_LEN_SHAPE = re.compile(r"\b(body|description)\s+(is|runs|reads)\b", re.I)
+_LEN_WORD = re.compile(r"(?<![-\w])(long|longer|length|lengthy|verbose|wordy|words)(?![-\w])", re.I)
+_LEN_NORM = re.compile(r"\b(median|norm|usual|typical)\b", re.I)
+_LEN_MORE = re.compile(r"\b(and|but|with|also|plus|instead|title|commit|uses)\b|[;:,&(]", re.I)
 LENGTH_RULE_NOTE = ("not sent to the verifier: the claim is only about the description's length, which crucible's "
-                    "length check measures against this project's merged PRs (it reports a finding when the body is "
-                    "far over that norm)")
+                    "length check measures against this project's merged PRs; it reports a finding only when the "
+                    "body is far over that norm (over 2.5x the median and 150 words more)")
+
+
+def length_measured(style_json):
+    """The length check can judge only with a learned median (`crucible learn`)."""
+    body = (style_json or {}).get("body") or {}
+    return bool(body.get("outside_median_words") or body.get("median_words"))
 
 
 def length_only(f, draft_label):
     t = f.get("title") or ""
-    return bool(f.get("source") == "review" and draft_label and f.get("file") == draft_label
-                and _LEN_SUBJECT.search(t) and _LEN_WORD.search(t) and _LEN_NORM.search(t)
-                and not _LEN_MORE.search(t))
+    return bool(f.get("source") == "review" and f.get("severity") == "low" and draft_label
+                and f.get("file") == draft_label and _LEN_SHAPE.search(t) and _LEN_WORD.search(t)
+                and _LEN_NORM.search(t) and not _LEN_MORE.search(t))
 
 
 def draft_scope(f, draft_label):
@@ -651,14 +663,15 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             record["review_model"] = review_model
             log(f"  route: {kind} change → review {review_model}, verify {' → '.join(tiers)}")
         cands, chunk_status, summaries = list(scanner) + house_findings, [], []
+        measured = length_measured(style_json)
         fkey, review_cost = facts_key(chk), 0.0
         for i, ch in enumerate(chunks, 1):
             prompt = review_prompt(project, sha, base, ch, rules, mem, facts, clog, all_files, house,
-                                   draft_text if i == 1 else "(reviewed in pass 1)", dlabel)
+                                   draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured)
             # keyed on the prompt with check output reduced to outcomes: a template change invalidates the cache, but
             # volatile output (timings) doesn't, so --force on the same commit is stable
             key_prompt = review_prompt(project, sha, base, ch, rules, mem, fkey, clog, all_files, house,
-                                       draft_text if i == 1 else "(reviewed in pass 1)", dlabel)
+                                       draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured)
             key = hashlib.sha256((review_model + "\0" + key_prompt).encode()).hexdigest()[:32]
             hit = None if fresh else cache_get(key)
             if hit:
@@ -694,7 +707,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         for f in new:
             if f["id"] in taken:
                 f["id"] += "-n"
-        ruled = [f for f in new if length_only(f, dlabel)]
+        ruled = [f for f in new if measured and length_only(f, dlabel)]
         new = [f for f in new if f not in ruled]
         for f in ruled:
             f.setdefault("proposed_severity", f["severity"])
