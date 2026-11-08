@@ -78,7 +78,7 @@ def _load(root, include_self, project, since=None):
                 if prev is None or (a.get("at") or "") >= (prev.get("at") or ""):
                     answers[(repo, fid)] = a
     dated = [t for t in seen if t]
-    window = {"since": since, "stored": len(seen), "undated": len(seen) - len(dated),
+    window = {"since": since, "project": project, "stored": len(seen), "undated": len(seen) - len(dated),
               "newest": max(dated) if dated else None, "in_window": len(reviews)}
     return reviews, answers, window
 
@@ -148,7 +148,8 @@ def _line(name, r):
 def _source(w):
     newest = (w["newest"] or "never").replace("T", " ")[:16]
     undated = f", {w['undated']} undated" if w["undated"] else ""
-    return f"Read {w['stored']} finished reviews{undated}; the newest is from {newest}."
+    of = f" of {w['project']}" if w.get("project") else ""
+    return f"Read {w['stored']} finished reviews{of}{undated}; the newest is from {newest}."
 
 
 def no_data(s):
@@ -159,9 +160,11 @@ def no_data(s):
 def report(s):
     o, w = s["overall"], s["window"]
     if no_data(s):
-        scope = f"since {w['since'].replace('T', ' ')}" if w["since"] else "in the store"
-        return (f"No data: no finished review {scope}. {_source(w)}\n"
-                "That is missing data, not a zero: nothing in this window was reviewed or stored.")
+        scope = (f" of {w['project']}" if w.get("project") else "") + (
+            f" since {w['since'].replace('T', ' ')}" if w["since"] else " stored")
+        where = "in this window" if w["since"] else "here"
+        return (f"No data: no finished review{scope}. {_source(w)}\n"
+                f"That is missing data, not a zero: nothing {where} was reviewed or stored.")
     head = (f"{'project':<44} {'revs':>4} {'$/rev':>7} {'unique':>6} {'kept':>5} {'drop':>5} "
             f"{'fixed':>5} {'defer':>5} {'refut':>5} {'unans':>6}  held up (answered, not refuted)")
     out = [head, "-" * len(head)] + [_line(p.replace("__", "/", 1), r) for p, r in s["projects"].items()]

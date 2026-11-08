@@ -2904,7 +2904,7 @@ class TestStatsWindow(unittest.TestCase):
             s = ST.collect(root, since="2026-11-07T05:15:00")
             o, w = s["overall"], s["window"]
             self.assertEqual((o["reviews"], o["cost"], o["unique"], o["fixed"], o["unanswered"]), (2, 2.5, 3, 1, 2))
-            self.assertEqual(w, {"since": "2026-11-07T05:15:00", "stored": 4, "undated": 1,
+            self.assertEqual(w, {"since": "2026-11-07T05:15:00", "project": None, "stored": 4, "undated": 1,
                                  "newest": "2026-11-07T09:00:00", "in_window": 2})
             self.assertEqual(ST.collect(root)["overall"]["reviews"], 4)                  # no window: everything
             text = ST.report(s)
@@ -2929,6 +2929,24 @@ class TestStatsWindow(unittest.TestCase):
             self.assertEqual((j["answered"], j["overall"], j["window"]["in_window"]), (False, None, 0))
             # an empty store says so too
             self.assertIn("newest is from never", ST.report(ST.collect(os.path.join(root, "none"))))
+            # a --project that matches nothing names the project, not the whole store
+            text = ST.report(ST.collect(root, project="o/typo"))
+            self.assertTrue(text.startswith("No data: no finished review of o/typo stored. Read 0 finished reviews of o/typo;"), text)
+            self.assertIn("nothing here was reviewed", text)
+
+    def test_quote_bar_boundary(self):
+        from crucible import stats as ST
+        with tempfile.TemporaryDirectory() as root:
+            for i in range(60):
+                self._store(root, f"s{i}", {"finished": "2026-11-07T06:00:00"}, [TestStats._f(f"CR-{i}", f"t{i}")],
+                            answers={f"CR-{i}": {"disposition": "fixed" if i % 5 else "refuted", "at": "x"}})
+            s = ST.collect(root)
+            self.assertNotIn("too few to quote", ST.report(s))                 # n = 60: quotable
+            self.assertTrue(json.loads(ST.to_json(s))["held_up"]["quotable"])
+            os.remove(os.path.join(root, "o__p", "s0", "review.json"))         # n = 59: not
+            s = ST.collect(root)
+            self.assertIn("n=59 < 60, too few to quote", ST.report(s))
+            self.assertFalse(json.loads(ST.to_json(s))["held_up"]["quotable"])
 
     def test_wilson(self):
         from crucible import stats as ST
