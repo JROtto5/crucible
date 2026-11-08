@@ -1024,6 +1024,21 @@ class TestLearnStyleSources(unittest.TestCase):
         self.assertNotIn("total_cost_usd", U.read_json(os.path.join(d, "meta.json")))
         self.assertEqual(U.read_json(os.path.join(d, "style.json"))["cost_usd"], 0.37)
 
+    def test_rules_md_names_the_nontest_median_only_when_known(self):
+        from crucible import learn as L
+        S.claude = self._metered(0.0)
+        d = S.project_dir(U.project_key(self.c))
+        orig = (L.collect, L.docs_text, L.claude, L.upstream_slug)
+        L.docs_text, L.claude, L.upstream_slug = (lambda slug: ""), self._metered(0.0), (lambda repo: "o/r")
+        try:
+            for sizes, want in (([(10, 4), (20, 6)], "Median merged PR: 15 changed lines (5 outside tests)."),
+                                ([(10, None), (20, None)], "Median merged PR: 15 changed lines.")):
+                L.collect = lambda slug, n, log, s=sizes: ([{"number": 1}], [{"pr": 1, "url": "u", "path": "", "body": "b"}], s)
+                L.run_learn(self.c, log=lambda *_: None)
+                self.assertIn(want, open(os.path.join(d, "rules.md")).read())
+        finally:
+            L.collect, L.docs_text, L.claude, L.upstream_slug = orig
+
     def test_run_learn_spend_without_comments_or_a_rules_call(self):
         from crucible import learn as L
         S.claude = self._metered(0.37)
