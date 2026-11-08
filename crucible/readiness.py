@@ -450,13 +450,24 @@ def dco(repo, base):
 
 
 def size(project, files):
+    """Judged by the lines outside test files, against the same count over merged PRs: tests a fix ships with are
+    not what makes it big to review (umu's 61-line drafts were 57 lines of tests). Replayed on the 90 stored upstream
+    rounds that warned or failed, on the same PR sample: 24 eased, 7 tightened (colyseus's merged PRs are test-heavy
+    too), 59 unchanged."""
     meta = read_json(os.path.join(project_dir(project), "meta.json"), {}) or {}
-    n = sum(1 for f in files for h in f["hunks"] for k, *_ in h["lines"] if k in "+-")
-    med = meta.get("median_merged_pr_lines")
+    count = lambda fs: sum(1 for f in fs for h in f["hunks"] for k, *_ in h["lines"] if k in "+-")
+    n = count(files)
+    in_tests = count(f for f in files if TEST_PATH_RX.search(f["path"]))
+    med, med_src = meta.get("median_merged_pr_lines"), meta.get("median_merged_pr_nontest_lines")
+    if med_src:
+        st = "fail" if n - in_tests > 3 * med_src else "warn" if n - in_tests > 1.5 * med_src else "pass"
+        return _item("size vs project norm", st, f"{n - in_tests} changed lines outside tests vs median merged PR "
+                                                  f"{med_src}" + (f" ({in_tests} more in tests)" if in_tests else ""))
     if not med:
         return _item("size vs project norm", "na", f"{n} changed lines; run `crucible learn` for the project median")
     st = "fail" if n > 3 * med else "warn" if n > 1.5 * med else "pass"
-    return _item("size vs project norm", st, f"{n} changed lines vs median merged PR {med}")
+    note = f" ({in_tests} of them in tests; re-run `crucible learn` to judge the lines outside tests)" if in_tests else ""
+    return _item("size vs project norm", st, f"{n} changed lines vs median merged PR {med}{note}")
 
 
 def learned_data(project):

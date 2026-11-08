@@ -60,7 +60,7 @@ Those 16 cases are the **build** split: crucible's prompts and verifier have bee
    - DCO sign-off, if required;
    - no AI co-author trailer or "Generated with …" line in the branch's commits (warn only: some projects do take them);
    - no whitespace-only churn;
-   - size is compared with the project's median merged PR;
+   - size: the lines changed outside test files, compared with the same count over the project's merged PRs (`crucible learn` measures it; older learned data falls back to all lines and says so);
    - the issue is still open, unassigned and has no competing open PR (`gh`).
    - no other open PR changes the same lines, whatever issue it links (`gh`, warn only). Up to the 300 most recently updated open PRs are read; the 20 most focused that share a file are compared line by line (a line you change inside one of their hunks), listed most focused first. PRs that share only a file are counted, and any PR that couldn't be compared is named, never passed. Bots, your own PRs, lockfiles, changelogs and package.json are ignored.
 

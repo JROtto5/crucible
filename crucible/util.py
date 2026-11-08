@@ -16,11 +16,12 @@ CODE_EXT_RX = re.compile(r"\.(c|cc|cpp|h|hpp|cs|go|java|kt|rs|swift|py|rb|php|[c
 # Version of what `crucible learn` writes (meta.json, style.json). Stored files keep their numbers until `learn` re-runs
 # (umu's style.json kept a Dependabot-polluted 879-word median for a day after bug j was fixed), so a fix that changes a
 # learned number bumps this, says what changed and which files it affects. Unstamped files predate the stamp (v1 or v2).
-LEARN_VERSION = 3
+LEARN_VERSION = 4
 LEARN_CHANGES = {
     2: ("bot PRs and comments are skipped and code is sampled from the upstream branch, not your unpushed commits",
         ("meta.json", "style.json")),
     3: ("PR-body length is judged against outside contributors' merged PRs, not the maintainers' own", ("style.json",)),
+    4: ("PR size is judged by the lines outside test files, against the same median of merged PRs", ("meta.json",)),
 }
 
 

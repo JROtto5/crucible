@@ -1,7 +1,7 @@
 """`crucible learn`: extract what this project's maintainers actually ask for, from merged PR reviews."""
 import datetime as dt, os, statistics, textwrap
-from .util import (LEARN_VERSION, Budget, Failed, claude, gh_json, is_bot, project_dir, project_key, upstream_slug,
-                   write_json)
+from .util import (LEARN_VERSION, TEST_PATH_RX, Budget, Failed, claude, gh_json, is_bot, project_dir, project_key,
+                   upstream_slug, write_json)
 
 MAINTAINERS = {"OWNER", "MEMBER", "COLLABORATOR"}
 RULES_SCHEMA = {"type": "object", "properties": {"rules": {"type": "array", "maxItems": 25, "items": {
@@ -20,7 +20,8 @@ def collect(slug, n=25, log=print):
         log(f"  #{num} {p['title'][:70]}")
         det = gh_json(f"repos/{slug}/pulls/{num}") or {}
         if det:
-            sizes.append((det.get("additions") or 0) + (det.get("deletions") or 0))
+            total = (det.get("additions") or 0) + (det.get("deletions") or 0)
+            sizes.append((total, nontest_lines(slug, num, total)))
         for ep in (f"repos/{slug}/pulls/{num}/comments?per_page=100", f"repos/{slug}/issues/{num}/comments?per_page=100",
                    f"repos/{slug}/pulls/{num}/reviews?per_page=100"):
             for c in gh_json(ep) or []:
@@ -30,6 +31,26 @@ def collect(slug, n=25, log=print):
                     comments.append({"pr": num, "url": c.get("html_url") or p["html_url"], "path": c.get("path"),
                                      "body": c["body"].strip()[:600]})
     return merged, comments, sizes
+
+
+def nontest_lines(slug, num, total):
+    """Changed lines outside test files. Readiness judges a PR's size by these: on colyseus/schema a 300-line PR was
+    234 lines of tests, and the waiver said so in every round. Only the first 100 files are listed; anything past them
+    counts as non-test, so a huge PR never reads smaller than it is. None when the file list can't be read."""
+    listed = gh_json(f"repos/{slug}/pulls/{num}/files?per_page=100")
+    if not isinstance(listed, list):
+        return None
+    return total - sum(f.get("changes") or 0 for f in listed if TEST_PATH_RX.search(f.get("filename") or ""))
+
+
+def size_norms(sizes):
+    """meta.json's size fields from (total, non-test) pairs, one per merged PR."""
+    tot = [t for t, _ in sizes]
+    src = [n for _, n in sizes if n is not None]
+    return {"median_merged_pr_lines": int(statistics.median(tot)) if tot else None,
+            "p75_merged_pr_lines": int(statistics.quantiles(tot, n=4)[2]) if len(tot) >= 4 else None,
+            # half the sample at least, or the median describes whichever PRs happened to list
+            "median_merged_pr_nontest_lines": int(statistics.median(src)) if src and len(src) * 2 >= len(tot) else None}
 
 
 def docs_text(slug):
@@ -52,8 +73,7 @@ def run_learn(repo, n=25, model="claude-sonnet-5-5", budget_usd=2.0, style=True,
     merged, comments, sizes = collect(slug, n, log)
     docs = docs_text(slug)
     meta = {"slug": slug, "learned": dt.date.today().isoformat(), "learn_version": LEARN_VERSION, "prs_sampled": len(merged),
-            "maintainer_comments": len(comments), "median_merged_pr_lines": int(statistics.median(sizes)) if sizes else None,
-            "p75_merged_pr_lines": int(statistics.quantiles(sizes, n=4)[2]) if len(sizes) >= 4 else None}
+            "maintainer_comments": len(comments), **size_norms(sizes)}
     write_json(os.path.join(project_dir(project), "meta.json"), meta)
     if not comments and not docs:
         log("no maintainer comments or docs found; wrote size stats only")
@@ -80,7 +100,8 @@ def run_learn(repo, n=25, model="claude-sonnet-5-5", budget_usd=2.0, style=True,
         raise Failed(f"{e} (learn cost ${round(budget.spent, 4)} spent on the rules call)") from e
     md = [f"# Maintainer preferences: {slug}", "",
           f"Learned {meta['learned']} from {len(merged)} merged PRs ({len(comments)} maintainer comments). "
-          f"Median merged PR: {meta['median_merged_pr_lines']} changed lines.", ""]
+          f"Median merged PR: {meta['median_merged_pr_lines']} changed lines"
+          f" ({meta['median_merged_pr_nontest_lines']} outside tests).", ""]
     for r in out["rules"]:
         md.append(f"- **{r['rule']}**: {r['why']} ({', '.join(r['sources'][:3])})")
     open(os.path.join(project_dir(project), "rules.md"), "w").write("\n".join(md) + "\n")

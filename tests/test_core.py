@@ -839,13 +839,76 @@ class TestLearnedDataVersion(unittest.TestCase):
         repo = make_repo({"a.py": "x = 1\n"})
         sh(repo, "git", "remote", "add", "origin", "https://github.com/o/lv.git")
         orig = (L.collect, L.docs_text)
-        L.collect, L.docs_text = (lambda slug, n, log: ([], [], [10, 20])), (lambda slug: "")
+        L.collect, L.docs_text = (lambda slug, n, log: ([], [], [(10, 4), (20, None)])), (lambda slug: "")
         try:
             meta = L.run_learn(repo, style=False, log=lambda *_: None)
         finally:
             L.collect, L.docs_text = orig
         self.assertEqual(meta["learn_version"], U.LEARN_VERSION)
         self.assertEqual(R.learned_data(U.project_key(repo))["status"], "pass")
+
+
+class TestSizeNorm(unittest.TestCase):
+    """90 stored upstream rounds warned or failed "size vs project norm", many on test lines: colyseus/schema's
+    300-line drafts were 234 lines of tests, waived in every round with that reason. Size is judged outside tests."""
+    @staticmethod
+    def changed(path, n):
+        return {"path": path, "hunks": [{"lines": [("+", "x", None, i) for i in range(n)]}]}
+
+    def meta(self, project, **m):
+        with open(os.path.join(U.project_dir(project), "meta.json"), "w") as fh:
+            json.dump(m, fh)
+
+    def test_test_lines_do_not_count_against_the_norm(self):
+        self.meta("sz__new", median_merged_pr_lines=62, median_merged_pr_nontest_lines=45)
+        files = [self.changed("src/ArraySchema.ts", 64), self.changed("test/ArraySchema.test.ts", 234)]
+        it = R.size("sz__new", files)
+        self.assertEqual(it["status"], "pass")  # old code: 298 > 3 x 62, fail
+        self.assertEqual(it["evidence"], "64 changed lines outside tests vs median merged PR 45 (234 more in tests)")
+
+    def test_source_heavy_change_still_fails(self):
+        self.meta("sz__src", median_merged_pr_lines=62, median_merged_pr_nontest_lines=40)
+        self.assertEqual(R.size("sz__src", [self.changed("src/a.ts", 121)])["status"], "fail")
+        self.assertEqual(R.size("sz__src", [self.changed("src/a.ts", 61)])["status"], "warn")
+        self.assertEqual(R.size("sz__src", [self.changed("src/a.ts", 60), self.changed("tests/t.py", 500)])["status"],
+                         "pass")
+        self.assertEqual(R.size("sz__src", [self.changed("src/a.ts", 60)])["evidence"],
+                         "60 changed lines outside tests vs median merged PR 40")
+
+    def test_old_meta_keeps_the_total_and_says_how_to_fix_it(self):
+        self.meta("sz__old", median_merged_pr_lines=62, learn_version=3)
+        it = R.size("sz__old", [self.changed("src/a.ts", 64), self.changed("test/a.test.ts", 234)])
+        self.assertEqual(it["status"], "fail")
+        self.assertEqual(it["evidence"], "298 changed lines vs median merged PR 62 (234 of them in tests; re-run "
+                                         "`crucible learn` to judge the lines outside tests)")
+        self.assertEqual(R.size("sz__old", [self.changed("src/a.ts", 64)])["evidence"],
+                         "64 changed lines vs median merged PR 62")
+        self.assertIn("outside test files", R.learned_data("sz__old")["evidence"])  # and readiness says it's stale
+
+    def test_nontest_lines_from_the_pr_file_list(self):
+        from crucible import learn as L
+        listed = {"repos/o/r/pulls/1/files?per_page=100": [
+            {"filename": "src/a.py", "changes": 10}, {"filename": "tests/test_a.py", "changes": 30},
+            {"filename": "src/a.test.js", "changes": 5}],
+            "repos/o/r/pulls/2/files?per_page=100": {"message": "Not Found"}}
+        orig = L.gh_json
+        L.gh_json = lambda path, check=False: listed.get(path)
+        try:
+            self.assertEqual(L.nontest_lines("o/r", 1, 45), 10)
+            self.assertEqual(L.nontest_lines("o/r", 1, 145), 110)  # files past the first 100 count as non-test
+            self.assertIsNone(L.nontest_lines("o/r", 2, 45))
+            self.assertIsNone(L.nontest_lines("o/r", 3, 45))
+        finally:
+            L.gh_json = orig
+
+    def test_size_norms(self):
+        from crucible import learn as L
+        self.assertEqual(L.size_norms([(10, 4), (20, 6), (30, None), (40, 8)]),
+                         {"median_merged_pr_lines": 25, "p75_merged_pr_lines": 37, "median_merged_pr_nontest_lines": 6})
+        # fewer than half the PRs listed their files: no non-test median, readiness falls back to the total
+        self.assertIsNone(L.size_norms([(10, 4), (20, None), (30, None)])["median_merged_pr_nontest_lines"])
+        self.assertEqual(L.size_norms([]), {"median_merged_pr_lines": None, "p75_merged_pr_lines": None,
+                                            "median_merged_pr_nontest_lines": None})
 
 
 class TestLearnStyleSources(unittest.TestCase):
@@ -947,7 +1010,7 @@ class TestLearnStyleSources(unittest.TestCase):
         from crucible import learn as L
         S.claude = self._metered(0.37)
         orig = (L.collect, L.docs_text, L.claude, L.upstream_slug)
-        L.collect = lambda slug, n, log: ([{"number": 1}], [{"pr": 1, "url": "u", "path": "", "body": "b"}], [10, 20])
+        L.collect = lambda slug, n, log: ([{"number": 1}], [{"pr": 1, "url": "u", "path": "", "body": "b"}], [(10, 4), (20, 9)])
         L.docs_text, L.claude, L.upstream_slug = (lambda slug: ""), self._metered(0.41), (lambda repo: "o/r")
         logs = []
         try:
@@ -965,7 +1028,7 @@ class TestLearnStyleSources(unittest.TestCase):
         from crucible import learn as L
         S.claude = self._metered(0.37)
         orig = (L.collect, L.docs_text, L.upstream_slug)
-        L.collect, L.docs_text, L.upstream_slug = (lambda slug, n, log: ([], [], [10])), (lambda slug: ""), (lambda r: "o/r")
+        L.collect, L.docs_text, L.upstream_slug = (lambda slug, n, log: ([], [], [(10, 4)])), (lambda slug: ""), (lambda r: "o/r")
         logs = []
         try:
             meta = L.run_learn(self.c, log=logs.append)
@@ -979,7 +1042,7 @@ class TestLearnStyleSources(unittest.TestCase):
     def test_failed_rules_call_reports_its_spend(self):
         from crucible import learn as L
         orig = (L.collect, L.docs_text, L.claude, L.upstream_slug)
-        L.collect = lambda slug, n, log: ([{"number": 1}], [{"pr": 1, "url": "u", "path": "", "body": "b"}], [10])
+        L.collect = lambda slug, n, log: ([{"number": 1}], [{"pr": 1, "url": "u", "path": "", "body": "b"}], [(10, 4)])
         L.docs_text, L.claude, L.upstream_slug = (lambda slug: ""), self._metered(0.41, fail=True), (lambda r: "o/r")
         try:
             with self.assertRaisesRegex(U.Failed, r"error_max_turns.*learn cost \$0\.41 spent on the rules call"):
@@ -1017,7 +1080,7 @@ class TestLearnStyleSources(unittest.TestCase):
             L.gh_json = orig
         self.assertEqual([p["number"] for p in merged], [3, 4])
         self.assertEqual([c["body"] for c in got], ["Please add a test."])
-        self.assertEqual(sizes, [2, 2])
+        self.assertEqual(sizes, [(2, 2), (2, 2)])
 
     def test_non_utf8_source_does_not_crash(self):
         d = make_repo({"a.js": "x\n"})
