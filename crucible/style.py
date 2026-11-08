@@ -73,6 +73,9 @@ def _tpl_norm(line):
     return " ".join(CHECKBOX_RX.sub(r"\1[ ]", line.strip()).replace("*", "").split()).lower()
 
 
+_DETAILS_RX = re.compile(r"(?is)<details[^>]*>\s*(?:<summary[^>]*>((?:(?!</?summary|<details).)*)</summary>)?(?:(?!<details).)*?</details>")
+
+
 def body_words(text, template="", title=""):
     """Words the author wrote in the body: HTML comments (as the learned median strips them), the title and lines
     copied verbatim from the repo's PR template (its checklist and headings, ticked or not) don't count.
@@ -80,8 +83,12 @@ def body_words(text, template="", title=""):
     Fenced code and the inside of a collapsed <details> block (its <summary> stays) aren't prose a reviewer has to
     read: three-mesh-bvh #958 counted 383 words for 155 visible ones, its benchmark script folded away."""
     t = re.sub(r"<!--.*?-->", "", text or "", flags=re.S)
-    t = re.sub(r"(?ms)^[ \t]*(```|~~~).*?^[ \t]*\1[^\n]*$", "", t)
-    t = re.sub(r"(?is)<details[^>]*>\s*(?:<summary[^>]*>(.*?)</summary>)?.*?</details>", lambda m: m.group(1) or "", t)
+    # a fence closes on a bare line of the same fence (an inner ``` inside ```` or a later ```js opener doesn't)
+    t = re.sub(r"(?ms)^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?^[ \t]*\1[ \t]*$", "", t)
+    while True:                                        # innermost <details> first, so nested blocks fold whole
+        t, n = _DETAILS_RX.subn(lambda m: m.group(1) or "", t)
+        if not n:
+            break
     if title and t.lstrip().startswith(title):
         t = t.lstrip()[len(title):]
     tpl = {_tpl_norm(l) for l in re.sub(r"<!--.*?-->", "", template or "", flags=re.S).split("\n")} - {""}

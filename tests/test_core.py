@@ -3430,21 +3430,27 @@ class TestLengthLeftToHouseCheck(unittest.TestCase):
             self.assertEqual(r["status"], "done", r.get("reason"))
             return r, verified, V.report(r, {})
 
+    def _store_rule_drop(self, root):
+        p = os.path.join(root, "o__p", "s1")
+        os.makedirs(p)
+        mk = lambda i, v: {"id": i, "source": "review", "severity": "low", "title": "t", "file": "a.js", "verification": v}
+        json.dump({"repo": "r", "base": "b", "started": "2026-11-08T01", "status": "done", "cost_usd": 0.1,
+                   "inputs": {}, "files": ["a.js"], "findings": [],
+                   "dropped": [mk("CR-1", {"status": "dropped", "method": "rule", "evidence": "e"}),
+                               mk("CR-2", {"status": "dropped", "method": "read", "evidence": "e"})]},
+                  open(os.path.join(p, "review.json"), "w"))
+
     def test_routing_replay_does_not_count_a_rule_drop_as_refuted(self):
         with tempfile.TemporaryDirectory() as root:
-            p = os.path.join(root, "o__p", "s1")
-            os.makedirs(p)
-            mk = lambda i, v: {"id": i, "source": "review", "severity": "low", "title": "t", "file": "a.js", "verification": v}
-            json.dump({"repo": "r", "base": "b", "started": "2026-11-08T01", "status": "done", "cost_usd": 0.1,
-                       "inputs": {}, "files": ["a.js"], "findings": [],
-                       "dropped": [mk("CR-1", {"status": "dropped", "method": "rule", "evidence": "e"}),
-                                   mk("CR-2", {"status": "dropped", "method": "read", "evidence": "e"})]},
-                      open(os.path.join(p, "review.json"), "w"))
-            r = RT.replay(root)
-            self.assertEqual((r["raw"], r["dropped"]), (1, 1))
-            from crucible import stats as ST
+            self._store_rule_drop(root)
+            self.assertEqual((RT.replay(root)["raw"], RT.replay(root)["dropped"]), (1, 1))
+
+    def test_stats_does_not_count_a_rule_drop(self):
+        from crucible import stats as ST
+        with tempfile.TemporaryDirectory() as root:
+            self._store_rule_drop(root)
             o = ST.collect(root)["overall"]
-            self.assertEqual((o["unique"], o["dropped"]), (1, 1))   # stats agrees: the rule drop wasn't judged
+            self.assertEqual((o["unique"], o["dropped"]), (1, 1))   # only the verifier's drop is counted
 
 
 class TestBodyWordsSkipsFoldedCode(unittest.TestCase):
@@ -3466,6 +3472,17 @@ class TestBodyWordsSkipsFoldedCode(unittest.TestCase):
         # falsifiers: nothing is dropped unless the block is closed
         self.assertEqual(S.body_words("```js\nx y z\n"), 4)
         self.assertEqual(S.body_words("<details>\nx y z\n"), 4)
+        # an unclosed fence isn't closed by a later opener: the prose between them still counts
+        self.assertEqual(S.body_words("```\nx\n\nprose here\n\n```js\ny\n"), 5)
+        # an unclosed outer <details> around a closed inner one: only the inner block folds
+        self.assertEqual(S.body_words("<details>\nprose prose\n<details>\nhidden hidden\n</details>\nafter after\n"), 5)
+
+    def test_nested_and_sequential_blocks(self):
+        self.assertEqual(S.body_words("a <details>x x</details> mid mid <details>y y</details> end"), 4)
+        nested = "Intro.\n<details><summary>Outer</summary>\nx x\n<details><summary>Inner</summary>\ny y\n</details>\nz z\n</details>\nEnd."
+        self.assertEqual(S.body_words(nested), 3)                     # Intro, Outer, End
+        self.assertEqual(S.body_words("Intro.\n````md\n```js\ncode code\n```\nmore more\n````\nEnd."), 2)
+        self.assertEqual(S.body_words("Intro.\n```\n~~~\ncode\n```\nEnd."), 2)   # ~~~ doesn't close ```
 
     def test_folded_code_no_longer_trips_the_length_check(self):
         style = {"body": {"outside_median_words": 144, "outside_prs": 14}}
