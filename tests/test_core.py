@@ -362,6 +362,40 @@ class TestCatalogDigest(unittest.TestCase):
         C.digest_files(files, lambda p: old, lambda p: new)
         self.assertIn("lien<a>", files[0]["text"])
 
+    def test_long_entries_never_overflow_a_chunk(self):
+        # 25 paragraph-length edits made one 51k block (> the 45k chunk), truncated and left uncovered
+        entries = [(f"<b>{i}</b> " + "w" * 1200, f"<b>{i}</b " + "v" * 1200, "") for i in range(120)]
+        old, new = _po(entries), _po([(m, s.replace("</b ", "</b> "), f) for m, s, f in entries])
+        _, files = self._files(old, new)
+        self.assertEqual(C.digest_files(files, lambda p: old, lambda p: new), ["po/fr.po"])
+        chunks, uncovered = D.chunk(files)
+        self.assertEqual(uncovered, []); self.assertNotIn("truncated", "".join(c["text"] for c in chunks))
+        self.assertEqual(sum(c["text"].count("\nL") for c in chunks), 120)
+        self.assertTrue(all(c["text"].count("translations this change edits") for c in chunks))  # title per chunk
+
+    def test_absurd_string_cut_visibly(self):
+        self.assertTrue(C._show("x" * 4005).endswith("…[5 more chars, open the file]"))
+        self.assertEqual(C._show("a\nb"), "a\\nb")
+
+    def test_template_header_edit_shows_both_sides(self):
+        hdr = 'msgid ""\nmsgstr ""\n"POT-Creation-Date: {}\\n"\n\n'
+        body = "".join(f'#: a.py:{{}}\nmsgid "L{i}"\nmsgstr ""\n\n' for i in range(120))
+        old = hdr.format("2026-01-01") + body.format(*range(120))
+        new = hdr.format("2026-11-08") + body.format(*range(5, 125))
+        _, files = self._files(old, new, path="po/app.pot")
+        C.digest_files(files, lambda p: old, lambda p: new)
+        t = files[0]["text"]
+        self.assertIn('- msgstr "POT-Creation-Date: 2026-01-01\\n"', t)
+        self.assertIn('+ msgstr "POT-Creation-Date: 2026-11-08\\n"', t)
+
+    def test_plural_rendered(self):
+        old = _po(FILLER) + '\n#: a.py:1\nmsgid "%d file"\nmsgid_plural "%d files"\nmsgstr[0] "%d fichier"\nmsgstr[1] "%d fichier"\n'
+        new = _po(FILLER, refs_at=3) + '\n#: a.py:1\nmsgid "%d file"\nmsgid_plural "%d files"\nmsgstr[0] "%d fichier"\nmsgstr[1] "%d fichiers"\n'
+        _, files = self._files(old, new)
+        C.digest_files(files, lambda p: old, lambda p: new)
+        self.assertIn('msgid_plural "%d files"', files[0]["text"])
+        self.assertIn('+ msgstr "%d fichiers"', files[0]["text"])
+
     def test_big_digest_is_split_into_chunks(self):
         entries = [(f"Open <b>file {i}</b>", f"Ouvrir <b>fichier {i}</b", "") for i in range(1500)]
         old, new = _po(entries), _po([(m, s + ">", f) for m, s, f in entries])

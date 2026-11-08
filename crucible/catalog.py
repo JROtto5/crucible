@@ -90,7 +90,9 @@ def _show(s, limit=4000):
     return s if len(s) <= limit else s[:limit] + f"…[{len(s) - limit} more chars, open the file]"
 
 
-BLOCK = 25        # entries per "@@" block, so diff.chunk can split a big digest the way it splits hunks
+# entries go out in "@@" blocks so diff.chunk can split a big digest the way it splits hunks; a block closes at
+# BLOCK entries or BLOCK_CHARS characters, whichever comes first, so long strings can't push one past a chunk
+BLOCK, BLOCK_CHARS = 25, 15000
 
 
 def digest(path, old_text, new_text, changed_new_lines, changed_old_lines=0):
@@ -153,7 +155,7 @@ def digest(path, old_text, new_text, changed_new_lines, changed_old_lines=0):
             rows.append(f"  msgid_plural \"{_show(e['key'][2])}\"")
         if prev is not None:
             rows += [f"  - msgstr \"{_show(s)}\"" for s in prev["strs"]]
-        if not template:
+        if prev is not None or not template:      # a template's new msgids have nothing but msgstr ""
             rows += [f"  {'+ ' if prev is not None else ''}msgstr \"{_show(s)}\"" for s in e["strs"]]
         return "\n".join(rows)
 
@@ -167,9 +169,17 @@ def digest(path, old_text, new_text, changed_new_lines, changed_old_lines=0):
         if not rows and title.startswith("msgids new"):
             continue
         out.append(f"\n## {title}: {len(rows)}")
-        for i in range(0, len(rows), BLOCK):
-            out.append(f"@@ {title.split(' (')[0].split(';')[0]}, {i + 1}-{min(i + BLOCK, len(rows))} of {len(rows)} @@")
-            out.extend(rows[i:i + BLOCK])
+        blocks, cur, size = [], [], 0
+        for r in rows:
+            if cur and (len(cur) >= BLOCK or size + len(r) > BLOCK_CHARS):
+                blocks.append(cur); cur, size = [], 0
+            cur.append(r); size += len(r)
+        if cur:
+            blocks.append(cur)
+        first = 1
+        for b in blocks:                          # the full title on every block: a split chunk keeps the caveat
+            out.append(f"@@ {title}, entries {first}-{first + len(b) - 1} of {len(rows)} @@")
+            out.extend(b); first += len(b)
     return "\n".join(out) + "\n"
 
 
