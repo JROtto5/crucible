@@ -160,9 +160,20 @@ def cmd_anchor_replay(a):
     print(anchoring.report(rows, skipped))
 
 
+def _iso_time(v):
+    """argparse type: a local ISO date or date-time, normalized to the form stored reviews use (2026-11-07T05:15:00)."""
+    try:
+        t = dt.datetime.fromisoformat(v.replace(" ", "T"))
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a date or date-time: {v!r} (use YYYY-MM-DD or YYYY-MM-DDTHH:MM)")
+    if t.tzinfo:
+        raise argparse.ArgumentTypeError("give a local time without a zone: stored reviews are in local time")
+    return t.isoformat(timespec="seconds")
+
+
 def cmd_stats(a):
     from . import stats
-    s = stats.collect(os.path.join(HOME, "reviews"), include_self=a.include_self, project=a.project)
+    s = stats.collect(os.path.join(HOME, "reviews"), include_self=a.include_self, project=a.project, since=a.since)
     print(stats.to_json(s) if a.json else stats.report(s))
 
 
@@ -205,6 +216,7 @@ def main(argv=None):
     sa = s.add_parser("stats", help="real-PR precision log from stored reviews: unique kept/dropped/fixed/deferred/refuted")
     sa.add_argument("--project", help="owner/name (default: every project)")
     sa.add_argument("--include-self", action="store_true", help="include crucible's reviews of itself")
+    sa.add_argument("--since", type=_iso_time, help="only reviews finished at or after this local time (YYYY-MM-DD[THH:MM])")
     sa.add_argument("--json", action="store_true")
     ev = s.add_parser("eval", help="run the review on labelled fixture changes (eval/cases) and score it")
     ev.add_argument("--cases", nargs="*", help="substrings of case names to run (default: all)")

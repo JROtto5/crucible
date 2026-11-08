@@ -2880,6 +2880,81 @@ class TestStats(unittest.TestCase):
             self.assertEqual(json.loads(out.stdout)["overall"]["unique"], 1)
 
 
+class TestStatsWindow(unittest.TestCase):
+    """BLAZE 2 exchange 2026-11-07: a query over a store that stopped being written returns zero rows, and "0 reviews"
+    reads as a quiet day. `stats --since` reports what it read and says "no data" instead of printing zeros."""
+    @staticmethod
+    def _store(root, sha, finished, findings=(), answers=None, cost=1.0, repo="o__p"):
+        TestStats._store(root, repo, sha, findings, answers=answers, cost=cost)
+        p = os.path.join(root, repo, sha, "review.json")
+        rev = U.read_json(p)
+        rev.update(finished or {})
+        U.write_json(p, rev)
+
+    def test_window_counts_only_rounds_in_it_and_keeps_older_answers(self):
+        from crucible import stats as ST
+        f = TestStats._f
+        with tempfile.TemporaryDirectory() as root:
+            # CR-1 raised and answered before the window, carried into it: it counts, with its old answer
+            self._store(root, "s1", {"finished": "2026-11-06T10:00:00"}, [f("CR-1", "a")],
+                        answers={"CR-1": {"disposition": "fixed", "at": "2026-11-06T11"}})
+            self._store(root, "s2", {"finished": "2026-11-07T06:00:00"}, [f("CR-1", "a"), f("CR-2", "b")], cost=2.0)
+            self._store(root, "s3", {"started": "2026-11-07T09:00:00"}, [f("CR-3", "c")], cost=0.5)  # no "finished"
+            self._store(root, "s0", None, [f("CR-0", "z")])                                         # legacy, undated
+            s = ST.collect(root, since="2026-11-07T05:15:00")
+            o, w = s["overall"], s["window"]
+            self.assertEqual((o["reviews"], o["cost"], o["unique"], o["fixed"], o["unanswered"]), (2, 2.5, 3, 1, 2))
+            self.assertEqual(w, {"since": "2026-11-07T05:15:00", "stored": 4, "undated": 1,
+                                 "newest": "2026-11-07T09:00:00", "in_window": 2})
+            self.assertEqual(ST.collect(root)["overall"]["reviews"], 4)                  # no window: everything
+            text = ST.report(s)
+            self.assertIn("Window: reviews finished since 2026-11-07 05:15:00: 2 of 4.", text)
+            self.assertIn("Read 4 finished reviews, 1 undated; the newest is from 2026-11-07 09:00.", text)
+            self.assertIn("Held up: 1/1 = 100% (Wilson 95% 21%-100%; n=1 < 60, too few to quote", text)
+            self.assertIn("Cost per held-up finding: $2.50", text)
+            j = json.loads(ST.to_json(s))
+            self.assertTrue(j["answered"])
+            self.assertEqual((j["held_up"]["held"], j["held_up"]["answered"], j["held_up"]["quotable"]), (1, 1, False))
+
+    def test_empty_window_is_no_data_not_zero(self):
+        from crucible import stats as ST
+        with tempfile.TemporaryDirectory() as root:
+            self._store(root, "s1", {"finished": "2026-11-06T10:00:00"}, [TestStats._f("CR-1", "a")])
+            s = ST.collect(root, since="2026-11-08")
+            text = ST.report(s)
+            self.assertTrue(text.startswith("No data: no finished review since 2026-11-08."), text)
+            self.assertIn("the newest is from 2026-11-06 10:00", text)
+            self.assertNotIn("overall", text)                         # no table of zeros
+            j = json.loads(ST.to_json(s))
+            self.assertEqual((j["answered"], j["overall"], j["window"]["in_window"]), (False, None, 0))
+            # an empty store says so too
+            self.assertIn("newest is from never", ST.report(ST.collect(os.path.join(root, "none"))))
+
+    def test_wilson(self):
+        from crucible import stats as ST
+        lo, hi = ST.wilson(53, 64)                       # the 11-07 exchange note's figure: 83% is really 72-90%
+        self.assertEqual((round(lo, 2), round(hi, 2)), (0.72, 0.90))
+        self.assertIsNone(ST.wilson(0, 0))
+        self.assertEqual(ST.wilson(5, 5)[1], 1.0)
+        self.assertEqual(ST.wilson(0, 5)[0], 0.0)
+
+    def test_cli_since(self):
+        with tempfile.TemporaryDirectory() as home:
+            self._store(os.path.join(home, "reviews"), "s1", {"finished": "2026-11-06T10:00:00"}, [TestStats._f("CR-1", "t")])
+            run = lambda *a: subprocess.run([sys.executable, "-m", "crucible", "stats", *a], capture_output=True,
+                                            text=True, env=dict(os.environ, CRUCIBLE_HOME=home),
+                                            cwd=os.path.dirname(os.path.dirname(__file__)))
+            out = run("--since", "2026-11-06 09:30", "--json")
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertEqual(json.loads(out.stdout)["window"]["since"], "2026-11-06T09:30:00")
+            self.assertEqual(json.loads(out.stdout)["overall"]["unique"], 1)
+            self.assertEqual(run("--since", "2026-11-07").stdout.split(":")[0], "No data")
+            bad = run("--since", "yesterday")
+            self.assertEqual(bad.returncode, 2)
+            self.assertIn("not a date or date-time", bad.stderr)
+            self.assertIn("without a zone", run("--since", "2026-11-07T05:00+00:00").stderr)
+
+
 
 
 class TestDraftCitation(unittest.TestCase):
