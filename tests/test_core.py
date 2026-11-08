@@ -3,6 +3,19 @@ import atexit, json, os, re, shutil, subprocess, sys, tempfile, unittest
 # Every temp dir the suite makes (fixture repos, clones, homes, and those of crucible subprocesses through TMPDIR)
 # goes under one root that is removed at exit. Each run used to leave ~80 git repos in /tmp, and the pytest check of
 # every self-review runs the suite too: 2026-11-07 the tmpfs hit its inode limit with ~16k crucible-* dirs.
+def _sweep_stale_roots(base, max_age=7200):
+    """atexit doesn't run when a run is killed (a check timeout, SIGKILL), so remove roots earlier runs left behind.
+    Only our own prefix, and only old ones: a suite takes seconds, so a 2 h old root isn't a concurrent run's."""
+    import glob, time
+    for d in glob.glob(os.path.join(base, "crucible-tests-*")):
+        try:
+            if time.time() - os.path.getmtime(d) > max_age:
+                shutil.rmtree(d, ignore_errors=True)
+        except OSError:
+            pass
+
+
+_sweep_stale_roots(tempfile.gettempdir())
 _TMP_ROOT = tempfile.mkdtemp(prefix="crucible-tests-")
 atexit.register(shutil.rmtree, _TMP_ROOT, True)
 tempfile.tempdir = _TMP_ROOT
@@ -42,6 +55,21 @@ def make_repo(files, branch_files=None, msg="change"):
                 open(os.path.join(d, p), "w").write(t)
         sh(d, "git", "add", "-A"); sh(d, "git", "commit", "-qm", msg)
     return d
+
+
+class TestTempRoot(unittest.TestCase):
+    def test_suite_temp_dirs_live_under_one_root(self):
+        self.assertEqual(tempfile.gettempdir(), _TMP_ROOT)
+        self.assertTrue(make_repo({"a": "1"}).startswith(_TMP_ROOT + os.sep))
+
+    def test_stale_roots_from_killed_runs_are_swept(self):
+        base = tempfile.mkdtemp()
+        old, new, other = (os.path.join(base, n) for n in ("crucible-tests-old", "crucible-tests-new", "someone-else"))
+        for d in (old, new, other):
+            os.makedirs(d)
+        os.utime(old, (0, 0)); os.utime(other, (0, 0))
+        _sweep_stale_roots(base)
+        self.assertEqual(sorted(os.listdir(base)), ["crucible-tests-new", "someone-else"])
 
 
 class TestIds(unittest.TestCase):
