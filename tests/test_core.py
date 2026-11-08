@@ -3420,3 +3420,30 @@ class TestLengthLeftToHouseCheck(unittest.TestCase):
                       open(os.path.join(p, "review.json"), "w"))
             r = RT.replay(root)
             self.assertEqual((r["raw"], r["dropped"]), (1, 1))
+
+
+class TestBodyWordsSkipsFoldedCode(unittest.TestCase):
+    """three-mesh-bvh #958 (2026-11-07): the length check counted 383 words and raised a medium; the author refuted
+    it, since 155 words were visible prose and the rest a benchmark script folded in <details>."""
+
+    def test_fenced_code_and_details_dont_count(self):
+        prose = "Packs the geometry with strided writes."
+        self.assertEqual(S.body_words(prose), 6)
+        code = "```js\n" + "const a = b + c; // " * 50 + "\n```\n"
+        self.assertEqual(S.body_words(prose + "\n\n" + code), 6)
+        self.assertEqual(S.body_words(prose + "\n\n~~~\n" + "x y z\n" * 30 + "~~~\n"), 6)
+        folded = "<details><summary>Benchmark script</summary>\n\n" + "word " * 200 + "\n</details>\n"
+        self.assertEqual(S.body_words(prose + "\n\n" + folded), 8)            # the summary is still read
+        self.assertEqual(S.body_words(prose + "\n<DETAILS>\n" + "word " * 50 + "\n</DETAILS>\nAfter."), 7)
+        self.assertEqual(S.body_words(prose + " Uses `npm test` too."), 10)   # inline code is prose
+
+    def test_unclosed_blocks_still_count(self):
+        # falsifiers: nothing is dropped unless the block is closed
+        self.assertEqual(S.body_words("```js\nx y z\n"), 4)
+        self.assertEqual(S.body_words("<details>\nx y z\n"), 4)
+
+    def test_folded_code_no_longer_trips_the_length_check(self):
+        style = {"body": {"outside_median_words": 144, "outside_prs": 14}}
+        body = "word " * 150 + "\n\n<details><summary>Benchmark</summary>\n\n```js\n" + "a b c d\n" * 60 + "```\n</details>\n"
+        self.assertFalse([k for k, _ in S.ai_tells(body, style) if k == "length"])
+        self.assertTrue([k for k, _ in S.ai_tells("word " * 400, style) if k == "length"])

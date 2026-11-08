@@ -76,8 +76,12 @@ def _tpl_norm(line):
 def body_words(text, template="", title=""):
     """Words the author wrote in the body: HTML comments (as the learned median strips them), the title and lines
     copied verbatim from the repo's PR template (its checklist and headings, ticked or not) don't count.
-    Merged bodies keep their template lines in the learned median, so this errs toward not flagging length."""
+    Merged bodies keep their template lines in the learned median, so this errs toward not flagging length.
+    Fenced code and the inside of a collapsed <details> block (its <summary> stays) aren't prose a reviewer has to
+    read: three-mesh-bvh #958 counted 383 words for 155 visible ones, its benchmark script folded away."""
     t = re.sub(r"<!--.*?-->", "", text or "", flags=re.S)
+    t = re.sub(r"(?ms)^[ \t]*(```|~~~).*?^[ \t]*\1[^\n]*$", "", t)
+    t = re.sub(r"(?is)<details[^>]*>\s*(?:<summary[^>]*>(.*?)</summary>)?.*?</details>", lambda m: m.group(1) or "", t)
     if title and t.lstrip().startswith(title):
         t = t.lstrip()[len(title):]
     tpl = {_tpl_norm(l) for l in re.sub(r"<!--.*?-->", "", template or "", flags=re.S).split("\n")} - {""}
