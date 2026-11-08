@@ -18,6 +18,22 @@ crucible (low, verified by reading the code): `GAMEID` is also the key that prot
 
 Outcome: the shipped text says to pick an id that is ideally not in the umu-database, "since the id also selects protonfixes".
 
+## Lutris #7004: a fix that broke the case the previous round had covered
+
+[lutris/lutris#7004](https://github.com/lutris/lutris/pull/7004) stops Lutris from quietly moving a plain Wine prefix to GE-Proton when the game's Wine version is missing; it now refuses to launch and says which version is gone.
+
+crucible (medium, verified by running it): a rework between rounds dropped the case where the game itself is set to GE-Proton (Latest). `read_version_from_config()` treats that game-level choice as unset and falls through to the runner-wide version. When that build had been removed, the new guard told the user to "choose another Wine version for this game", a version they had already chosen. The verifier reproduced it: with the game on GE-Proton (Latest) and a plain prefix, `get_executable()` raised instead of returning the umu path. No test had the game set to GE-Proton.
+
+Outcome: the merged guard skips games set to `GE_PROTON_LATEST`, and `test_game_set_to_ge_proton_falls_back` is in `tests/_test_wine.py`.
+
+## Lutris #7006: a markup test that deleted the markup it was testing
+
+[lutris/lutris#7006](https://github.com/lutris/lutris/pull/7006) repairs broken Pango markup in five translations, which GTK shows as an empty label, and adds a test that every translated string parses.
+
+crucible (important, verified by running it): the first test removed every `<a ...>` tag with `</?a\b[^>]*>` before parsing, so a broken link could never fail. Four French strings still had broken links: `GitHub<a>` closing a link with an opening tag, and `href="…'` with mismatched quotes. The verifier set one of them on a real `Gtk.Label`: GTK logged a markup error and the label stayed empty. That is the bug the PR fixes, in strings the new test passed.
+
+Outcome: the merged fr.po closes those links with `</a>`, and the test strips only well-formed links (one quote style, a closing `</a>`), so a broken one fails. The same round also flagged the msgmerge refresh bundled with the fix (medium). That was refuted, because the refresh was what the maintainer asked for. That round cost $19.45 for a 17k-line diff, which is why crucible now reads big catalog changes as an entry digest.
+
 ## three-mesh-bvh #959: a miss, and the check it produced
 
 [gkjohnson/three-mesh-bvh#959](https://github.com/gkjohnson/three-mesh-bvh/pull/959) was GREEN locally and then failed CI. The project's workflow tests three.js 0.159.0, 0.168.0 and latest; the local run only had 0.185.0 installed, and the new test called `getComponent`, which 0.159's `InterleavedBufferAttribute` doesn't have (36 failing cases).
