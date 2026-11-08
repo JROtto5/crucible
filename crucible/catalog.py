@@ -84,13 +84,23 @@ def runtime_sensitive(e):
     return any(RUNTIME_RX.search(s or "") for s in (e["key"][1], e["key"][2], *e["strs"]))
 
 
-def _show(s, limit=400):
+def _show(s, limit=4000):
+    # a cut would hide the very markup an entry is listed for, so only absurd strings are cut, and visibly
     s = s.replace("\n", "\\n")
-    return s if len(s) <= limit else s[:limit] + "…"
+    return s if len(s) <= limit else s[:limit] + f"…[{len(s) - limit} more chars, open the file]"
+
+
+BLOCK = 25        # entries per "@@" block, so diff.chunk can split a big digest the way it splits hunks
 
 
 def digest(path, old_text, new_text, changed_new_lines, changed_old_lines=0):
-    """A review text for one catalog's diff. changed_new_lines: line numbers added in the new file."""
+    """A review text for one catalog's diff. changed_new_lines: line numbers added in the new file.
+
+    Must show: every translation the change edits, adds or clears (old and new); every touched entry whose
+    unchanged translation has markup, entities or placeholders; in a .pot, every msgid new to the template.
+    Must count, not show: unchanged plain-text translations, untranslated stubs in a .po, msgmerge's fuzzy
+    guesses for new msgids, obsolete (#~) entries."""
+    template = path.endswith(".pot")
     old = {e["key"]: e for e in parse(old_text or "") if not e["obsolete"]}
     new = parse(new_text or "")
     changed_new_lines = set(changed_new_lines)
@@ -99,7 +109,7 @@ def digest(path, old_text, new_text, changed_new_lines, changed_old_lines=0):
     def touched_entry(e):                     # any added line inside the entry; bisect, not a scan per entry
         i = bisect.bisect_left(marks, e["start"])
         return i < len(marks) and marks[i] <= e["end"]
-    edited, touched, fuzzy_new, untranslated, obsoleted, plain = [], [], [], 0, 0, 0
+    edited, touched, new_ids, fuzzy_new, untranslated, obsoleted, plain = [], [], [], [], 0, 0, 0
     for e in new:
         if e["obsolete"]:
             if e["key"] in old:
@@ -109,12 +119,16 @@ def digest(path, old_text, new_text, changed_new_lines, changed_old_lines=0):
             continue
         has_text = any(s for s in e["strs"])
         prev = old.get(e["key"])
-        if not has_text:
-            untranslated += 1
+        had_text = bool(prev) and any(s for s in prev["strs"])
+        if not has_text and not had_text:
+            if template and prev is None:
+                new_ids.append(e)
+            else:
+                untranslated += 1
         elif prev is None:
             (fuzzy_new if e["fuzzy"] else edited).append((e, None))
         elif prev["strs"] != e["strs"] or prev["fuzzy"] != e["fuzzy"]:
-            edited.append((e, prev))
+            edited.append((e, prev))              # includes a translation cleared to ""
         elif runtime_sensitive(e):
             touched.append(e)
         else:
@@ -122,11 +136,11 @@ def digest(path, old_text, new_text, changed_new_lines, changed_old_lines=0):
     new_keys = {e["key"] for e in new}
     removed = sum(1 for k in old if k not in new_keys)
     out = [f"diff --git a/{path} b/{path}",
-           f"[crucible: {path} is a gettext catalog with {len(changed_new_lines)} added and {changed_old_lines} removed "
-           f"lines. It is shown as a digest of its entries, not as a diff: source-reference comments, line wrapping and "
-           f"obsolete blocks are left out. Each entry is `L<line in the new file>`, the msgid and the msgstr, each "
-           f"joined onto one line (\\n is a newline in the string). Open the file at that line when you need the raw "
-           f"text.]",
+           f"[crucible: {path} is a gettext {'template' if template else 'catalog'} with {len(changed_new_lines)} "
+           f"added and {changed_old_lines} removed lines. It is shown as a digest of its entries, not as a diff: "
+           f"source-reference comments, line wrapping and obsolete blocks are left out. Each entry is "
+           f"`L<line in the new file>`, the msgid and the msgstr, each joined onto one line (\\n is a newline in "
+           f"the string). Open the file at that line when you need the raw text.]",
            f"[not shown: {plain} touched entries whose translation is unchanged plain text (no markup or "
            f"placeholders, so nothing in them can fail at runtime), {untranslated} touched entries without a "
            f"translation, {len(fuzzy_new)} new fuzzy guesses from msgmerge (gettext ignores fuzzy entries at "
@@ -135,19 +149,27 @@ def digest(path, old_text, new_text, changed_new_lines, changed_old_lines=0):
     def entry(e, prev=None, tag=""):
         ctx = f" msgctxt \"{_show(e['key'][0])}\"" if e["key"][0] else ""
         rows = [f"L{e['start']}{tag}{ctx} msgid \"{_show(e['key'][1])}\""]
+        if e["key"][2] is not None:
+            rows.append(f"  msgid_plural \"{_show(e['key'][2])}\"")
         if prev is not None:
             rows += [f"  - msgstr \"{_show(s)}\"" for s in prev["strs"]]
-        rows += [f"  {'+ ' if prev is not None else ''}msgstr \"{_show(s)}\"" for s in e["strs"]]
+        if not template:
+            rows += [f"  {'+ ' if prev is not None else ''}msgstr \"{_show(s)}\"" for s in e["strs"]]
         return "\n".join(rows)
 
     sections = [("translations this change edits (old `-`, new `+`)",
                  [entry(e, p, " (fuzzy)" if e["fuzzy"] else "") for e, p in edited]),
+                ("msgids new to this template", [entry(e) for e in new_ids]),
                 ("translated entries with markup or placeholders that the change touched without editing their text "
                  "(references or wrapping); a broken one is a pre-existing bug, not this change's",
                  [entry(e) for e in touched])]
     for title, rows in sections:
+        if not rows and title.startswith("msgids new"):
+            continue
         out.append(f"\n## {title}: {len(rows)}")
-        out.extend(rows)
+        for i in range(0, len(rows), BLOCK):
+            out.append(f"@@ {title.split(' (')[0].split(';')[0]}, {i + 1}-{min(i + BLOCK, len(rows))} of {len(rows)} @@")
+            out.extend(rows[i:i + BLOCK])
     return "\n".join(out) + "\n"
 
 

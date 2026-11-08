@@ -310,6 +310,7 @@ class TestCatalogDigest(unittest.TestCase):
         _, small = self._files(OLD_PO, OLD_PO.replace("Ouvrir <b>fichier</b", "Ouvrir <b>fichier</b>"))
         self.assertFalse(C.should_digest(small[0]))
         self.assertEqual(C.digest_files(small, lambda p: OLD_PO, lambda p: NEW_PO), [])
+        self.assertIn("@@ -", small[0]["text"])                          # still the raw diff
         # a big change to anything that isn't a catalog is code
         _, code = self._files(OLD_PO, NEW_PO, path="po/fr.py")
         self.assertEqual(C.digest_files(code, lambda p: OLD_PO, lambda p: NEW_PO), [])
@@ -325,6 +326,52 @@ class TestCatalogDigest(unittest.TestCase):
         self.assertTrue(files[0]["added"])
         C.digest_files(files, lambda p: self.fail("no old side for an added file"), lambda p: NEW_PO)
         self.assertIn("translations this change edits (old `-`, new `+`): 124", files[0]["text"])   # header + 123
+
+    def test_threshold_boundary(self):
+        # 199 changed lines stay a diff, 200 are digested (added + removed, as the diff counts them)
+        def files(n):
+            old = "\n".join(f'msgid "s{i}"\nmsgstr "t{i}"\n' for i in range(n)) + "\n"
+            new = old.replace('msgstr "t', 'msgstr "u')
+            return self._files(old, new)[1]
+        self.assertFalse(C.should_digest(files(99)[0]))     # 99 removed + 99 added = 198
+        self.assertTrue(C.should_digest(files(100)[0]))     # 200
+
+    def test_cleared_translation_is_an_edit(self):
+        old = OLD_PO
+        new = OLD_PO.replace('msgstr "Enregistré %s"', 'msgstr ""').replace("app/ui.py:", "app/main.py:")
+        _, files = self._files(old, new)
+        C.digest_files(files, lambda p: old, lambda p: new)
+        self.assertIn('- msgstr "Enregistré %s"', files[0]["text"])
+        self.assertIn('+ msgstr ""', files[0]["text"])
+
+    def test_template_lists_new_msgids(self):
+        old = _po([(f"Label {i}", "", "") for i in range(120)])
+        new = _po([(f"Label {i}", "", "") for i in range(120)] + [("Saved <b>%s</b>", "", "")], refs_at=9)
+        _, files = self._files(old, new, path="po/app.pot")
+        self.assertEqual(C.digest_files(files, lambda p: old, lambda p: new), ["po/app.pot"])
+        t = files[0]["text"]
+        self.assertIn("msgids new to this template: 1", t)
+        self.assertIn('msgid "Saved <b>%s</b>"', t); self.assertNotIn('msgid "Label 3"', t)
+        self.assertNotIn("msgstr", t.split("]\n", 2)[-1])                 # no empty msgstr rows in a template
+
+    def test_long_string_not_cut(self):
+        long_fr = "x" * 600 + " <a href='y'>lien<a>"
+        old = OLD_PO.replace("Voir <a href='x'>docs<a>", long_fr)
+        new = NEW_PO.replace("Voir <a href='x'>docs<a>", long_fr)
+        _, files = self._files(old, new)
+        C.digest_files(files, lambda p: old, lambda p: new)
+        self.assertIn("lien<a>", files[0]["text"])
+
+    def test_big_digest_is_split_into_chunks(self):
+        entries = [(f"Open <b>file {i}</b>", f"Ouvrir <b>fichier {i}</b", "") for i in range(1500)]
+        old, new = _po(entries), _po([(m, s + ">", f) for m, s, f in entries])
+        _, files = self._files(old, new)
+        C.digest_files(files, lambda p: old, lambda p: new)
+        self.assertGreater(len(files[0]["text"]), 45000)
+        chunks, uncovered = D.chunk(files)
+        self.assertGreater(len(chunks), 1); self.assertEqual(uncovered, [])
+        self.assertTrue(all(len(c["text"]) <= 45000 + 2000 for c in chunks), [len(c["text"]) for c in chunks])
+        self.assertEqual(sum(c["text"].count("\nL") for c in chunks), 1500)   # every edited entry, once
 
     def test_run_review_sends_the_digest(self):
         from unittest import mock
