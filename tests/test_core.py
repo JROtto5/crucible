@@ -1,5 +1,12 @@
-import json, os, re, shutil, subprocess, sys, tempfile, unittest
+import atexit, json, os, re, shutil, subprocess, sys, tempfile, unittest
 
+# Every temp dir the suite makes (fixture repos, clones, homes, and those of crucible subprocesses through TMPDIR)
+# goes under one root that is removed at exit. Each run used to leave ~80 git repos in /tmp, and the pytest check of
+# every self-review runs the suite too: 2026-11-07 the tmpfs hit its inode limit with ~16k crucible-* dirs.
+_TMP_ROOT = tempfile.mkdtemp(prefix="crucible-tests-")
+atexit.register(shutil.rmtree, _TMP_ROOT, True)
+tempfile.tempdir = _TMP_ROOT
+os.environ["TMPDIR"] = _TMP_ROOT
 _TMP_HOME = tempfile.mkdtemp(prefix="crucible-test-home-")
 os.environ["CRUCIBLE_HOME"] = _TMP_HOME
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
