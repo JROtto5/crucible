@@ -205,7 +205,8 @@ def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, hou
         than the file's own style; MISSING comments where logic is non-obvious (invariants, ordering, GPU/netcode or
         concurrency subtleties, magic numbers); naming inconsistent with nearby code; and in the PR description:
         missing reviewer call-outs (risky lines or trade-offs, before/after numbers, how it was tested), generated-
-        sounding prose, or length far from the project norm. Use file "{draft_file}" for description findings.
+        sounding prose. Don't report the description's length: crucible measures it against this project's merged
+        PRs and reports it separately. Use file "{draft_file}" for description findings.
         {house}
 
         PR description draft, as it will be submitted (the author's private notes in {draft_file} are excluded and
@@ -230,6 +231,26 @@ def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, hou
         Diff for this pass:
         {ch['text']}
         """)
+
+
+# A model finding whose whole claim is the description's length. style.check owns length: it measures the draft
+# against the project's merged PRs with a threshold. On the stored upstream reviews (2026-11-08) the verifier
+# dropped 10 of 12 such model findings, and one of the 2 it kept was refuted by the author. A title that adds
+# anything else ("... and uses a table") is not length-only and is verified as usual.
+_LEN_SUBJECT = re.compile(r"\b(body|description)\b", re.I)
+_LEN_WORD = re.compile(r"\b(long|longer|length|lengthy|verbose|wordy|words)\b", re.I)
+_LEN_NORM = re.compile(r"\b(median|norm|usual|typical|project)\b", re.I)   # a length *against the project*
+_LEN_MORE = re.compile(r"\b(and|but|with|also|plus|instead|title|commit|uses)\b|[;,&(]", re.I)
+LENGTH_RULE_NOTE = ("not sent to the verifier: the claim is only about the description's length, which crucible's "
+                    "length check measures against this project's merged PRs (it reports a finding when the body is "
+                    "far over that norm)")
+
+
+def length_only(f, draft_label):
+    t = f.get("title") or ""
+    return bool(f.get("source") == "review" and draft_label and f.get("file") == draft_label
+                and _LEN_SUBJECT.search(t) and _LEN_WORD.search(t) and _LEN_NORM.search(t)
+                and not _LEN_MORE.search(t))
 
 
 def draft_scope(f, draft_label):
@@ -673,10 +694,17 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         for f in new:
             if f["id"] in taken:
                 f["id"] += "-n"
+        ruled = [f for f in new if length_only(f, dlabel)]
+        new = [f for f in new if f not in ruled]
+        for f in ruled:
+            f.setdefault("proposed_severity", f["severity"])
+            f["verification"] = {"status": "dropped", "method": "rule", "evidence": LENGTH_RULE_NOTE}
+        if ruled:
+            log(f"  {len(ruled)} description-length finding(s) left to the length check, not verified")
         to_verify = [f for f in new if f["source"] == "review"] + reverify
         for f in to_verify:                            # replays of routing rules need the reviewer's own severity
             f.setdefault("proposed_severity", f["severity"])
-        kept, dropped = [f for f in new if f["source"] in ("scanner", "style")] + carried, list(carried_dropped)
+        kept, dropped = [f for f in new if f["source"] in ("scanner", "style")] + carried, list(carried_dropped) + ruled
         record["verify_tiers"] = tiers
 
         def verify(f):
@@ -912,7 +940,7 @@ def report(rev, ans, waivers=None):
                 L.append(f"- verifier actions: {vf['actions']}")
         L.append("")
     if rev["dropped"]:
-        L += ["<details><summary>Dropped by verification</summary>", ""]
+        L += ["<details><summary>Dropped (by verification, or by rule where it says so)</summary>", ""]
         L += [f"- **{f['title']}** (`{f['file']}:{f['line']}`){transcribed_note(f['verification'])}: {f['verification']['evidence']}"
               for f in rev["dropped"]]
         L += ["", "</details>"]

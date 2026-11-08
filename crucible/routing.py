@@ -106,7 +106,8 @@ def replay(root, include_self=False):
             r["cost_review"] += rev["cost_review_usd"] or 0
             r["cost_verify"] += rev.get("cost_verify_usd") or 0
         model_found = [(f, True) for f in rev.get("findings", []) if f.get("source") == "review"] + \
-                      [(f, False) for f in rev.get("dropped", []) if f.get("source") == "review"]
+                      [(f, False) for f in rev.get("dropped", []) if f.get("source") == "review"
+                       and (f.get("verification") or {}).get("method") != "rule"]   # never sent to the verifier
         judged = [(f, kept) for f, kept in model_found if not carried_here(f, rev)]
         r["raw"] += len(judged)
         r["dropped"] += sum(1 for f, kept in judged if not kept)

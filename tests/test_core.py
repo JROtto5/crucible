@@ -3320,3 +3320,103 @@ class TestAnchorReplay(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLengthLeftToHouseCheck(unittest.TestCase):
+    """2026-11-08: 45 model findings on upstream reviews complained about the PR body's length, and the verifier
+    dropped 36 of them. The measured check (style.ai_tells) owns length; the reviewer is no longer asked to judge it,
+    and a model finding that is only about length is dropped by rule, without a verifier call."""
+
+    # real titles from stored upstream reviews: 10 dropped by the verifier, 1 refuted, 1 fixed (all low)
+    REAL = ["PR body is about twice the project's median length", "Description is well above the project's usual length",
+            "PR body is well above the project's length norm", "PR description is about 3× longer than the project norm",
+            "PR body is longer than the project norm", "PR description is about 3x the project's median length",
+            "PR body is about 3x the project's usual length", "Description is about 3x the project's median length",
+            "PR body is far longer than the project norm", "PR description is several times the project's length norm",
+            "PR body is about 15x this project's median length", "PR body is far longer than project norm"]
+    # real titles that say something more, plus ones that only look like length: these are verified as usual
+    KEEP = ["Description still has a PROOF_LINE placeholder, says nothing on how it was tested, and is long for t",
+            "PR body is long prose instead of the project's short bullet style",
+            "PR description is long and uses a table, which the project's PRs don't",
+            "PR body is ~300 words with a table, against a project norm of ~19 words",
+            "Description is ~150 words against a project median of 19 (p75 50)",
+            "PR title/body longer than project norm; title names only `start`",
+            "PR body uses first person and is long for this project",
+            "Commit has no body and title is far over house length",
+            "Description breaks the project's heading norm", "PR body is below the median", "Description overstates the fix",
+            "PR body claims 3x speedup without numbers", "Description says the loop is too long"]
+
+    def _f(self, title, file="PR_DRAFT.md", source="review"):
+        return {"title": title, "file": file, "source": source}
+
+    def test_titles(self):
+        for t in self.REAL:
+            self.assertTrue(V.length_only(self._f(t), "PR_DRAFT.md"), t)
+        for t in self.KEEP:
+            self.assertFalse(V.length_only(self._f(t), "PR_DRAFT.md"), t)
+
+    def test_only_model_findings_on_the_judged_draft(self):
+        t = self.REAL[0]
+        self.assertFalse(V.length_only(self._f(t, source="style"), "PR_DRAFT.md"))   # the measured check itself
+        self.assertFalse(V.length_only(self._f(t, file="src/a.js"), "PR_DRAFT.md"))
+        self.assertFalse(V.length_only(self._f(t, file="PR_BODY.md"), "PR_DRAFT.md"))
+        self.assertFalse(V.length_only(self._f(t), None))
+        self.assertTrue(V.length_only(self._f(t, file="/w/PR_DRAFT.md"), "/w/PR_DRAFT.md"))
+
+    def test_prompt_leaves_length_to_the_check(self):
+        p = V.review_prompt("o__r", "a" * 40, "b" * 40, {"files": ["a.py"], "text": "diff"}, "", "", "", "", ["a.py"])
+        self.assertNotIn("length far from the project norm", p)
+        self.assertIn("Don't report the description's length", p)
+        self.assertRegex(p, r"generated-\s+sounding prose\. Don't report")   # the rest of the description list stays
+
+    def test_end_to_end_no_verifier_call(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            repo, home = os.path.join(d, "r"), os.path.join(d, "home")
+            os.makedirs(repo)
+            env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",
+                       GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+            g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True, env=env)
+            w = lambda p, t: open(os.path.join(repo, p), "w").write(t)
+            g("init", "-q", "-b", "main"); w("a.js", "export const a = 1;\n"); g("add", "-A"); g("commit", "-qm", "base")
+            g("checkout", "-qb", "x"); w("a.js", "export const a = 2;\n"); g("commit", "-qam", "a is 2")
+            draft = os.path.join(d, "PR_DRAFT.md")
+            open(draft, "w").write("Fixes #1\n\nSets a to 2. Tested with `npm test`.\n")
+
+            def finding(path, title):
+                return {"severity": "low", "file": path, "line": 1, "title": title, "problem": "p",
+                        "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "w", "fix": "x"}
+            verified = []
+
+            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
+                if "findings" in schema["properties"]:
+                    return {"summary": "s", "findings": [finding(draft, "PR body is about 3x the project's median length"),
+                                                         finding(draft, "PR body is long and uses a table")]}, 0
+                verified.append(re.search(r"Claim: (.*?) \(at", prompt).group(1))
+                return {"keep": True, "severity": "low", "confidence": "high", "method": "read", "actions": "a",
+                        "evidence": "e"}, 0
+
+            with mock.patch.object(V, "HOME", home), mock.patch.object(U, "HOME", home), \
+                    mock.patch.object(V, "claude", fake), mock.patch.dict(os.environ, {"CRUCIBLE_CACHE": os.path.join(home, "c")}):
+                out = V.run_review(repo, "main", offline=True, skip_checks=True, draft=draft, log=lambda *_: None)
+                r = U.read_json(os.path.join(out, "review.json"))
+            self.assertEqual(r["status"], "done", r.get("reason"))
+            self.assertEqual(verified, ["PR body is long and uses a table"])
+            self.assertEqual([f["title"] for f in r["findings"] if f["source"] == "review"], ["PR body is long and uses a table"])
+            ruled = [f for f in r["dropped"] if f["verification"].get("method") == "rule"]
+            self.assertEqual([f["title"] for f in ruled], ["PR body is about 3x the project's median length"])
+            self.assertEqual(ruled[0]["verification"]["status"], "dropped")
+            self.assertIn("not sent to the verifier", V.report(r, {}))
+
+    def test_routing_replay_does_not_count_a_rule_drop_as_refuted(self):
+        with tempfile.TemporaryDirectory() as root:
+            p = os.path.join(root, "o__p", "s1")
+            os.makedirs(p)
+            mk = lambda i, v: {"id": i, "source": "review", "severity": "low", "title": "t", "file": "a.js", "verification": v}
+            json.dump({"repo": "r", "base": "b", "started": "2026-11-08T01", "status": "done", "cost_usd": 0.1,
+                       "inputs": {}, "files": ["a.js"], "findings": [],
+                       "dropped": [mk("CR-1", {"status": "dropped", "method": "rule", "evidence": "e"}),
+                                   mk("CR-2", {"status": "dropped", "method": "read", "evidence": "e"})]},
+                      open(os.path.join(p, "review.json"), "w"))
+            r = RT.replay(root)
+            self.assertEqual((r["raw"], r["dropped"]), (1, 1))
