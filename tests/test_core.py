@@ -1266,7 +1266,8 @@ class TestEvalScoring(unittest.TestCase):
             def fake(name, d, exp, args, cache):
                 if name == "h":
                     raise subprocess.TimeoutExpired("review", 3600)
-                return {"case": name, "kind": "clean", "split": "build", "ok": True, "false_blocking": 0}
+                return {"case": name, "kind": "clean", "split": "build", "ok": True, "false_blocking": 0, "blocking": 0,
+                        "kept": 0, "dropped": 0, "cost": 0}
             E.run_case = fake
             args = type("A", (), {"cases": None, "split": None, "cache": None, "review_model": None, "verify_model": None,
                                   "cheap_model": None, "no_tiers": False, "budget": 1, "jobs": 2, "no_write": True,
@@ -1276,6 +1277,20 @@ class TestEvalScoring(unittest.TestCase):
             self.assertEqual(s["by_split"]["holdout"]["errors"], 1)
             self.assertEqual(s["by_split"]["build"]["errors"], 0)
             self.assertIn("  holdout: recall n/a (no bug cases), false blocking n/a (no clean cases), 1 errored (not scored)", out)
+            # run_eval's own wiring: --cases and --split runs are partial (history only), a plain run writes RESULTS.md
+            args.no_write = False
+            for cases, split, subset in ((["b"], None, True), (None, "build", False)):
+                args.cases, args.split = cases, split
+                E.run_eval(args, log=out.append)
+                self.assertFalse(os.path.exists(os.path.join(E.EVAL_DIR, "RESULTS.md")))
+                row = json.loads(open(os.path.join(E.EVAL_DIR, "history.jsonl")).read().split("\n")[-2])
+                self.assertEqual((row["settings"]["subset"], row["settings"]["split"]), (subset, split or "all"))
+            args.cases, args.split = None, None
+            E.run_eval(args, log=out.append)
+            md = open(os.path.join(E.EVAL_DIR, "RESULTS.md")).read()
+            self.assertIn("| 1, subset |", md)
+            self.assertIn("| 1, build only |", md)
+            self.assertIn("| 2 |", md)
         finally:
             shutil.rmtree(E.EVAL_DIR, ignore_errors=True)
             E.EVAL_DIR, E.run_case = orig, orig_run
