@@ -11,7 +11,7 @@
   crucible vote    ID up|down "reason" [--repo R]                 feedback; down-votes become memory proposals
   crucible remember PROJECT "lesson"                              curated repeat-mistakes memory
   crucible proposals PROJECT [--accept N]                         review proposed memory entries
-  crucible eval    [--cases ...] [--split build|holdout] [--label L] score the reviewer on labelled fixtures (eval/)
+  crucible eval    [--cases ...] [--split S] [--no-tiers] [--label L] score the reviewer on fixtures (eval/)
   crucible routing-replay [--include-self]                        what cost-routing rules would lose, on stored reviews
   crucible anchor-replay --clones DIR [--per-class N]            verifier with vs without the reviewer's argument
   crucible stats   [--project P] [--include-self] [--json]        real-PR precision: unique kept/dropped/fixed/refuted

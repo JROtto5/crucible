@@ -28,7 +28,7 @@ crucible reply   https://github.com/o/r/pull/12  # draft answers to real review 
 
 The one blocking miss is the refcount case: the bug is found, but rated medium. Every crucible change has to keep or improve these numbers.
 
-Those 16 cases are the **build** split: crucible's prompts and verifier have been tuned while watching them, so they flatter it. Cases from real catches go in a **held-out** split (`"split": "holdout"` in `expected.json`) that no prompt change may be justified by, and `crucible eval` reports held-out recall and false blocking on their own line (`--split holdout` runs only those). The first two (2026-11-07): a shutdown fix that calls a helper whose close waits without a bound before its new bounded wait, so the hang it fixes comes back (from gamescope #2516), and the correct version of the same fix. Held-out: recall 1/1, false blocking 0 on 1 clean case, $1.07.
+Those 16 cases are the **build** split: crucible's prompts and verifier have been tuned while watching them, so they flatter it. Cases from real catches go in a **held-out** split (`"split": "holdout"` in `expected.json`) that no prompt change may be justified by, and `crucible eval` reports held-out recall and false blocking on their own line (`--split holdout` runs only those). The first two (2026-11-07): a shutdown fix that calls a helper whose close waits without a bound before its new bounded wait, so the hang it fixes comes back (from gamescope #2516), and the correct version of the same fix. Held-out: recall 1/1, false blocking 0 on 1 clean case, $1.07. Two cases are far too few to read a percentage from; the column exists so each new real catch lands where tuning can't flatter it.
 
 ## How a review works
 
