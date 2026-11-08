@@ -363,7 +363,7 @@ class TestCatalogDigest(unittest.TestCase):
         self.assertIn("lien<a>", files[0]["text"])
 
     def test_long_entries_never_overflow_a_chunk(self):
-        # 25 paragraph-length edits made one 51k block (> the 45k chunk), truncated and left uncovered
+        # 25 paragraph-length edits made one ~92k block (> the 45k chunk), truncated and left uncovered
         entries = [(f"<b>{i}</b> " + "w" * 1200, f"<b>{i}</b " + "v" * 1200, "") for i in range(120)]
         old, new = _po(entries), _po([(m, s.replace("</b ", "</b> "), f) for m, s, f in entries])
         _, files = self._files(old, new)
