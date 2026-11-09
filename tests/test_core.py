@@ -3712,9 +3712,6 @@ class TestBodyWordsSkipsFoldedCode(unittest.TestCase):
         self.assertTrue([k for k, _ in S.ai_tells("word " * 400, style) if k == "length"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class TestTokenMetering(unittest.TestCase):
     """BLAZE exchange 2026-11-09: the shared headline is tokens per held-up finding. Each model call's usage is kept
@@ -3754,6 +3751,7 @@ class TestTokenMetering(unittest.TestCase):
             {"is_error": True, "subtype": "error_max_turns", "modelUsage": {"opus": {"outputTokens": 1}}},
             ok,                       # no usage at all
             "not json",               # unreadable output
+            "[]",                     # JSON, but not an object: Failed, not an AttributeError
             "timeout",
         ])
         tokens, unmetered = b.token_snapshot()
@@ -3761,12 +3759,12 @@ class TestTokenMetering(unittest.TestCase):
             "opus": {"input": 10, "output": 6, "cache_read": 100, "cache_creation": 20},
             "haiku": {"input": 1, "output": 2, "cache_read": 0, "cache_creation": 0},
             "req-model": {"input": 3, "output": 4, "cache_read": 0, "cache_creation": 7}})
-        self.assertEqual(unmetered, 3)
+        self.assertEqual(unmetered, 4)
         self.assertAlmostEqual(b.spent, 0.3)
         s = U.token_summary(tokens, unmetered)
         self.assertEqual((s["total"], s["input"], s["output"], s["cache_read"], s["cache_creation"]),
                          (153, 14, 12, 100, 27))
-        self.assertEqual(s["unmetered_calls"], 3)
+        self.assertEqual(s["unmetered_calls"], 4)
 
     def test_review_and_verify_split(self):
         b = U.Budget(None)
@@ -3785,8 +3783,30 @@ class TestTokenMetering(unittest.TestCase):
         t = V.token_fields(b, None)
         self.assertEqual((t["tokens_review"]["total"], t["tokens_verify"]["total"]), (0, 25))
         rev = {"tokens_review": {"total": 1500, "unmetered_calls": 0}, "tokens_verify": {"total": 25, "unmetered_calls": 1}}
-        self.assertEqual(V.tokens_note(rev), " · at least 1,525 tokens (review 1,500, verify 25; 1 call(s) reported no usage)")
+        self.assertEqual(V.tokens_note(rev), " · at least 1,525 tokens (review 1,500, verify 25; 1 call(s) without a token count)")
         self.assertEqual(V.tokens_note({"cost_usd": 1}), "")
+
+    def test_cache_hit_from_before_metering_is_unmetered(self):
+        # self-review CR-ce3e4b57: a hit makes no call, so a re-run reusing verdicts cached before metering looked
+        # fully metered with too few tokens
+        old = os.environ.get("CRUCIBLE_CACHE")
+        with tempfile.TemporaryDirectory() as d:
+            os.environ["CRUCIBLE_CACHE"] = d
+            try:
+                b = U.Budget(None)
+                V.cache_put("old", {"keep": True})                       # written before metering
+                V.cache_put("new", dict({"keep": False}, _metered=True))
+                self.assertEqual(V.cache_hit("new", b), {"keep": False})   # flag stripped, nothing counted
+                self.assertEqual(b.token_snapshot(), ({}, 0))
+                self.assertEqual(V.cache_hit("old", b), {"keep": True})
+                self.assertEqual(b.token_snapshot(), ({}, 1))
+                self.assertIsNone(V.cache_hit("missing", b))
+                self.assertEqual(b.token_snapshot(), ({}, 1))
+            finally:
+                if old is None:
+                    os.environ.pop("CRUCIBLE_CACHE", None)
+                else:
+                    os.environ["CRUCIBLE_CACHE"] = old
 
     def test_stats_tokens_per_held_up_on_metered_reviews_only(self):
         from crucible import stats as ST
@@ -3859,9 +3879,21 @@ class TestTokenMetering(unittest.TestCase):
                 self.assertEqual(rev["tokens_verify"]["total"], 17)   # one confident cheap-tier verdict, no escalation
                 self.assertEqual(rev["tokens_review"]["unmetered_calls"] + rev["tokens_verify"]["unmetered_calls"], 0)
                 self.assertIn("tokens (review 110, verify", V.report(rev, {}))
+                # a forced re-run of the same commit is served from the (metered) cache: 0 tokens, still metered
+                out = V.run_review(repo, "main", force=True, offline=True, skip_checks=True, log=lambda *_: None)
+                rev = U.read_json(os.path.join(out, "review.json"))
+                self.assertEqual(rev["status"], "done", rev.get("reason"))
+                self.assertEqual((rev["tokens_review"]["total"], rev["tokens_verify"]["total"]), (0, 0))
+                self.assertEqual(rev["tokens_review"]["unmetered_calls"] + rev["tokens_verify"]["unmetered_calls"], 0)
+                self.assertNotIn("_metered", json.dumps(rev))
             finally:
                 V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
                 if olds[3] is None:
                     os.environ.pop("CRUCIBLE_CACHE", None)
                 else:
                     os.environ["CRUCIBLE_CACHE"] = olds[3]
+
+
+if __name__ == "__main__":
+    unittest.main()
+

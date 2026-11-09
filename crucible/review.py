@@ -99,6 +99,16 @@ def cache_put(key, val):
     write_json(os.path.join(cache_dir(), key + ".json"), val)
 
 
+def cache_hit(key, budget):
+    """A cached model result (review pass or verdict), or None. A hit costs no tokens: the review that made the call
+    was metered. An entry from before token metering has no such review, so the hit counts as an unmetered call and
+    `stats` reports that review's tokens as not recorded rather than too low."""
+    hit = cache_get(key)
+    if isinstance(hit, dict) and not hit.pop("_metered", False):
+        budget.meter(None)
+    return hit
+
+
 def region(repo, sha, path, line, pad=40, draft=None):
     """Numbered lines around path:line at sha. The PR draft is untracked, so a finding on it (draft = (label, text))
     is shown from the file as judged; git would say "(file not present at this commit)" and the verifier then refuted
@@ -370,7 +380,7 @@ def verify_tiered(f, code, repo, budget, tiers, fresh=False, since="", draft_lab
     for i, model in enumerate(tiers):
         key = "v-" + hashlib.sha256((model + prompt).encode()).hexdigest()[:32]
         use_cache = not fresh and os.environ.get("CRUCIBLE_CACHE_VERIFY", "1") != "0"
-        hit = cache_get(key) if use_cache else None
+        hit = cache_hit(key, budget) if use_cache else None
         if hit:
             v = hit
         else:
@@ -380,7 +390,7 @@ def verify_tiered(f, code, repo, budget, tiers, fresh=False, since="", draft_lab
             except NoStructuredOutput as e:
                 v = salvage_verdict(f, e.text, repo, budget)
             if not v.get("salvaged"):      # the rejection is flaky: a rerun should retry the real verifier
-                cache_put(key, v)
+                cache_put(key, dict(v, _metered=True))
         trail.append({"model": model, "keep": v["keep"], "severity": v["severity"], "confidence": v.get("confidence"),
                       "cached": bool(hit), **({"salvaged": True} if v.get("salvaged") else {}),
                       **({"cost": v["cost"]} if "cost" in v and not hit else {})})
@@ -686,7 +696,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             key_prompt = review_prompt(project, sha, base, ch, rules, mem, fkey, clog, all_files, house,
                                        draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured)
             key = hashlib.sha256((review_model + "\0" + key_prompt).encode()).hexdigest()[:32]
-            hit = None if fresh else cache_get(key)
+            hit = None if fresh else cache_hit(key, budget)
             if hit:
                 out, cost = hit, 0
             else:
@@ -694,7 +704,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 try:
                     out, cost = claude(prompt, review_model, FINDINGS_SCHEMA, repo, budget)
                     review_cost += cost or 0
-                    cache_put(key, out)
+                    cache_put(key, dict(out, _metered=True))
                 except Failed as e:
                     chunk_status.append({"files": ch["files"], "status": "failed", "reason": str(e)})
                     continue
@@ -919,13 +929,13 @@ def transcribed_note(vf):
 
 def tokens_note(rev):
     """' · 123,456 tokens (review 100,000, verify 23,456)' for the report header; empty for a review stored before
-    token metering, and marked as a lower bound when a call reported no usage."""
+    token metering, and marked as a lower bound when a call (or a cache hit from before metering) has no count."""
     tr, tv = rev.get("tokens_review"), rev.get("tokens_verify")
     if not tr or not tv:
         return ""
     unm = tr.get("unmetered_calls", 0) + tv.get("unmetered_calls", 0)
     return (f" · {'at least ' if unm else ''}{tr['total'] + tv['total']:,} tokens (review {tr['total']:,}, "
-            f"verify {tv['total']:,}{f'; {unm} call(s) reported no usage' if unm else ''})")
+            f"verify {tv['total']:,}{f'; {unm} call(s) without a token count' if unm else ''})")
 
 
 def report(rev, ans, waivers=None):

@@ -10,13 +10,15 @@ A unique finding is "kept" if verification kept it in any round, "dropped" if it
 the latest one given to any of its ids (answers are carried by id, so a fixed finding stays fixed).
 
 `since` keeps the reviews that finished at or after it (a finding counts in the window if a round in the window
-showed it; its answer may come from any round).
+showed it; its answer may come from any round). Every report says what it read and how new the newest review is,
+and a window with no reviews prints "no data", never a row of zeros: a store that stopped being written looks
+exactly like a quiet day otherwise.
 
 Tokens: a review is metered when it stored `tokens_review` and `tokens_verify` and every model call in it reported
-its usage. Reviews from before token metering, or with a call that reported none, are "not recorded", never 0.
-Tokens per held-up finding is computed on the metered reviews alone (their tokens over the findings that held up
-among them), so the two halves of the ratio always cover the same reviews. Every report says what it read and how new the newest review is, and a window with no reviews prints
-"no data", never a row of zeros: a store that stopped being written looks exactly like a quiet day otherwise."""
+its usage (a cache hit on an entry from before metering counts as a call that didn't). Reviews from before token
+metering, or with such a call, are "not recorded", never 0. Tokens per held-up finding is computed on the metered
+reviews alone (their tokens over the findings that held up among them), so both halves of the ratio cover the same
+reviews. A failed review's tokens are not counted, as its cost isn't."""
 import collections, glob, json, math, os, re
 
 from .util import SEV, TOKEN_KINDS, read_json
