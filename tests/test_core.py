@@ -1609,6 +1609,38 @@ class TestIncremental(unittest.TestCase):
             self.assertEqual(V.waiver_key(repo), "HEAD@" + g("rev-parse", "HEAD"))
             self.assertNotEqual(V.waiver_key(repo), "HEAD@" + a)
 
+    def test_waive_on_one_detached_head_does_not_apply_to_another(self):
+        import argparse, contextlib, io
+        from crucible import cli
+        with tempfile.TemporaryDirectory() as d:
+            home = os.path.join(d, "home"); repo = os.path.join(d, "r"); os.makedirs(repo)
+            g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True,
+                                          env=dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                                                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")).stdout.decode().strip()
+            g("init", "-q", "-b", "main"); open(os.path.join(repo, "f"), "w").write("1"); g("add", "f"); g("commit", "-qm", "b")
+            base = g("rev-parse", "HEAD")
+            open(os.path.join(repo, "f"), "w").write("2"); g("commit", "-qam", "pr1"); a = g("rev-parse", "HEAD")
+            g("checkout", "-q", "--detach", base); open(os.path.join(repo, "f"), "w").write("3"); g("commit", "-qam", "pr2")
+            b = g("rev-parse", "HEAD")
+            old = (V.HOME, U.HOME)
+            V.HOME = U.HOME = home
+            try:
+                proj = U.project_key(repo)
+                for sha in (a, b):
+                    os.makedirs(os.path.join(home, "reviews", proj, sha))
+                    U.write_json(os.path.join(home, "reviews", proj, sha, "review.json"),
+                                 {"status": "done", "findings": [], "readiness": {"items": [{"item": "issue linked", "status": "fail"}]}})
+                g("checkout", "-q", "--detach", a)
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    cli.cmd_waive(argparse.Namespace(repo=repo, item="issue linked", reason="no tracker used in this project"))
+                self.assertIn(f"detached commit {a[:10]}", out.getvalue())
+                self.assertIn("issue linked", V.load_waivers(proj, V.waiver_key(repo)))      # what cmd_status reads
+                g("checkout", "-q", "--detach", b)
+                self.assertEqual(V.load_waivers(proj, V.waiver_key(repo)), {})
+            finally:
+                V.HOME, U.HOME = old
+
 class TestEvalScoring(unittest.TestCase):
     def test_hits_and_scores(self):
         from crucible import evalrun as E

@@ -72,11 +72,12 @@ def cmd_waive(a):
         sys.exit(f"unknown readiness item {a.item!r}; one of: {sorted(items)}")
     if len(a.reason.strip()) < 20:
         sys.exit("give a real reason (20+ characters): it is printed in the report")
-    branch = waiver_key(_p(a.repo))
+    key = waiver_key(_p(a.repo))
     allw = read_json(waivers_path(project), {}) or {}
-    allw.setdefault(branch, {})[a.item] = a.reason.strip()
+    allw.setdefault(key, {})[a.item] = a.reason.strip()
     write_json(waivers_path(project), allw)
-    print(f"waived {a.item!r} on branch {branch}")
+    print(f"waived {a.item!r} on detached commit {sha[:10]} (a new commit needs its own waiver)"
+          if key.startswith("HEAD@") else f"waived {a.item!r} on branch {key}")
 
 
 def cmd_learn(a):
