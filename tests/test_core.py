@@ -1777,6 +1777,65 @@ class TestClaimOwner(unittest.TestCase):
             else:
                 os.environ.pop("CRUCIBLE_GH_USER", None)
 
+    def test_login_case_and_unknown_login_hint(self):
+        issue = {"state": "open", "assignees": [{"login": "alice"}]}
+        orig = (R.gh_json, R.upstream_slug)
+        R.gh_json = lambda path, check=False: [] if "timeline" in path else issue
+        R.upstream_slug = lambda repo: "o/r"
+        try:
+            self.assertEqual(R.unclaimed(".", 5, "Alice")["status"], "pass")      # logins are case-insensitive
+            it = R.unclaimed(".", 5, None)                                       # nobody known: say how to fix it
+            self.assertEqual(it["status"], "fail")
+            self.assertIn("CRUCIBLE_GH_USER", it["evidence"])
+            self.assertNotIn("CRUCIBLE_GH_USER", R.unclaimed(".", 5, "bob")["evidence"])
+        finally:
+            R.gh_json, R.upstream_slug = orig
+
+    def test_missing_gh_is_an_unknown_login(self):
+        orig, env = R.gh_json, os.environ.pop("CRUCIBLE_GH_USER", None)
+
+        def no_gh(path, check=False):
+            raise FileNotFoundError("gh")
+        R.gh_json = no_gh
+        try:
+            self.assertIsNone(R.current_login())
+        finally:
+            R.gh_json = orig
+            if env is not None:
+                os.environ["CRUCIBLE_GH_USER"] = env
+
+    def test_evaluate_passes_the_login_to_both_claim_checks(self):
+        # self-review CR-a8ea6b56: the wiring from evaluate() to the two checks had no test
+        seen, env = {}, os.environ.pop("CRUCIBLE_GH_USER", None)
+        orig = (R.gh_json, R.upstream_slug, R.unclaimed, R.overlapping_prs, R.resolve_issue)
+        R.gh_json = lambda path, check=False: {"login": "alice"} if path == "user" else None
+
+        def stub(key, name):
+            def check(repo, arg, me=None):
+                seen[key] = me
+                return R._item(name, "pass", "")
+            return check
+        R.unclaimed = stub("unclaimed", "issue still unclaimed")
+        R.overlapping_prs = stub("overlap", "no open PR changes the same lines")
+        R.resolve_issue = lambda repo, numbers: (None, [])
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                subprocess.run(["git", "init", "-q", "-b", "main", d], check=True)
+                subprocess.run(["git", "-C", d, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
+                                "--allow-empty", "-m", "base"], check=True)
+                R.upstream_slug = lambda repo: "o/r"
+                R.evaluate(d, "o__r", "main", [])
+                self.assertEqual(seen, {"unclaimed": "alice", "overlap": "alice"})
+                seen.clear()
+                R.upstream_slug = lambda repo: None               # no GitHub remote: no login lookup at all
+                R.gh_json = lambda path, check=False: self.fail(f"unexpected gh call {path}")
+                R.evaluate(d, "o__r", "main", [])
+                self.assertEqual(seen, {"unclaimed": None, "overlap": None})
+        finally:
+            R.gh_json, R.upstream_slug, R.unclaimed, R.overlapping_prs, R.resolve_issue = orig
+            if env is not None:
+                os.environ["CRUCIBLE_GH_USER"] = env
+
     def test_offline_makes_no_login_call(self):
         calls = []
         orig = R.gh_json

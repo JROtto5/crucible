@@ -495,6 +495,14 @@ def learned_data(project):
     return _item(name, "warn", " · ".join(stale) + ". Re-run `crucible learn` so these checks use the corrected numbers")
 
 
+def is_me(login, me):
+    """GitHub logins are case-insensitive: CRUCIBLE_GH_USER=Alice is the assignee `alice`."""
+    return bool(me and login) and login.lower() == me.lower()
+
+
+UNKNOWN_ME = " (crucible couldn't tell which GitHub account is yours; if that's you, set CRUCIBLE_GH_USER)"
+
+
 def unclaimed(repo, issue, me=None):
     slug = upstream_slug(repo)
     if not issue or not slug:
@@ -507,7 +515,7 @@ def unclaimed(repo, issue, me=None):
         return _item("issue still unclaimed", "warn", f"{slug}#{issue} is a pull request, not an issue")
     if data.get("state") != "open":
         probs.append(f"issue is {data.get('state')}")
-    who = [a["login"] for a in data.get("assignees") or [] if a.get("login") != me]
+    who = [a["login"] for a in data.get("assignees") or [] if not is_me(a.get("login"), me)]
     if who:
         probs.append(f"assigned to {who}")
     tl = gh_json(f"repos/{slug}/issues/{issue}/timeline?per_page=100") or []
@@ -515,10 +523,12 @@ def unclaimed(repo, issue, me=None):
     for ev in tl if isinstance(tl, list) else []:
         src = (ev.get("source") or {}).get("issue") or {}
         if ev.get("event") == "cross-referenced" and src.get("pull_request") and src.get("state") == "open" \
-                and (src.get("user") or {}).get("login") != me:
+                and not is_me((src.get("user") or {}).get("login"), me):
             prs.append(src.get("html_url"))
     if prs:
         probs.append(f"open PRs already reference it: {prs[:3]}")
+    if probs and not me and (who or prs):
+        probs[-1] += UNKNOWN_ME
     return _item("issue still unclaimed", "fail" if probs else "pass",
                  "; ".join(probs) or f"{slug}#{issue} open, unassigned, no competing open PR")
 
@@ -656,7 +666,7 @@ def overlapping_prs(repo, files, me=None):
         return _item(name, "warn", f"could not list open PRs on {slug}")
     cands = []
     for pr in prs:
-        if pr["bot"] or (me and pr["author"] == me):
+        if pr["bot"] or is_me(pr["author"], me):
             continue
         same = sorted(set(ours).intersection(pr["paths"]))
         if same:
@@ -783,12 +793,15 @@ def current_login():
     env = os.environ.get("CRUCIBLE_GH_USER", "").strip()
     if env:
         return env
-    d = gh_json("user")
+    try:
+        d = gh_json("user")
+    except (OSError, subprocess.TimeoutExpired):     # gh not installed, or hung: unknown, and the review goes on
+        return None
     return d.get("login") if isinstance(d, dict) else None
 
 
 def evaluate(repo, project, base, files, draft=None, me=None, offline=False):
-    if me is None and not offline:
+    if me is None and not offline and upstream_slug(repo):    # both claim checks are "na" without a GitHub remote
         me = current_login()
     paths = [f["path"] for f in files]
     draft_path, full = find_draft(repo, draft)
