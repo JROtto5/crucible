@@ -776,7 +776,20 @@ def newer_draft(repo, draft_path):
                  "about the judged file only")
 
 
-def evaluate(repo, project, base, files, draft=None, me="JROtto5", offline=False):
+def current_login():
+    """The GitHub login of whoever runs crucible: CRUCIBLE_GH_USER, else the account `gh` is logged in as, else None.
+    The claim checks skip this person's own assignment and PRs; the default used to be the maintainer's own handle,
+    so anyone else was told their own assignment was a competing claim."""
+    env = os.environ.get("CRUCIBLE_GH_USER", "").strip()
+    if env:
+        return env
+    d = gh_json("user")
+    return d.get("login") if isinstance(d, dict) else None
+
+
+def evaluate(repo, project, base, files, draft=None, me=None, offline=False):
+    if me is None and not offline:
+        me = current_login()
     paths = [f["path"] for f in files]
     draft_path, full = find_draft(repo, draft)
     draft_text = submitted_text(full)  # author notes in the draft are not part of the PR

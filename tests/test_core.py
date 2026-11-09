@@ -1750,6 +1750,48 @@ class TestUnclaimedPR(unittest.TestCase):
             R.gh_json, R.upstream_slug = orig
 
 
+class TestClaimOwner(unittest.TestCase):
+    """The claim checks skipped a hard-coded maintainer handle, so for anyone else their own assignment on the issue
+    failed "issue still unclaimed". They now skip the person running crucible."""
+
+    def test_own_assignment_passes_and_someone_elses_fails(self):
+        issue = {"state": "open", "assignees": [{"login": "alice"}]}
+        orig = (R.gh_json, R.upstream_slug, os.environ.pop("CRUCIBLE_GH_USER", None))
+        R.gh_json = lambda path, check=False: {"login": "alice"} if path == "user" else [] if "timeline" in path else issue
+        R.upstream_slug = lambda repo: "o/r"
+        try:
+            self.assertEqual(R.current_login(), "alice")
+            self.assertEqual(R.unclaimed(".", 5, R.current_login())["status"], "pass")
+            os.environ["CRUCIBLE_GH_USER"] = "bob"                 # the override wins over gh
+            self.assertEqual(R.current_login(), "bob")
+            it = R.unclaimed(".", 5, R.current_login())
+            self.assertEqual(it["status"], "fail")
+            self.assertIn("assigned to ['alice']", it["evidence"])
+            os.environ.pop("CRUCIBLE_GH_USER")
+            R.gh_json = lambda path, check=False: None             # gh not logged in: nobody is skipped
+            self.assertIsNone(R.current_login())
+        finally:
+            R.gh_json, R.upstream_slug = orig[0], orig[1]
+            if orig[2] is not None:
+                os.environ["CRUCIBLE_GH_USER"] = orig[2]
+            else:
+                os.environ.pop("CRUCIBLE_GH_USER", None)
+
+    def test_offline_makes_no_login_call(self):
+        calls = []
+        orig = R.gh_json
+        R.gh_json = lambda path, check=False: calls.append(path)
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                subprocess.run(["git", "init", "-q", "-b", "main", d], check=True)
+                subprocess.run(["git", "-C", d, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
+                                "--allow-empty", "-m", "base"], check=True)
+                R.evaluate(d, "o__r", "main", [], offline=True)
+            self.assertEqual(calls, [])
+        finally:
+            R.gh_json = orig
+
+
 class TestOverlappingPRs(unittest.TestCase):
     """Real-use bug k: the competing-PR check only looked at PRs that reference the linked issue, so it missed
     Heroic #5776, which fixes a neighbouring issue in the same comparators."""
