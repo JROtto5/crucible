@@ -75,4 +75,4 @@ These working files are added to `.git/info/exclude`, so they never end up in a 
 - `crucible stats [--project P] [--since T] [--json]`: the real-PR precision log, offline. It shows how many kept findings were fixed, deferred or refuted, "held up" with its 95% interval, the cost per held-up finding, and tokens per held-up finding for reviews that recorded token counts.
 - `crucible eval [--cases ...] [--split build|holdout]`: runs the review on the labelled fixture changes in `eval/` and scores recall and false blocking. This costs money (about $4 for the full set).
 - `crucible routing-replay`: replays stored reviews offline to show what each cost-routing rule would have lost.
-- `crucible anchor-replay --clones DIR`: re-verifies answered findings with and without the reviewer's argument, to measure anchoring. This makes model calls.
+- `crucible anchor-replay --clones DIR [--votes N]`: re-verifies answered findings with and without the reviewer's argument, to measure anchoring. With `--votes N` a finding is kept only if all N verdicts keep it, and the report adds the first vote alone and how often the votes split. This makes model calls (N per finding per arm).
