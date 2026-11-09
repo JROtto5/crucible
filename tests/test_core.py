@@ -1594,6 +1594,21 @@ class TestIncremental(unittest.TestCase):
             finally:
                 V.HOME, U.HOME = old
 
+    def test_waivers_are_per_commit_on_a_detached_head(self):
+        with tempfile.TemporaryDirectory() as repo:
+            g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True,
+                                          env=dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                                                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")).stdout.decode().strip()
+            g("init", "-q", "-b", "main"); open(os.path.join(repo, "f"), "w").write("1"); g("add", "f"); g("commit", "-qm", "b")
+            self.assertEqual(V.waiver_key(repo), "main")
+            base = g("rev-parse", "HEAD")
+            open(os.path.join(repo, "f"), "w").write("2"); g("commit", "-qam", "pr1"); a = g("rev-parse", "HEAD")
+            g("checkout", "-q", "--detach", a)
+            self.assertEqual(V.waiver_key(repo), "HEAD@" + a)
+            g("checkout", "-q", "--detach", base); open(os.path.join(repo, "f"), "w").write("3"); g("commit", "-qam", "pr2")
+            self.assertEqual(V.waiver_key(repo), "HEAD@" + g("rev-parse", "HEAD"))
+            self.assertNotEqual(V.waiver_key(repo), "HEAD@" + a)
+
 class TestEvalScoring(unittest.TestCase):
     def test_hits_and_scores(self):
         from crucible import evalrun as E

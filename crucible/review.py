@@ -929,6 +929,13 @@ def waivers_path(project):
     return os.path.join(project_dir(project), "waivers.json")
 
 
+def waiver_key(repo):
+    """Waivers belong to the checked-out branch. Every detached checkout reads as "HEAD", so a waiver made on one PR's
+    detached head would apply to every other one: there the key is the commit, and a new commit needs its own waiver."""
+    branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD", check=False)
+    return f"HEAD@{git(repo, 'rev-parse', 'HEAD')}" if branch == "HEAD" else branch
+
+
 def load_waivers(project, branch):
     return (read_json(waivers_path(project), {}) or {}).get(branch, {})
 

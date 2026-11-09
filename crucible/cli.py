@@ -37,13 +37,12 @@ def cmd_review(a):
 
 
 def cmd_status(a):
-    from .review import load, load_waivers, report, verdict
+    from .review import load, load_waivers, report, verdict, waiver_key
     project, sha, d, rev, ans = load(_p(a.repo))
     if not rev:
         print(f"NO REVIEW for HEAD {sha[:10]}. Run: crucible review {a.repo}")
         sys.exit(2)
-    from .util import git
-    txt = report(rev, ans, load_waivers(project, git(_p(a.repo), "rev-parse", "--abbrev-ref", "HEAD", check=False)))
+    txt = report(rev, ans, load_waivers(project, waiver_key(_p(a.repo))))
     open(os.path.join(d, "report.md"), "w").write(txt)
     print(txt)
     print(f"(report: {os.path.join(d, 'report.md')})")
@@ -64,8 +63,7 @@ def cmd_answer(a):
 
 
 def cmd_waive(a):
-    from .review import load, waivers_path
-    from .util import git
+    from .review import load, waiver_key, waivers_path
     project, sha, d, rev, ans = load(_p(a.repo))
     if not rev or rev.get("status") != "done":
         sys.exit("no completed review for this HEAD")
@@ -74,7 +72,7 @@ def cmd_waive(a):
         sys.exit(f"unknown readiness item {a.item!r}; one of: {sorted(items)}")
     if len(a.reason.strip()) < 20:
         sys.exit("give a real reason (20+ characters): it is printed in the report")
-    branch = git(_p(a.repo), "rev-parse", "--abbrev-ref", "HEAD", check=False)
+    branch = waiver_key(_p(a.repo))
     allw = read_json(waivers_path(project), {}) or {}
     allw.setdefault(branch, {})[a.item] = a.reason.strip()
     write_json(waivers_path(project), allw)
