@@ -751,6 +751,49 @@ class TestStyle(unittest.TestCase):
         self.assertFalse(S.OBVIOUS_COMMENT_RX.match("  // must run before the depth prepass: see #2213"))
 
 
+class TestReindentedLines(unittest.TestCase):
+    """three-mesh-bvh bvh-errors (2026-11-06): wrapping a worker body in `try {` re-indented a 2024 comment, and the
+    house check flagged it as "Comment narrates the obvious"; the author refuted it with `git blame -w`. Lines that
+    only re-add a removed line with new indentation are not the author's, so the style checks and the debug scanner
+    skip them. Secrets and conflict markers are still checked on every added line."""
+    BODY = ["// initialize the number of workers balanced for a binary tree",
+            "const n = Math.pow( 2, Math.floor( Math.log2( maxWorkers ) ) );",
+            "console.log( 'workers', n );",
+            "const tokenHint = 'ghp_abcdefghijklmnopqrstuvwxyz0123';"] + [f"step{i}( n );" for i in range(8)]
+
+    def files(self, wrapped_extra=()):
+        base = "function run( maxWorkers ) {\n" + "".join(f"\t{l}\n" for l in self.BODY) + "}\n"
+        new = ("function run( maxWorkers ) {\n\ttry {\n" + "".join(f"\t\t{l}\n" for l in self.BODY)
+               + "".join(f"\t\t{l}\n" for l in wrapped_extra) + "\t} catch ( e ) {\n\t\treject( e );\n\t}\n}\n")
+        d = make_repo({"src/worker.js": base}, {"src/worker.js": new})
+        return d, D.parse(sh(d, "git", "diff", "main", "fix"))
+
+    def test_authored_added_skips_reindented_lines(self):
+        _d, files = self.files()
+        got = [t.strip() for h in files[0]["hunks"] for _n, t in D.authored_added(h)]
+        self.assertEqual(got, ["try {", "} catch ( e ) {", "reject( e );", "}"])
+
+    def test_reindented_comment_and_debug_are_not_flagged(self):
+        d, files = self.files()
+        titles = {x["title"] for x in S.check(d, "main", files, "PR_DRAFT.md", "", {})}
+        self.assertFalse(titles & {"Comment narrates the obvious", "Over-commented compared with this file"}, titles)
+        hits = {h["title"] for h in D.scan(files)}
+        self.assertNotIn("Debug statement left in", hits)
+        self.assertIn("Possible secret in added line", hits)     # still caught on a re-indented line
+
+    def test_new_lines_inside_the_wrapped_block_are_still_checked(self):
+        extra = ["// initialize the retry counter", "console.log( 'done' );"] + [f"more{i}();" for i in range(8)]
+        d, files = self.files(extra)
+        found = {(x["title"], x["line"]) for x in S.check(d, "main", files, "PR_DRAFT.md", "", {})}
+        self.assertIn(("Comment narrates the obvious", 15), found)
+        self.assertIn(("Debug statement left in", 16), {(h["title"], h["line"]) for h in D.scan(files)})
+
+    def test_a_line_removed_once_matches_one_readd(self):
+        h = D.parse("diff --git a/a.js b/a.js\n--- a/a.js\n+++ b/a.js\n@@ -1,1 +1,2 @@\n"
+                    "-console.log(x)\n+  console.log(x)\n+  console.log(x)\n")[0]["hunks"][0]
+        self.assertEqual(D.authored_added(h), [(2, "  console.log(x)")])
+
+
 
 class TestRealHomeGuard(unittest.TestCase):
     """2026-11-07 01:24: fixtures leaked into ~/.crucible because crucible was imported (with the real home) before

@@ -4,6 +4,7 @@
 `check` returns deterministic medium/low findings for the diff's comments and the PR draft.
 `polish` rewrites PR_DRAFT.md into PR_DRAFT.polished.md in the project's voice, without inventing claims."""
 import collections, datetime as dt, os, re, statistics, subprocess, textwrap
+from .diff import authored_added
 from .util import (CODE_EXT_RX, ISSUE_KW, LEARN_VERSION, TEST_PATH_RX, Budget, Failed, claude, default_base, gh_json, git,
                    is_bot, project_dir, read_json, write_json)
 
@@ -336,7 +337,7 @@ def check(repo, base, files, draft_file, draft_text, style, title=""):
     for f in files:
         if f["deleted"] or f["binary"] or not CODE_EXT_RX.search(f["path"]) or TEST_PATH_RX.search(f["path"]):
             continue
-        added = [(n, t) for h in f["hunks"] for k, t, _o, n in h["lines"] if k == "+"]
+        added = [a for h in f["hunks"] for a in authored_added(h)]  # re-indented old lines aren't the author's
         if len(added) < 8:
             continue
         try:

@@ -1,4 +1,5 @@
 """Unified-diff parsing, deterministic scanners, and chunking with coverage."""
+import collections
 import re
 from .util import TEST_PATH_RX
 
@@ -60,14 +61,34 @@ def parse(diff):
     return files
 
 
+def authored_added(hunk):
+    """-> [(new_no, text)] for the hunk's added lines that this change wrote, leaving out lines that only re-add a
+    removed line of the same hunk with different indentation. Wrapping a block in `try {` or `if` re-indents every
+    line in it; those lines were already in the file, so a pre-existing comment or `console.log` there is not the
+    author's (three-mesh-bvh bvh-errors: a 2024 comment re-indented by a new `try` was flagged as narration)."""
+    removed = collections.Counter(re.sub(r"\s+", "", t) for k, t, *_ in hunk["lines"] if k == "-")
+    out = []
+    for k, t, _o, n in hunk["lines"]:
+        if k != "+":
+            continue
+        key = re.sub(r"\s+", "", t)
+        if key and removed[key]:
+            removed[key] -= 1
+            continue
+        out.append((n, t))
+    return out
+
+
 def scan(files):
-    """Deterministic findings from added lines only."""
+    """Deterministic findings from added lines only. Secrets and conflict markers are checked on every added line;
+    a debug statement only on lines the change wrote (see authored_added)."""
     out = []
     for f in files:
         if f["deleted"] or f["binary"]:
             continue
         in_test = bool(TEST_PATH_RX.search(f["path"]))
         for h in f["hunks"]:
+            authored = {n for n, _ in authored_added(h)}
             for kind, text, _o, n in h["lines"]:
                 if kind != "+":
                     continue
@@ -76,7 +97,7 @@ def scan(files):
                     hit = ("medium" if in_test else "critical", "Possible secret in added line")
                 elif CONFLICT_RX.match(text):
                     hit = ("critical", "Merge conflict marker")
-                elif DEBUG_RX.search(text) and not in_test:
+                elif DEBUG_RX.search(text) and not in_test and n in authored:
                     hit = ("low", "Debug statement left in")
                 if hit:
                     out.append({"severity": hit[0], "file": f["path"], "line": n, "title": hit[1],
