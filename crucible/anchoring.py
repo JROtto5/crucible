@@ -101,19 +101,26 @@ def checkout(clone, sha, into):
     return into
 
 
-def judge(entries, verify, jobs=4):
+def judge(entries, verify, jobs=4, votes=1):
     """verify(entry, argument: bool) -> (keep, cost). Returns one row per entry with each arm's keep and cost (an arm
-    whose call failed has keep None and counts in neither tally)."""
+    whose call failed has keep None and counts in neither tally). With `votes` > 1 each arm asks the verifier that
+    many times and keeps the finding only if every vote keeps it; any failed vote fails the arm. Each vote is listed
+    in `votes`, so the report can show the first vote alone next to the combined verdict. The votes of one arm run
+    one after another: their prompts are identical, so run side by side they would race on the same cache file."""
     rows = [dict(e, arms={}) for e in entries]
     tasks = [(r, arm) for r in rows for arm in ARMS]
 
     def run(t):
         r, arm = t
+        ballots, cost = [], 0.0
         try:
-            keep, cost = verify(r, arm == "with")
-            return r, arm, {"keep": bool(keep), "cost": cost or 0.0}
+            for _ in range(max(1, votes)):
+                keep, c = verify(r, arm == "with")
+                ballots.append(bool(keep))
+                cost += c or 0.0
         except Failed as ex:
-            return r, arm, {"keep": None, "cost": 0.0, "error": str(ex)[:200]}
+            return r, arm, {"keep": None, "cost": cost, "votes": ballots, "error": str(ex)[:200]}
+        return r, arm, {"keep": all(ballots), "cost": cost, "votes": ballots}
 
     with cf.ThreadPoolExecutor(max_workers=max(1, jobs)) as ex:
         for r, arm, res in ex.map(run, tasks):
@@ -123,9 +130,12 @@ def judge(entries, verify, jobs=4):
 
 def tally(rows):
     """Paired: only findings where both arms returned a verdict count, so the arms are compared on the same findings.
-    A finding with a failed call in either arm is counted in `excluded` (and each arm's own failures in `failed`)."""
-    t = {arm: {"false_alarms_kept": 0, "refuted": 0, "real_dropped": 0, "real": 0, "failed": 0, "cost": 0.0}
-         for arm in ARMS}
+    A finding with a failed call in either arm is counted in `excluded` (and each arm's own failures in `failed`).
+    `first` is the same tally from each arm's first vote alone (what a one-vote run would have said on the same
+    findings), and `split` counts verdicts whose votes disagreed: the verifier's own noise, measured."""
+    def blank():
+        return {"false_alarms_kept": 0, "refuted": 0, "real_dropped": 0, "real": 0}
+    t = {arm: dict(blank(), failed=0, cost=0.0, split=0, first=blank()) for arm in ARMS}
     t["excluded"] = 0
     for r in rows:
         res = {arm: r["arms"].get(arm) or {"keep": None, "cost": 0.0} for arm in ARMS}
@@ -136,21 +146,25 @@ def tally(rows):
             t["excluded"] += 1
             continue
         for arm in ARMS:
-            s = t[arm]
-            if r["disposition"] == "refuted":
-                s["refuted"] += 1
-                s["false_alarms_kept"] += res[arm]["keep"]
-            else:
-                s["real"] += 1
-                s["real_dropped"] += not res[arm]["keep"]
+            ballots = res[arm].get("votes") or [res[arm]["keep"]]
+            t[arm]["split"] += len(set(ballots)) > 1
+            for s, keep in ((t[arm], res[arm]["keep"]), (t[arm]["first"], ballots[0])):
+                if r["disposition"] == "refuted":
+                    s["refuted"] += 1
+                    s["false_alarms_kept"] += keep
+                else:
+                    s["real"] += 1
+                    s["real_dropped"] += not keep
     return t
 
 
-def report(rows, skipped):
+def report(rows, skipped, votes=1):
     t = tally(rows)
     out = [f"Anchoring replay: {len(rows)} answered findings re-verified at the commit they were raised on, "
            "with and without the reviewer's argument in the verifier prompt.",
            "Labels are the author's answers: refuted = false alarm; fixed/deferred = real."]
+    if votes > 1:
+        out.append(f"{votes} votes per arm: a finding is kept only if every vote keeps it.")
     for k, v in skipped.items():
         if v:
             out.append(f"  skipped {v}: {k}")
@@ -162,6 +176,10 @@ def report(rows, skipped):
         label = "without the argument (today's prompt)" if arm == "without" else "with the argument"
         out.append(f"- {label}: false alarms still kept {s['false_alarms_kept']}/{s['refuted']}, "
                    f"real findings dropped {s['real_dropped']}/{s['real']}, failed calls {s['failed']}, ${s['cost']:.2f}")
+        if votes > 1:
+            v1, paired = s["first"], s["refuted"] + s["real"]
+            out.append(f"    first vote alone: false alarms still kept {v1['false_alarms_kept']}/{v1['refuted']}, "
+                       f"real findings dropped {v1['real_dropped']}/{v1['real']}; votes split on {s['split']}/{paired}")
     diff = [r for r in rows if None not in (r["arms"].get("with", {}).get("keep"), r["arms"].get("without", {}).get("keep"))
             and r["arms"]["with"]["keep"] != r["arms"]["without"]["keep"]]
     if diff:
@@ -173,7 +191,7 @@ def report(rows, skipped):
     return "\n".join(out)
 
 
-def run(root, clones, per_class=0, jobs=4, budget=None, include_self=False):
+def run(root, clones, per_class=0, jobs=4, budget=None, include_self=False, votes=1):
     from .review import region, verify_tiers, verify_tiered, choose_models
     entries = answered(root, include_self)
     skipped = {"on the PR draft (its text isn't stored)": 0, "no local clone has the commit": 0,
@@ -215,7 +233,7 @@ def run(root, clones, per_class=0, jobs=4, budget=None, include_self=False):
                                      fresh=True, argument=argument)
             return v["keep"], sum(t.get("cost", 0) for t in trail)
 
-        rows = judge(ready, verify, jobs)
+        rows = judge(ready, verify, jobs, votes)
     finally:
         if old_cache is None:
             os.environ.pop("CRUCIBLE_CACHE", None)

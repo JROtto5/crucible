@@ -3710,7 +3710,46 @@ class TestAnchorReplay(unittest.TestCase):
         from crucible import anchoring as A, cli
         with mock.patch.object(A, "run", return_value=([], {})) as run, mock.patch("builtins.print"):
             cli.main(["anchor-replay", "--clones", "/c1", "/c2", "--per-class", "2", "--jobs", "3", "--budget", "1.5"])
-        self.assertEqual(run.call_args.args, (os.path.join(U.HOME, "reviews"), ["/c1", "/c2"], 2, 3, 1.5, False))
+        self.assertEqual(run.call_args.args, (os.path.join(U.HOME, "reviews"), ["/c1", "/c2"], 2, 3, 1.5, False, 1))
+        with mock.patch.object(A, "run", return_value=([], {})) as run, mock.patch("builtins.print"):
+            cli.main(["anchor-replay", "--clones", "/c1", "--votes", "2"])
+        self.assertEqual(run.call_args.args[-1], 2)
+        for bad in ("0", "-1", "two"):
+            with mock.patch.object(A, "run") as run, mock.patch("sys.stderr"), self.assertRaises(SystemExit):
+                cli.main(["anchor-replay", "--clones", "/c1", "--votes", bad])
+            run.assert_not_called()
+
+    def test_two_votes_keep_only_what_both_keep(self):
+        """2026-11-07: a plain re-verify dropped 5 of 10 author-refuted findings the first verification had kept. With
+        --votes 2 a finding survives an arm only if both fresh verdicts keep it, and the report shows the first vote
+        alone and how often the votes split, so the gain over one vote is read off the same run."""
+        from crucible import anchoring as A
+        es = [{"repo": "o__p", "disposition": d, "finding": dict(self.F, id=i)}
+              for d, i in (("refuted", "R"), ("fixed", "F"), ("refuted", "X"))]
+        calls = {}
+
+        def verify(r, argument):        # R: keep then drop (noise); F: always kept; X: second vote fails
+            i = r["finding"]["id"]
+            n = calls[(i, argument)] = calls.get((i, argument), 0) + 1
+            if i == "X" and n == 2:
+                raise U.Failed("usage limit")
+            return (n == 1 if i == "R" else True), 0.1
+        rows = A.judge(es, verify, jobs=3, votes=2)
+        self.assertEqual(calls, {("R", False): 2, ("R", True): 2, ("F", False): 2, ("F", True): 2,
+                                 ("X", False): 2, ("X", True): 2})
+        by = {r["finding"]["id"]: r["arms"]["without"] for r in rows}
+        self.assertEqual((by["R"]["keep"], by["R"]["votes"]), (False, [True, False]))
+        self.assertEqual((by["X"]["keep"], by["X"]["votes"]), (None, [True]))
+        self.assertAlmostEqual(by["X"]["cost"], 0.1)        # the vote that ran is still paid for
+        t = A.tally(rows)
+        self.assertEqual(t["excluded"], 1)
+        s = t["without"]
+        self.assertEqual((s["false_alarms_kept"], s["refuted"], s["real_dropped"], s["real"], s["split"]), (0, 1, 0, 1, 1))
+        self.assertEqual(s["first"], {"false_alarms_kept": 1, "refuted": 1, "real_dropped": 0, "real": 1})
+        text = A.report(rows, {}, votes=2)
+        self.assertIn("2 votes per arm", text)
+        self.assertIn("first vote alone: false alarms still kept 1/1, real findings dropped 0/1; votes split on 1/2", text)
+        self.assertNotIn("first vote alone", A.report(A.judge(es[:2], lambda r, a: (True, 0)), {}))
 
     def test_checkout_of_a_partial_clone_fetches_into_the_temp_repo_only(self):
         from crucible import anchoring as A

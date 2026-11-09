@@ -13,7 +13,7 @@
   crucible proposals PROJECT [--accept N]                         review proposed memory entries
   crucible eval    [--cases ...] [--split S] [--no-tiers] [--label L] score the reviewer on fixtures (eval/)
   crucible routing-replay [--include-self]                        what cost-routing rules would lose, on stored reviews
-  crucible anchor-replay --clones DIR [--per-class N]            verifier with vs without the reviewer's argument
+  crucible anchor-replay --clones DIR [--per-class N] [--votes N] verifier with vs without the reviewer's argument
   crucible stats   [--project P] [--since T] [--include-self] [--json]  real-PR precision, held up with its 95% interval
 
 crucible never pushes, comments, approves or posts. A human submits."""
@@ -155,8 +155,20 @@ def cmd_routing_replay(a):
 
 def cmd_anchor_replay(a):
     from . import anchoring
-    rows, skipped = anchoring.run(os.path.join(HOME, "reviews"), a.clones, a.per_class, a.jobs, a.budget, a.include_self)
-    print(anchoring.report(rows, skipped))
+    rows, skipped = anchoring.run(os.path.join(HOME, "reviews"), a.clones, a.per_class, a.jobs, a.budget,
+                                  a.include_self, a.votes)
+    print(anchoring.report(rows, skipped, a.votes))
+
+
+def _positive_int(v):
+    """argparse type: an integer of at least 1."""
+    try:
+        n = int(v)
+    except ValueError:
+        n = 0
+    if n < 1:
+        raise argparse.ArgumentTypeError(f"expected a whole number of at least 1, got {v!r}")
+    return n
 
 
 def _iso_time(v):
@@ -230,6 +242,8 @@ def main(argv=None):
     ar.add_argument("--per-class", type=int, default=0, help="at most N refuted and N held-up findings (default: all)")
     ar.add_argument("--jobs", type=int, default=4); ar.add_argument("--budget", type=float, help="stop spending at USD")
     ar.add_argument("--include-self", action="store_true", help="include crucible's reviews of itself")
+    ar.add_argument("--votes", type=_positive_int, default=1,
+                    help="verifier calls per arm; kept only if every vote keeps it (default 1; each vote costs a call)")
     sa = s.add_parser("stats", help="real-PR precision log from stored reviews: unique kept/dropped/fixed/deferred/refuted")
     sa.add_argument("--project", help="owner/name (default: every project)")
     sa.add_argument("--include-self", action="store_true", help="include crucible's reviews of itself")
