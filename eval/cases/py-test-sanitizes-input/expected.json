@@ -1,0 +1,33 @@
+{
+ "kind": "bug",
+ "split": "holdout",
+ "source": "Lutris #7006 round 1 (2026-11-07): the new markup test stripped every <a> tag with a regex before validating, so broken links passed and still rendered as empty labels. Rewritten from scratch in Python; no upstream code.",
+ "message": "i18n(fr): fix the save hint markup, link the release notes, test every string",
+ "file": "ui/strings.py",
+ "lines": [
+  7
+ ],
+ "keywords": [
+  "update_hint",
+  "unclosed quote",
+  "unterminated",
+  "missing quote",
+  "/notes>",
+  "empty label",
+  "strip",
+  "sanitiz",
+  "LINK.sub",
+  "never fail",
+  "can't fail",
+  "cannot fail"
+ ],
+ "also": [
+  {
+   "file": "tests/test_strings.py",
+   "lines": [
+    9,
+    14
+   ]
+  }
+ ]
+}

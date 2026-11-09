@@ -1,0 +1,6 @@
+{
+ "kind": "clean",
+ "split": "holdout",
+ "source": "the correct version of py-test-sanitizes-input: the link's quote is closed and the test parses each string as shipped",
+ "message": "i18n(fr): fix the save hint markup, link the release notes, test every string"
+}
