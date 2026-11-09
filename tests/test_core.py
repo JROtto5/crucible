@@ -1795,23 +1795,24 @@ class TestClaimOwner(unittest.TestCase):
         # a stranger without gh: the review used to end in "FileNotFoundError: gh" (self-review, dropped as pre-existing)
         from unittest import mock
 
-        def no_gh(*a, **k):
-            raise FileNotFoundError("gh")
-        with mock.patch.object(U.subprocess, "run", no_gh):
-            self.assertIsNone(U.gh_json("user"))
-            with self.assertRaises(U.Failed):
-                U.gh_json("user", check=True)
+        for exc in (FileNotFoundError("gh"), subprocess.TimeoutExpired(["gh"], 120)):
+            def no_gh(*a, **k):
+                raise exc
+            with mock.patch.object(U.subprocess, "run", no_gh):
+                self.assertIsNone(U.gh_json("user"))
+                with self.assertRaises(U.Failed):
+                    U.gh_json("user", check=True)
 
     def test_missing_gh_is_an_unknown_login(self):
-        orig, env = R.gh_json, os.environ.pop("CRUCIBLE_GH_USER", None)
+        from unittest import mock
+        env = os.environ.pop("CRUCIBLE_GH_USER", None)
 
-        def no_gh(path, check=False):
+        def no_gh(*a, **k):
             raise FileNotFoundError("gh")
-        R.gh_json = no_gh
         try:
-            self.assertIsNone(R.current_login())
+            with mock.patch.object(U.subprocess, "run", no_gh):
+                self.assertIsNone(R.current_login())
         finally:
-            R.gh_json = orig
             if env is not None:
                 os.environ["CRUCIBLE_GH_USER"] = env
 

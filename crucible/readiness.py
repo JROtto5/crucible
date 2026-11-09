@@ -793,10 +793,7 @@ def current_login():
     env = os.environ.get("CRUCIBLE_GH_USER", "").strip()
     if env:
         return env
-    try:
-        d = gh_json("user")
-    except (OSError, subprocess.TimeoutExpired):     # gh not installed, or hung: unknown, and the review goes on
-        return None
+    d = gh_json("user")                   # None when gh is missing, hung or logged out: unknown, the review goes on
     return d.get("login") if isinstance(d, dict) else None
 
 
