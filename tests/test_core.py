@@ -3754,7 +3754,7 @@ class TestTokenMetering(unittest.TestCase):
             "[]",                     # JSON, but not an object: Failed, not an AttributeError
             "timeout",
         ])
-        tokens, unmetered = b.token_snapshot()
+        tokens, unmetered, _ = b.token_snapshot()
         self.assertEqual(tokens, {
             "opus": {"input": 10, "output": 6, "cache_read": 100, "cache_creation": 20},
             "haiku": {"input": 1, "output": 2, "cache_read": 0, "cache_creation": 0},
@@ -3772,10 +3772,13 @@ class TestTokenMetering(unittest.TestCase):
         before = b.token_snapshot()
         b.meter({"m": {"input": 10, "output": 5, "cache_read": 0, "cache_creation": 0}})
         b.meter(None)
+        b.cached_call()
         after = b.token_snapshot()
         b.meter({"v": {"input": 2, "output": 2, "cache_read": 4, "cache_creation": 0}})
+        b.cached_call(); b.cached_call()
         t = V.token_fields(b, (before, after))
         self.assertEqual((t["tokens_review"]["total"], t["tokens_review"]["unmetered_calls"]), (15, 1))
+        self.assertEqual((t["tokens_review"]["cached_calls"], t["tokens_verify"]["cached_calls"]), (1, 2))
         self.assertEqual(t["tokens_review"]["by_model"], {"m": {"input": 10, "output": 5, "cache_read": 0, "cache_creation": 0}})
         self.assertEqual((t["tokens_verify"]["total"], t["tokens_verify"]["unmetered_calls"]), (10, 0))
         self.assertEqual(set(t["tokens_verify"]["by_model"]), {"m", "v"})
@@ -3786,22 +3789,18 @@ class TestTokenMetering(unittest.TestCase):
         self.assertEqual(V.tokens_note(rev), " · at least 1,525 tokens (review 1,500, verify 25; 1 call(s) without a token count)")
         self.assertEqual(V.tokens_note({"cost_usd": 1}), "")
 
-    def test_cache_hit_from_before_metering_is_unmetered(self):
-        # self-review CR-ce3e4b57: a hit makes no call, so a re-run reusing verdicts cached before metering looked
-        # fully metered with too few tokens
+    def test_cache_hits_are_counted(self):
+        # self-review CR-ce3e4b57: a hit makes no call, and the review that paid for it may be gone (a --force re-run
+        # overwrites the same commit's review.json), so a review with hits looked fully metered at too few tokens
         old = os.environ.get("CRUCIBLE_CACHE")
         with tempfile.TemporaryDirectory() as d:
             os.environ["CRUCIBLE_CACHE"] = d
             try:
                 b = U.Budget(None)
-                V.cache_put("old", {"keep": True})                       # written before metering
-                V.cache_put("new", dict({"keep": False}, _metered=True))
-                self.assertEqual(V.cache_hit("new", b), {"keep": False})   # flag stripped, nothing counted
-                self.assertEqual(b.token_snapshot(), ({}, 0))
-                self.assertEqual(V.cache_hit("old", b), {"keep": True})
-                self.assertEqual(b.token_snapshot(), ({}, 1))
+                V.cache_put("k", {"keep": True})
+                self.assertEqual(V.cache_hit("k", b), {"keep": True})
                 self.assertIsNone(V.cache_hit("missing", b))
-                self.assertEqual(b.token_snapshot(), ({}, 1))
+                self.assertEqual(b.token_snapshot(), ({}, 0, 1))
             finally:
                 if old is None:
                     os.environ.pop("CRUCIBLE_CACHE", None)
@@ -3822,22 +3821,25 @@ class TestTokenMetering(unittest.TestCase):
             self.assertEqual(json.loads(ST.to_json(ST.collect(root)))["tokens"], {"answered": False, "reason": "not recorded"})
             TestStats._store(root, "o__p", "s1", [f("CR-1", "a"), f("CR-2", "b"), f("CR-3", "c")],
                              answers={"CR-1": {"disposition": "fixed", "at": "1"}, "CR-2": {"disposition": "refuted", "at": "1"}})
-            for sha, t in (("s1", (9000, 1000)), ("s2", (1000, 1000)), ("s3", (5000, 0))):
+            for sha, t in (("s1", (9000, 1000)), ("s2", (1000, 1000)), ("s3", (5000, 0)), ("s4", (0, 0))):
                 if sha != "s1":
                     TestStats._store(root, "o__p", sha, [f("CR-4" + sha, "d" + sha)],
                                      answers={"CR-4s2": {"disposition": "deferred", "at": "1"}} if sha == "s2" else None)
                 p = os.path.join(root, "o__p", sha, "review.json")
                 rev = U.read_json(p)
                 rev.update(tokens_review=tok(t[0]), tokens_verify=tok(t[1], unm=1 if sha == "s3" else 0))
+                if sha == "s4":                       # a --force re-run served from the cache
+                    rev["tokens_review"]["cached_calls"] = 1
                 U.write_json(p, rev)
             s = ST.collect(root)
             t = ST.tokens(s)
-            # s0 has no tokens and s3 had an unmetered call: 2 of 4 metered, 12,000 tokens, held up CR-1 + CR-4s2
-            self.assertEqual((t["metered_reviews"], t["reviews"], t["total"], t["review"], t["verify"]), (2, 4, 12000, 10000, 2000))
+            # s0 has no tokens, s3 had an unmetered call, s4 a cache hit: 2 of 5 metered, 12,000 tokens,
+            # held up CR-1 + CR-4s2
+            self.assertEqual((t["metered_reviews"], t["reviews"], t["total"], t["review"], t["verify"]), (2, 5, 12000, 10000, 2000))
             self.assertEqual((t["per_review"], t["held_up"], t["per_held_up"]), (6000, {"held": 2, "answered": 3}, 6000))
             self.assertEqual(ST.held_up(s["overall"]), (3, 4))      # the overall precision still counts every review
             text = ST.report(s)
-            self.assertIn("Tokens (2 of 4 reviews metered): 6,000 per review", text)
+            self.assertIn("Tokens (2 of 5 reviews metered): 6,000 per review", text)
             self.assertIn("Tokens per held-up finding: 6,000 (2/3 held up in the metered reviews", text)
             self.assertIn("too few to quote", text)
             self.assertEqual(json.loads(ST.to_json(s))["tokens"]["per_held_up"], 6000)
@@ -3879,13 +3881,17 @@ class TestTokenMetering(unittest.TestCase):
                 self.assertEqual(rev["tokens_verify"]["total"], 17)   # one confident cheap-tier verdict, no escalation
                 self.assertEqual(rev["tokens_review"]["unmetered_calls"] + rev["tokens_verify"]["unmetered_calls"], 0)
                 self.assertIn("tokens (review 110, verify", V.report(rev, {}))
-                # a forced re-run of the same commit is served from the (metered) cache: 0 tokens, still metered
+                from crucible import stats as ST
+                self.assertTrue(ST.metered(rev))
+                # a forced re-run of the same commit is served from the cache and overwrites the review that paid:
+                # 0 tokens, so it must not count as metered
                 out = V.run_review(repo, "main", force=True, offline=True, skip_checks=True, log=lambda *_: None)
                 rev = U.read_json(os.path.join(out, "review.json"))
                 self.assertEqual(rev["status"], "done", rev.get("reason"))
                 self.assertEqual((rev["tokens_review"]["total"], rev["tokens_verify"]["total"]), (0, 0))
-                self.assertEqual(rev["tokens_review"]["unmetered_calls"] + rev["tokens_verify"]["unmetered_calls"], 0)
-                self.assertNotIn("_metered", json.dumps(rev))
+                self.assertEqual((rev["tokens_review"]["cached_calls"], rev["tokens_verify"]["cached_calls"]), (1, 1))
+                self.assertFalse(ST.metered(rev))
+                self.assertIn("2 served from cache", V.report(rev, {}))
             finally:
                 V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
                 if olds[3] is None:

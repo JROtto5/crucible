@@ -15,8 +15,8 @@ and a window with no reviews prints "no data", never a row of zeros: a store tha
 exactly like a quiet day otherwise.
 
 Tokens: a review is metered when it stored `tokens_review` and `tokens_verify` and every model call in it reported
-its usage (a cache hit on an entry from before metering counts as a call that didn't). Reviews from before token
-metering, or with such a call, are "not recorded", never 0. Tokens per held-up finding is computed on the metered
+its usage, with no result served from the cache (the review that paid for a cached result may be overwritten by
+a --force re-run, failed, or outside the window). Other reviews are "not recorded", never 0. Tokens per held-up finding is computed on the metered
 reviews alone (their tokens over the findings that held up among them), so both halves of the ratio cover the same
 reviews. A failed review's tokens are not counted, as its cost isn't."""
 import collections, glob, json, math, os, re
@@ -68,7 +68,7 @@ def wilson(k, n, z=1.96):
 def metered(rev):
     """True when a stored review has complete token counts (see the module note)."""
     tr, tv = rev.get("tokens_review"), rev.get("tokens_verify")
-    return bool(tr and tv) and not (tr.get("unmetered_calls") or tv.get("unmetered_calls"))
+    return bool(tr and tv) and not any(t.get(k) for t in (tr, tv) for k in ("unmetered_calls", "cached_calls"))
 
 
 def _load(root, include_self, project, since=None):
@@ -235,8 +235,8 @@ def tokens(s):
 def tokens_line(s):
     t = tokens(s)
     if not t:
-        return ("Tokens: not recorded (no review here has complete token counts; reviews before token metering "
-                "stored cost only).")
+        return ("Tokens: not recorded (no review here has complete token counts: reviews before token metering "
+                "stored cost only, and a review with a cache hit or an uncounted call is left out).")
     parts = ", ".join(f"{k.replace('_', ' ')} {t[k]:,}" for k in TOKEN_KINDS)
     line = (f"Tokens ({t['metered_reviews']} of {t['reviews']} reviews metered): {t['per_review']:,} per review "
             f"({t['total']:,} in all: {parts}; review passes {t['review']:,}, verification {t['verify']:,}). ")

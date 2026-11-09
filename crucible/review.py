@@ -100,12 +100,13 @@ def cache_put(key, val):
 
 
 def cache_hit(key, budget):
-    """A cached model result (review pass or verdict), or None. A hit costs no tokens: the review that made the call
-    was metered. An entry from before token metering has no such review, so the hit counts as an unmetered call and
-    `stats` reports that review's tokens as not recorded rather than too low."""
+    """A cached model result (review pass or verdict), or None. A hit makes no call and uses no tokens, but the
+    review that paid for it may be gone (a --force re-run overwrites the same commit's review.json) or not counted
+    (failed, outside a --since window), so the hit is counted and `stats` leaves the review out of its token figures
+    instead of quoting them too low. 1 of 149 stored upstream reviews had a hit (2026-11-09)."""
     hit = cache_get(key)
-    if isinstance(hit, dict) and not hit.pop("_metered", False):
-        budget.meter(None)
+    if hit is not None and budget:
+        budget.cached_call()
     return hit
 
 
@@ -354,14 +355,15 @@ def salvage_verdict(f, text, repo, budget):
 
 def token_fields(budget, split):
     """review.json's token fields: the review passes (the calls between the two snapshots in `split`) and
-    everything else (verification, salvage, re-checks), each with its own count of calls that reported no usage.
-    With no split (the review failed before its passes ran), every call so far counts on the verify side, as its
-    cost does."""
-    end, end_unm = budget.token_snapshot()
-    (b, b_unm), (r, r_unm) = split or (({}, 0), ({}, 0))
-    rev = token_diff(r, b)
-    return {"tokens_review": token_summary(rev, r_unm - b_unm),
-            "tokens_verify": token_summary(token_diff(end, rev), end_unm - (r_unm - b_unm))}
+    everything else (verification, salvage, re-checks), each with its own counts of calls that reported no usage and
+    of cache hits. With no split (the review failed before its passes ran), every call so far counts on the verify
+    side, as its cost does."""
+    end = budget.token_snapshot()
+    before, after = split or (({}, 0, 0), ({}, 0, 0))
+    rev = token_diff(after[0], before[0])
+    return {"tokens_review": token_summary(rev, after[1] - before[1], after[2] - before[2]),
+            "tokens_verify": token_summary(token_diff(end[0], rev), end[1] - (after[1] - before[1]),
+                                           end[2] - (after[2] - before[2]))}
 
 
 def needs_escalation(v):
@@ -390,7 +392,7 @@ def verify_tiered(f, code, repo, budget, tiers, fresh=False, since="", draft_lab
             except NoStructuredOutput as e:
                 v = salvage_verdict(f, e.text, repo, budget)
             if not v.get("salvaged"):      # the rejection is flaky: a rerun should retry the real verifier
-                cache_put(key, dict(v, _metered=True))
+                cache_put(key, v)
         trail.append({"model": model, "keep": v["keep"], "severity": v["severity"], "confidence": v.get("confidence"),
                       "cached": bool(hit), **({"salvaged": True} if v.get("salvaged") else {}),
                       **({"cost": v["cost"]} if "cost" in v and not hit else {})})
@@ -704,7 +706,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 try:
                     out, cost = claude(prompt, review_model, FINDINGS_SCHEMA, repo, budget)
                     review_cost += cost or 0
-                    cache_put(key, dict(out, _metered=True))
+                    cache_put(key, out)
                 except Failed as e:
                     chunk_status.append({"files": ch["files"], "status": "failed", "reason": str(e)})
                     continue
@@ -929,13 +931,16 @@ def transcribed_note(vf):
 
 def tokens_note(rev):
     """' · 123,456 tokens (review 100,000, verify 23,456)' for the report header; empty for a review stored before
-    token metering, and marked as a lower bound when a call (or a cache hit from before metering) has no count."""
+    token metering. A call with no count makes the total a lower bound; cache hits are named (they used no tokens)."""
     tr, tv = rev.get("tokens_review"), rev.get("tokens_verify")
     if not tr or not tv:
         return ""
     unm = tr.get("unmetered_calls", 0) + tv.get("unmetered_calls", 0)
+    hits = tr.get("cached_calls", 0) + tv.get("cached_calls", 0)
+    extra = (([f"{unm} call(s) without a token count"] if unm else [])
+             + ([f"{hits} served from cache"] if hits else []))
     return (f" · {'at least ' if unm else ''}{tr['total'] + tv['total']:,} tokens (review {tr['total']:,}, "
-            f"verify {tv['total']:,}{f'; {unm} call(s) without a token count' if unm else ''})")
+            f"verify {tv['total']:,}{'; ' + ', '.join(extra) if extra else ''})")
 
 
 def report(rev, ans, waivers=None):

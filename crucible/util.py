@@ -184,13 +184,14 @@ def usage_of(d, model):
     return None
 
 
-def token_summary(by_model, unmetered=0):
-    """Token counts per model -> {"total", each kind, "by_model", "unmetered_calls"}. total = all four kinds.
-    unmetered_calls counts model calls that reported no usage (a timeout, unreadable output): the totals then
-    undercount, and `stats` treats the review as not recorded rather than quote a low figure."""
+def token_summary(by_model, unmetered=0, cached=0):
+    """Token counts per model -> {"total", each kind, "by_model", "unmetered_calls", "cached_calls"}. total = all
+    four kinds. unmetered_calls counts model calls that reported no usage (a timeout, unreadable output), so the
+    totals undercount; cached_calls counts results served from the cache, whose tokens were spent elsewhere. `stats`
+    leaves a review with either out of its token figures rather than quote a low one."""
     out = {k: sum(u.get(k, 0) for u in by_model.values()) for k in TOKEN_KINDS}
     return {"total": sum(out.values()), **out, "by_model": {m: dict(u) for m, u in sorted(by_model.items())},
-            "unmetered_calls": unmetered}
+            "unmetered_calls": unmetered, "cached_calls": cached}
 
 
 def token_diff(after, before):
@@ -206,7 +207,7 @@ def token_diff(after, before):
 class Budget:
     def __init__(self, limit):
         self.limit, self.spent, self.lock = limit, 0.0, threading.Lock()
-        self.tokens, self.unmetered = {}, 0      # model -> token counts; calls that reported no usage
+        self.tokens, self.unmetered, self.cached = {}, 0, 0   # model -> counts; calls with no usage; cache hits
 
     def meter(self, usage):
         """Record one model call's usage (usage_of's result); None counts the call as unmetered."""
@@ -219,9 +220,14 @@ class Budget:
                 for k in TOKEN_KINDS:
                     t[k] += u.get(k, 0)
 
-    def token_snapshot(self):
+    def cached_call(self):
         with self.lock:
-            return {m: dict(u) for m, u in self.tokens.items()}, self.unmetered
+            self.cached += 1
+
+    def token_snapshot(self):
+        """-> (per-model counts, unmetered calls, cache hits) so far."""
+        with self.lock:
+            return {m: dict(u) for m, u in self.tokens.items()}, self.unmetered, self.cached
 
     def remaining(self):
         return None if self.limit is None else max(0.0, self.limit - self.spent)
