@@ -28,6 +28,26 @@ crucible reply   https://github.com/o/r/pull/12  # draft answers to real review 
 
 The one blocking miss is the refcount case: the bug is found, but rated medium. Every crucible change has to keep or improve these numbers.
 
+### First independent measurement (2026-11-09)
+
+An independent engineering team ran crucible v0.4.0 on their own code: private PRs, not crucible's fixtures. They used a sandboxed container and sent back only totals. The test set was **36 defects their human reviewers caught** (on 27 PR heads) that their production AI reviewer had missed. Their reviewer ran on the same heads, paired.
+
+| | crucible v0.4.0 | their production reviewer |
+|---|---|---|
+| Flagged the same defect the human caught | **8 / 36 = 22%** (Wilson 95% 12–38%) | 1 / 36 = 3% (0–14%) |
+| Same or adjacent defect | 10 / 36 = 28% (16–44%) | 2 / 36 = 6% (2–18%) |
+| Paired difference per head | **+7 catches, 95% interval [+2, +12]** (head-clustered bootstrap); 8 heads better, 1 worse | |
+| False alarms on 25 findings humans had rejected (18 heads) | 2 | 2 (two runs gave 2 and 6) |
+| Cost per review | $1.53 mean (max $3.29 on a ~6,000-line diff), 4.8 min | $0.93 |
+
+Caveats, in their words and ours:
+- **Most catches were non-blocking.** Only 1 of crucible's 8 was rated at a blocking severity.
+- **n is small.** The false-alarm set (n = 25) is below our n ≥ 60 bar, so it's too few to quote as a rate.
+- **Possible leakage.** Some PR descriptions were written after the human comment and could leak the human's point. Re-run with descriptions dated before the judgment, 5 of the 8 catches held. So the conservative figure is 5 / 36 = 14% (6–29%).
+- **No execution.** The run had no test execution (see the roadmap: `--skip-checks` didn't stop the verifier's probes, and the sandbox refused them), so every verification was by reading.
+- **Larger PRs.** These are company-scale changes, larger than the small upstream PRs crucible is tuned for.
+
+
 Those 16 cases are the **build** split: crucible's prompts and verifier have been tuned while watching them, so they flatter it. Cases from real catches go in a **held-out** split (`"split": "holdout"` in `expected.json`) that no prompt change may be justified by, and `crucible eval` reports held-out recall and false blocking on their own line (`--split holdout` runs only those). The first two (2026-11-07): a shutdown fix that calls a helper whose close waits without a bound before its new bounded wait, so the hang it fixes comes back (from gamescope #2516), and the correct version of the same fix. Held-out: recall 1/1, false blocking 0 on 1 clean case, $1.07. Two cases are far too few to read a percentage from; the column exists so each new real catch lands where tuning can't flatter it.
 
 ## How a review works
