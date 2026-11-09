@@ -412,6 +412,19 @@ def is_ancestor(repo, a, b):
     return subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", a, b], capture_output=True).returncode == 0
 
 
+def branch_history(repo, project, sha):
+    """The reviewed commits recorded for the checked-out branch, oldest first. A detached HEAD has no branch: every
+    detached checkout is recorded under "HEAD", so one checkout used to review several PRs' heads (the 2026-11-09
+    independent bench) would treat another PR's review as this one's previous round, review only the delta and carry
+    its findings and answers. There, only earlier reviews of commits in HEAD's own history count; an amended detached
+    head gets a full review."""
+    branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD", check=False)
+    hist = (read_json(os.path.join(project_dir(project), "branches.json"), {}) or {}).get(branch, [])
+    if branch != "HEAD":
+        return hist
+    return [s for s in hist if s != sha and is_ancestor(repo, s, sha)]
+
+
 def previous_review(repo, project, sha, base):
     """The newest complete review of an earlier commit on this branch with the same merge-base, or (None, None).
     The commit needn't be an ancestor of HEAD: after `git commit --amend` (or a squash) it has left HEAD's history,
@@ -419,9 +432,7 @@ def previous_review(repo, project, sha, base):
     the rounds. Before this, 38 of 57 upstream reviews were full re-reviews of an amended commit (67% of spend).
     The old commit must still exist (not garbage-collected), and a non-ancestor must share a changed file with HEAD:
     a branch name reused for an unrelated change starts over with a full review."""
-    branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD", check=False)
-    hist = (read_json(os.path.join(project_dir(project), "branches.json"), {}) or {}).get(branch, [])
-    for prev in reversed(hist):
+    for prev in reversed(branch_history(repo, project, sha)):
         if prev == sha:
             continue
         rev = read_json(os.path.join(HOME, "reviews", project, prev, "review.json"))
@@ -847,9 +858,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
 def carry_forward(repo, project, sha, record):
     """Carry answers from the previous reviewed commit of this branch when the finding is the same and its code region
     was not touched since then."""
-    branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD", check=False)
-    hist = (read_json(os.path.join(project_dir(project), "branches.json"), {}) or {}).get(branch, [])
-    prev = next((s for s in reversed(hist) if s != sha), None)
+    prev = next((s for s in reversed(branch_history(repo, project, sha)) if s != sha), None)
     if not prev:
         return
     prev_d = os.path.join(HOME, "reviews", project, prev)

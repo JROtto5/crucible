@@ -1531,6 +1531,69 @@ class TestIncremental(unittest.TestCase):
                 V.HOME, U.HOME = old
 
 
+    def test_previous_review_detached_heads_dont_share_history(self):
+        # the independent bench reviewed several PRs' heads in one checkout, detached: all recorded under "HEAD"
+        with tempfile.TemporaryDirectory() as d:
+            home = os.path.join(d, "home"); repo = os.path.join(d, "r"); os.makedirs(repo)
+            g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True,
+                                          env=dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                                                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")).stdout.decode().strip()
+            g("init", "-q", "-b", "main"); open(os.path.join(repo, "f"), "w").write("1"); g("add", "f"); g("commit", "-qm", "b")
+            base = g("rev-parse", "HEAD")
+            open(os.path.join(repo, "f"), "w").write("pr1"); g("commit", "-qam", "pr1"); a = g("rev-parse", "HEAD")
+            open(os.path.join(repo, "f"), "w").write("pr1 round 2"); g("commit", "-qam", "pr1 r2"); a2 = g("rev-parse", "HEAD")
+            g("checkout", "-q", "--detach", base)
+            open(os.path.join(repo, "f"), "w").write("pr2"); g("commit", "-qam", "pr2"); b = g("rev-parse", "HEAD")
+            old = (V.HOME, U.HOME)
+            V.HOME = U.HOME = home
+            try:
+                proj = "r"
+                os.makedirs(os.path.join(home, "projects", proj)); os.makedirs(os.path.join(home, "reviews", proj, a))
+                U.write_json(os.path.join(home, "projects", proj, "branches.json"), {"HEAD": [a]})
+                U.write_json(os.path.join(home, "reviews", proj, a, "review.json"),
+                             {"status": "done", "base": base, "coverage": {"complete": True}})
+                # another PR's head: same base, same file changed. On a branch this would read as an amend
+                self.assertEqual(g("rev-parse", "--abbrev-ref", "HEAD"), "HEAD")
+                self.assertEqual(V.previous_review(repo, proj, b, base), (None, None))
+                self.assertEqual(V.branch_history(repo, proj, b), [])
+                # a later commit on top of the reviewed detached head is still its next round
+                g("checkout", "-q", "--detach", a2)
+                self.assertEqual(V.previous_review(repo, proj, a2, base)[0], a)
+                # the same history on a named branch keeps the amend rule (unchanged behaviour)
+                g("checkout", "-qb", "y", b)
+                U.write_json(os.path.join(home, "projects", proj, "branches.json"), {"y": [a]})
+                self.assertEqual(V.previous_review(repo, proj, b, base)[0], a)
+            finally:
+                V.HOME, U.HOME = old
+
+    def test_carry_forward_ignores_other_detached_heads(self):
+        with tempfile.TemporaryDirectory() as d:
+            home = os.path.join(d, "home"); repo = os.path.join(d, "r"); os.makedirs(repo)
+            g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True,
+                                          env=dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+                                                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")).stdout.decode().strip()
+            g("init", "-q", "-b", "main"); open(os.path.join(repo, "f"), "w").write("1\n2\n3\n"); open(os.path.join(repo, "g"), "w").write("g\n")
+            g("add", "f", "g"); g("commit", "-qm", "b"); base = g("rev-parse", "HEAD")
+            open(os.path.join(repo, "f"), "w").write("1\nX\n3\n"); g("commit", "-qam", "pr1"); a = g("rev-parse", "HEAD")
+            g("checkout", "-q", "--detach", base)
+            open(os.path.join(repo, "f"), "w").write("1\nX\n3\n"); open(os.path.join(repo, "g"), "w").write("h\n")
+            g("commit", "-qam", "pr2"); b = g("rev-parse", "HEAD")
+            old = (V.HOME, U.HOME)
+            V.HOME = U.HOME = home
+            try:
+                proj = "r"
+                os.makedirs(os.path.join(home, "projects", proj)); os.makedirs(os.path.join(home, "reviews", proj, a))
+                fnd = {"id": "f-2-x", "file": "f", "line": 2, "title": "t", "severity": "low"}
+                U.write_json(os.path.join(home, "projects", proj, "branches.json"), {"HEAD": [a]})
+                U.write_json(os.path.join(home, "reviews", proj, a, "review.json"), {"findings": [fnd]})
+                U.write_json(os.path.join(home, "reviews", proj, a, "answers.json"), {"f-2-x": {"answer": "wontfix: pr1's reason"}})
+                record = {"findings": [dict(fnd)]}
+                V.carry_forward(repo, proj, b, record)
+                self.assertNotIn("carried_answers", record)
+                self.assertFalse(os.path.exists(os.path.join(home, "reviews", proj, b, "answers.json")))
+            finally:
+                V.HOME, U.HOME = old
+
 class TestEvalScoring(unittest.TestCase):
     def test_hits_and_scores(self):
         from crucible import evalrun as E
