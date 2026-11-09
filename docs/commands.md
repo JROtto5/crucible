@@ -34,7 +34,7 @@ Reviews HEAD against the branch the PR targets. The default base is `upstream/<d
 
 Exit code 0 means GREEN. The report is printed and saved next to `review.json` in `~/.crucible/reviews/<owner>__<name>/<sha>/`. Its header gives the cost and the tokens used.
 
-Readiness checks whether the linked issue is still unclaimed and whether another open PR changes the same lines. Your own assignment and your own PRs don't count against you. "You" is `CRUCIBLE_GH_USER` if set, else the account `gh` is logged in as. If neither is available, nobody is skipped, and a failing check says so.
+Readiness checks whether the linked issue is still unclaimed and whether another open PR changes the same lines. Your own assignment and your own PRs don't count against you. "You" is `CRUCIBLE_GH_USER` if set, else the account `gh` is logged in as. If neither is available, nobody is skipped, and both checks say so when they flag something.
 
 ## status
 

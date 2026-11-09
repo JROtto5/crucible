@@ -1791,6 +1791,17 @@ class TestClaimOwner(unittest.TestCase):
         finally:
             R.gh_json, R.upstream_slug = orig
 
+    def test_gh_not_installed_is_a_failed_call(self):
+        # a stranger without gh: the review used to end in "FileNotFoundError: gh" (self-review, dropped as pre-existing)
+        from unittest import mock
+
+        def no_gh(*a, **k):
+            raise FileNotFoundError("gh")
+        with mock.patch.object(U.subprocess, "run", no_gh):
+            self.assertIsNone(U.gh_json("user"))
+            with self.assertRaises(U.Failed):
+                U.gh_json("user", check=True)
+
     def test_missing_gh_is_an_unknown_login(self):
         orig, env = R.gh_json, os.environ.pop("CRUCIBLE_GH_USER", None)
 
@@ -1971,6 +1982,16 @@ class TestOverlappingPRs(unittest.TestCase):
         it = R.overlapping_prs(".", self.OURS, "me")
         self.assertEqual(it["status"], "warn")
         self.assertIn("#7005", it["evidence"])
+
+    def test_own_pr_is_skipped_case_insensitively_and_unknown_login_says_so(self):
+        # self-review CR-85a28de2: the unknown-login hint was only on the unclaimed check
+        self.stub({None: self.page([(7005, "Alice", "User", ["src/new_helper.ts"])], 1)},
+                  {7005: [{"filename": "src/new_helper.ts", "patch": "@@ -0,0 +1,40 @@"}]})
+        self.assertEqual(R.overlapping_prs(".", self.OURS, "alice")["status"], "pass")
+        it = R.overlapping_prs(".", self.OURS, None)
+        self.assertEqual(it["status"], "warn")
+        self.assertIn("CRUCIBLE_GH_USER", it["evidence"])
+        self.assertNotIn("CRUCIBLE_GH_USER", R.overlapping_prs(".", self.OURS, "bob")["evidence"])
 
     def test_unreadable_api_warns_and_pages_are_capped(self):
         calls = self.stub({}, {})

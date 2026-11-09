@@ -709,7 +709,7 @@ def overlapping_prs(repo, files, me=None):
                       f"{', '.join(meet[:3])}{f' +{len(meet) - 3} more' if len(meet) > 3 else ''}" for pr, meet in hits[:5])
     more = f"; +{len(hits) - 5} more" if len(hits) > 5 else ""
     return _item(name, "warn", f"{shown}{more}. Read them before submitting: same code, possibly the same fix "
-                               f"({'; '.join(notes)})")
+                               f"({'; '.join(notes)})" + ("" if me else UNKNOWN_ME))
 
 
 def commit_attribution(repo, base):

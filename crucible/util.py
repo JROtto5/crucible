@@ -296,7 +296,12 @@ def claude(prompt, model, schema, cwd, budget=None, tools=TOOLS_READ, effort="hi
 
 
 def gh_json(*args, check=False):
-    r = subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=120)
+    try:
+        r = subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as e:     # gh not installed, or hung: same as a failed call
+        if check:
+            raise Failed(f"gh api {' '.join(args)}: {e}")
+        return None
     if r.returncode != 0:
         if check:
             raise Failed(f"gh api {' '.join(args)}: {r.stderr.strip()[:300]}")
