@@ -3714,3 +3714,154 @@ class TestBodyWordsSkipsFoldedCode(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTokenMetering(unittest.TestCase):
+    """BLAZE exchange 2026-11-09: the shared headline is tokens per held-up finding. Each model call's usage is kept
+    per model, summed into review.json (review passes vs verification), and `stats` prints tokens per review and per
+    held-up finding. A review without complete counts is "not recorded", never 0."""
+
+    @staticmethod
+    def _run(payloads):
+        from unittest import mock
+        it = iter(payloads)
+
+        def fake_run(cmd, **kw):
+            p = next(it)
+            if p == "timeout":
+                raise subprocess.TimeoutExpired(cmd, 1)
+            return subprocess.CompletedProcess(cmd, 0, p if isinstance(p, str) else json.dumps(p), "")
+        b = U.Budget(None)
+        with mock.patch.object(U.subprocess, "run", fake_run):
+            for _ in payloads:
+                try:
+                    U.claude("p", "req-model", {"type": "object"}, ".", b)
+                except U.Failed:
+                    pass
+        return b
+
+    def test_claude_meters_usage_per_model(self):
+        ok = {"structured_output": {}, "total_cost_usd": 0.1}
+        b = self._run([
+            # modelUsage wins over usage and keeps every model the CLI used
+            dict(ok, usage={"input_tokens": 999}, modelUsage={
+                "opus": {"inputTokens": 10, "outputTokens": 5, "cacheReadInputTokens": 100, "cacheCreationInputTokens": 20},
+                "haiku": {"inputTokens": 1, "outputTokens": 2}}),
+            # top-level usage only: filed under the requested model
+            dict(ok, usage={"input_tokens": 3, "output_tokens": 4, "cache_read_input_tokens": 0,
+                            "cache_creation_input_tokens": 7}),
+            # a failed call that still reports usage is metered (its tokens were spent)
+            {"is_error": True, "subtype": "error_max_turns", "modelUsage": {"opus": {"outputTokens": 1}}},
+            ok,                       # no usage at all
+            "not json",               # unreadable output
+            "timeout",
+        ])
+        tokens, unmetered = b.token_snapshot()
+        self.assertEqual(tokens, {
+            "opus": {"input": 10, "output": 6, "cache_read": 100, "cache_creation": 20},
+            "haiku": {"input": 1, "output": 2, "cache_read": 0, "cache_creation": 0},
+            "req-model": {"input": 3, "output": 4, "cache_read": 0, "cache_creation": 7}})
+        self.assertEqual(unmetered, 3)
+        self.assertAlmostEqual(b.spent, 0.3)
+        s = U.token_summary(tokens, unmetered)
+        self.assertEqual((s["total"], s["input"], s["output"], s["cache_read"], s["cache_creation"]),
+                         (153, 14, 12, 100, 27))
+        self.assertEqual(s["unmetered_calls"], 3)
+
+    def test_review_and_verify_split(self):
+        b = U.Budget(None)
+        b.meter({"m": {"input": 1, "output": 1, "cache_read": 0, "cache_creation": 0}})   # before the passes
+        before = b.token_snapshot()
+        b.meter({"m": {"input": 10, "output": 5, "cache_read": 0, "cache_creation": 0}})
+        b.meter(None)
+        after = b.token_snapshot()
+        b.meter({"v": {"input": 2, "output": 2, "cache_read": 4, "cache_creation": 0}})
+        t = V.token_fields(b, (before, after))
+        self.assertEqual((t["tokens_review"]["total"], t["tokens_review"]["unmetered_calls"]), (15, 1))
+        self.assertEqual(t["tokens_review"]["by_model"], {"m": {"input": 10, "output": 5, "cache_read": 0, "cache_creation": 0}})
+        self.assertEqual((t["tokens_verify"]["total"], t["tokens_verify"]["unmetered_calls"]), (10, 0))
+        self.assertEqual(set(t["tokens_verify"]["by_model"]), {"m", "v"})
+        # failed before the passes: everything is on the verify side, nothing is lost
+        t = V.token_fields(b, None)
+        self.assertEqual((t["tokens_review"]["total"], t["tokens_verify"]["total"]), (0, 25))
+        rev = {"tokens_review": {"total": 1500, "unmetered_calls": 0}, "tokens_verify": {"total": 25, "unmetered_calls": 1}}
+        self.assertEqual(V.tokens_note(rev), " · at least 1,525 tokens (review 1,500, verify 25; 1 call(s) reported no usage)")
+        self.assertEqual(V.tokens_note({"cost_usd": 1}), "")
+
+    def test_stats_tokens_per_held_up_on_metered_reviews_only(self):
+        from crucible import stats as ST
+        f = TestStats._f
+
+        def tok(total, unm=0):
+            return {"total": total, "input": total, "output": 0, "cache_read": 0, "cache_creation": 0,
+                    "by_model": {}, "unmetered_calls": unm}
+        with tempfile.TemporaryDirectory() as root:
+            # legacy review: a held-up finding but no tokens; it must not dilute the ratio
+            TestStats._store(root, "o__p", "s0", [f("CR-0", "old")], answers={"CR-0": {"disposition": "fixed", "at": "1"}})
+            self.assertIn("Tokens: not recorded", ST.report(ST.collect(root)))
+            self.assertEqual(json.loads(ST.to_json(ST.collect(root)))["tokens"], {"answered": False, "reason": "not recorded"})
+            TestStats._store(root, "o__p", "s1", [f("CR-1", "a"), f("CR-2", "b"), f("CR-3", "c")],
+                             answers={"CR-1": {"disposition": "fixed", "at": "1"}, "CR-2": {"disposition": "refuted", "at": "1"}})
+            for sha, t in (("s1", (9000, 1000)), ("s2", (1000, 1000)), ("s3", (5000, 0))):
+                if sha != "s1":
+                    TestStats._store(root, "o__p", sha, [f("CR-4" + sha, "d" + sha)],
+                                     answers={"CR-4s2": {"disposition": "deferred", "at": "1"}} if sha == "s2" else None)
+                p = os.path.join(root, "o__p", sha, "review.json")
+                rev = U.read_json(p)
+                rev.update(tokens_review=tok(t[0]), tokens_verify=tok(t[1], unm=1 if sha == "s3" else 0))
+                U.write_json(p, rev)
+            s = ST.collect(root)
+            t = ST.tokens(s)
+            # s0 has no tokens and s3 had an unmetered call: 2 of 4 metered, 12,000 tokens, held up CR-1 + CR-4s2
+            self.assertEqual((t["metered_reviews"], t["reviews"], t["total"], t["review"], t["verify"]), (2, 4, 12000, 10000, 2000))
+            self.assertEqual((t["per_review"], t["held_up"], t["per_held_up"]), (6000, {"held": 2, "answered": 3}, 6000))
+            self.assertEqual(ST.held_up(s["overall"]), (3, 4))      # the overall precision still counts every review
+            text = ST.report(s)
+            self.assertIn("Tokens (2 of 4 reviews metered): 6,000 per review", text)
+            self.assertIn("Tokens per held-up finding: 6,000 (2/3 held up in the metered reviews", text)
+            self.assertIn("too few to quote", text)
+            self.assertEqual(json.loads(ST.to_json(s))["tokens"]["per_held_up"], 6000)
+            self.assertEqual(ST.collect(root, project="o/q")["metered"]["metered_reviews"], 0)
+
+    def test_run_review_stores_tokens(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo, home = os.path.join(d, "r"), os.path.join(d, "home")
+            os.makedirs(os.path.join(repo, "src"))
+            env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
+                       GIT_COMMITTER_EMAIL="t@t", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+            g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True, env=env)
+            open(os.path.join(repo, "src/a.js"), "w").write("export const a = 1;\n")
+            g("init", "-q", "-b", "main"); g("add", "-A"); g("commit", "-qm", "base"); g("checkout", "-qb", "x")
+            open(os.path.join(repo, "src/a.js"), "w").write("export const a = 1;\nexport const f = xs => xs[xs.length];\n")
+            g("commit", "-qam", "f")
+
+            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
+                review = "findings" in schema["properties"]
+                budget.add(0.01)
+                budget.meter({model: {"input": 100 if review else 7, "output": 10, "cache_read": 0, "cache_creation": 0}})
+                if review:
+                    return {"summary": "s", "findings": [
+                        {"severity": "medium", "file": "src/a.js", "line": 2, "title": "f reads past the end",
+                         "problem": "p", "caused_by_this_change": True, "reachable_in_real_use": True,
+                         "wrong_if": "w", "fix": "x"}]}, 0.01
+                return {"keep": True, "severity": "medium", "method": "read", "actions": "a", "evidence": "e",
+                        "confidence": "high"}, 0.01
+
+            olds = (V.HOME, U.HOME, V.claude, os.environ.get("CRUCIBLE_CACHE"))
+            V.HOME = U.HOME = home
+            os.environ["CRUCIBLE_CACHE"] = os.path.join(home, "cache")
+            V.claude = fake
+            try:
+                out = V.run_review(repo, "main", offline=True, skip_checks=True, log=lambda *_: None)
+                rev = U.read_json(os.path.join(out, "review.json"))
+                self.assertEqual(rev["status"], "done", rev.get("reason"))
+                self.assertEqual(rev["tokens_review"]["total"], 110)
+                self.assertEqual(rev["tokens_verify"]["total"], 17)   # one confident cheap-tier verdict, no escalation
+                self.assertEqual(rev["tokens_review"]["unmetered_calls"] + rev["tokens_verify"]["unmetered_calls"], 0)
+                self.assertIn("tokens (review 110, verify", V.report(rev, {}))
+            finally:
+                V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
+                if olds[3] is None:
+                    os.environ.pop("CRUCIBLE_CACHE", None)
+                else:
+                    os.environ["CRUCIBLE_CACHE"] = olds[3]

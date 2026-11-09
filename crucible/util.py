@@ -162,9 +162,66 @@ def exclude_locally(repo, names=("PR_DRAFT.md", "PR_DRAFT.polished.md", "PR_DRAF
             fh.write(("\n" if have and not have.endswith("\n") else "") + "\n".join(add) + "\n")
 
 
+TOKEN_FIELDS = (("input", "inputTokens", "input_tokens"), ("output", "outputTokens", "output_tokens"),
+                ("cache_read", "cacheReadInputTokens", "cache_read_input_tokens"),
+                ("cache_creation", "cacheCreationInputTokens", "cache_creation_input_tokens"))
+TOKEN_KINDS = tuple(k for k, _, _ in TOKEN_FIELDS)
+
+
+def usage_of(d, model):
+    """-> {model: {input, output, cache_read, cache_creation}} from one `claude -p` JSON result, or None when it
+    reports no usage. Prefers `modelUsage` (per model, including any helper model the CLI used) over the top-level
+    `usage`, which is filed under the requested model."""
+    mu = d.get("modelUsage")
+    if isinstance(mu, dict):
+        out = {m: {k: int(u.get(camel) or 0) for k, camel, _ in TOKEN_FIELDS}
+               for m, u in mu.items() if isinstance(u, dict)}
+        if out:
+            return out
+    u = d.get("usage")
+    if isinstance(u, dict) and any(snake in u for _, _, snake in TOKEN_FIELDS):
+        return {model: {k: int(u.get(snake) or 0) for k, _, snake in TOKEN_FIELDS}}
+    return None
+
+
+def token_summary(by_model, unmetered=0):
+    """Token counts per model -> {"total", each kind, "by_model", "unmetered_calls"}. total = all four kinds.
+    unmetered_calls counts model calls that reported no usage (a timeout, unreadable output): the totals then
+    undercount, and `stats` treats the review as not recorded rather than quote a low figure."""
+    out = {k: sum(u.get(k, 0) for u in by_model.values()) for k in TOKEN_KINDS}
+    return {"total": sum(out.values()), **out, "by_model": {m: dict(u) for m, u in sorted(by_model.items())},
+            "unmetered_calls": unmetered}
+
+
+def token_diff(after, before):
+    """Per-model token counts in `after` that weren't in `before` (two Budget.token_snapshot() results)."""
+    out = {}
+    for m, u in after.items():
+        d = {k: u.get(k, 0) - before.get(m, {}).get(k, 0) for k in TOKEN_KINDS}
+        if any(d.values()):
+            out[m] = d
+    return out
+
+
 class Budget:
     def __init__(self, limit):
         self.limit, self.spent, self.lock = limit, 0.0, threading.Lock()
+        self.tokens, self.unmetered = {}, 0      # model -> token counts; calls that reported no usage
+
+    def meter(self, usage):
+        """Record one model call's usage (usage_of's result); None counts the call as unmetered."""
+        with self.lock:
+            if usage is None:
+                self.unmetered += 1
+                return
+            for m, u in usage.items():
+                t = self.tokens.setdefault(m, dict.fromkeys(TOKEN_KINDS, 0))
+                for k in TOKEN_KINDS:
+                    t[k] += u.get(k, 0)
+
+    def token_snapshot(self):
+        with self.lock:
+            return {m: dict(u) for m, u in self.tokens.items()}, self.unmetered
 
     def remaining(self):
         return None if self.limit is None else max(0.0, self.limit - self.spent)
@@ -210,13 +267,20 @@ def claude(prompt, model, schema, cwd, budget=None, tools=TOOLS_READ, effort="hi
     try:
         r = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, input=prompt, timeout=timeout)
     except subprocess.TimeoutExpired:
+        if budget:
+            budget.meter(None)      # it may well have used tokens; unknown is not zero
         raise Failed(f"model call timed out after {timeout}s")
     try:
         d = json.loads(r.stdout)
+        if not isinstance(d, dict):
+            raise ValueError
     except ValueError:
+        if budget:
+            budget.meter(None)
         raise Failed(f"model call failed: {(r.stderr or r.stdout)[-500:]}")
     if budget:
         budget.add(d.get("total_cost_usd", 0))
+        budget.meter(usage_of(d, model))
     if not d.get("is_error") and "structured_output" not in d and d.get("subtype") == "success" \
             and isinstance(d.get("result"), str) and d["result"].strip():
         raise NoStructuredOutput(f"model call failed (success): {d['result'][:500]}", d["result"])

@@ -10,11 +10,16 @@ A unique finding is "kept" if verification kept it in any round, "dropped" if it
 the latest one given to any of its ids (answers are carried by id, so a fixed finding stays fixed).
 
 `since` keeps the reviews that finished at or after it (a finding counts in the window if a round in the window
-showed it; its answer may come from any round). Every report says what it read and how new the newest review is, and a window with no reviews prints
+showed it; its answer may come from any round).
+
+Tokens: a review is metered when it stored `tokens_review` and `tokens_verify` and every model call in it reported
+its usage. Reviews from before token metering, or with a call that reported none, are "not recorded", never 0.
+Tokens per held-up finding is computed on the metered reviews alone (their tokens over the findings that held up
+among them), so the two halves of the ratio always cover the same reviews. Every report says what it read and how new the newest review is, and a window with no reviews prints
 "no data", never a row of zeros: a store that stopped being written looks exactly like a quiet day otherwise."""
 import collections, glob, json, math, os, re
 
-from .util import SEV, read_json
+from .util import SEV, TOKEN_KINDS, read_json
 
 DISPOSITIONS = ("fixed", "deferred", "refuted")
 
@@ -58,6 +63,12 @@ def wilson(k, n, z=1.96):
     return max(0.0, c - h), min(1.0, c + h)
 
 
+def metered(rev):
+    """True when a stored review has complete token counts (see the module note)."""
+    tr, tv = rev.get("tokens_review"), rev.get("tokens_verify")
+    return bool(tr and tv) and not (tr.get("unmetered_calls") or tv.get("unmetered_calls"))
+
+
 def _load(root, include_self, project, since=None):
     reviews, answers, seen = [], {}, []
     for p in sorted(glob.glob(os.path.join(root, "*", "*", "review.json"))):
@@ -83,10 +94,14 @@ def _load(root, include_self, project, since=None):
     return reviews, answers, window
 
 
-def collect(root, include_self=False, project=None, since=None):
-    """-> {"overall": row, "projects": {repo: row}, "window": {...}}. A row counts unique findings, plus the reviews
-    and their cost. "window" says what was read: stored reviews, the newest one's time, and how many fell in `since`."""
+def collect(root, include_self=False, project=None, since=None, metered_only=False):
+    """-> {"overall": row, "projects": {repo: row}, "window": {...}, "metered": row}. A row counts unique findings,
+    plus the reviews, their cost and tokens. "window" says what was read: stored reviews, the newest one's time, and
+    how many fell in `since`. "metered" is the overall row over the metered reviews only (for tokens per held-up
+    finding); `metered_only` restricts everything to them."""
     reviews, answers, window = _load(root, include_self, project, since)
+    if metered_only:
+        reviews = [(repo, rev) for repo, rev in reviews if metered(rev)]
     g, findings = _Groups(), []                    # findings: (repo, id, title_key, kept, severity)
     for repo, rev in reviews:
         for f, kept in [(f, True) for f in rev.get("findings", [])] + [(f, False) for f in rev.get("dropped", [])]:
@@ -108,7 +123,8 @@ def collect(root, include_self=False, project=None, since=None):
 
     def row():
         return {"unique": 0, "kept": 0, "dropped": 0, "kept_by_severity": collections.Counter(),
-                "fixed": 0, "deferred": 0, "refuted": 0, "unanswered": 0, "reviews": 0, "cost": 0.0}
+                "fixed": 0, "deferred": 0, "refuted": 0, "unanswered": 0, "reviews": 0, "cost": 0.0,
+                "metered_reviews": 0, "tokens": dict.fromkeys(("total", "review", "verify") + TOKEN_KINDS, 0)}
     overall, per = row(), collections.defaultdict(row)
     for u in uniq.values():
         latest = None
@@ -128,7 +144,19 @@ def collect(root, include_self=False, project=None, since=None):
         for r in (overall, per[repo]):
             r["reviews"] += 1
             r["cost"] += rev.get("cost_usd") or 0
-    return {"overall": overall, "projects": dict(sorted(per.items())), "window": window}
+            if metered(rev):
+                r["metered_reviews"] += 1
+                t = r["tokens"]
+                for part in ("review", "verify"):
+                    p = rev[f"tokens_{part}"]
+                    t[part] += p.get("total", 0)
+                    t["total"] += p.get("total", 0)
+                    for k in TOKEN_KINDS:
+                        t[k] += p.get(k, 0)
+    out = {"overall": overall, "projects": dict(sorted(per.items())), "window": window}
+    if not metered_only:
+        out["metered"] = collect(root, include_self, project, since, metered_only=True)["overall"]
+    return out
 
 
 def held_up(r):
@@ -182,11 +210,43 @@ def report(s):
             out.append(f"Held up covers only answered findings: {o['unanswered']} of {o['kept']} kept are unanswered.")
             if h[0]:
                 out.append(f"Cost per held-up finding: ${o['cost'] / h[0]:.2f} (${o['cost']:.2f} over {h[0]}).")
+    out.append(tokens_line(s))
     if w["since"]:
         out.append(f"Window: reviews finished since {w['since'].replace('T', ' ')}: {w['in_window']} of {w['stored']}.")
     out.append(_source(w))
     out.append("Counts are unique findings (same id, or same title in one project, count once); model findings only.")
     return "\n".join(out)
+
+
+def tokens(s):
+    """The token figures, or None when no review in the window was metered."""
+    m = s.get("metered") or {}
+    n = m.get("metered_reviews", 0)
+    if not n:
+        return None
+    t, h = m["tokens"], held_up(m)
+    return {"metered_reviews": n, "reviews": s["overall"]["reviews"], **t, "per_review": round(t["total"] / n),
+            "held_up": {"held": h[0], "answered": h[1]} if h else None,
+            "per_held_up": round(t["total"] / h[0]) if h and h[0] else None}
+
+
+def tokens_line(s):
+    t = tokens(s)
+    if not t:
+        return ("Tokens: not recorded (no review here has complete token counts; reviews before token metering "
+                "stored cost only).")
+    parts = ", ".join(f"{k.replace('_', ' ')} {t[k]:,}" for k in TOKEN_KINDS)
+    line = (f"Tokens ({t['metered_reviews']} of {t['reviews']} reviews metered): {t['per_review']:,} per review "
+            f"({t['total']:,} in all: {parts}; review passes {t['review']:,}, verification {t['verify']:,}). ")
+    h = t["held_up"]
+    if not h:
+        return line + "Tokens per held-up finding: none answered yet in the metered reviews."
+    if not h["held"]:
+        return line + f"Tokens per held-up finding: none held up ({h['answered']} answered in the metered reviews)."
+    lo, hi = wilson(h["held"], h["answered"])
+    quote = "" if h["answered"] >= QUOTE_N else f"; n={h['answered']} < {QUOTE_N}, too few to quote as a rate"
+    return line + (f"Tokens per held-up finding: {t['per_held_up']:,} ({h['held']}/{h['answered']} held up in the "
+                   f"metered reviews, Wilson 95% {lo:.0%}-{hi:.0%}{quote}).")
 
 
 def to_json(s):
@@ -199,4 +259,5 @@ def to_json(s):
     return json.dumps({"answered": True, "overall": plain(s["overall"]),
                        "projects": {k: plain(v) for k, v in s["projects"].items()}, "window": s["window"],
                        "held_up": {"held": h[0], "answered": h[1], "wilson95": [round(ci[0], 4), round(ci[1], 4)],
-                                   "quotable": h[1] >= QUOTE_N} if h else None}, indent=1)
+                                   "quotable": h[1] >= QUOTE_N} if h else None,
+                       "tokens": tokens(s) or {"answered": False, "reason": "not recorded"}}, indent=1)

@@ -4,7 +4,7 @@ from . import catalog, checks as checks_mod, diff as diff_mod, readiness, routin
 from .util import (BLOCKING, HOME, MODELS, PREFERENCE, SEV, TOOLS_RUN, Budget, Failed, NoStructuredOutput,
                    claude, default_base,
                    exclude_locally, git, is_dirty, norm_words, project_dir, project_key, read_json, review_dir,
-                   stable_id, write_json)
+                   stable_id, token_diff, token_summary, write_json)
 
 SEVERITY_DEFS = """Severity definitions (use them literally):
 - critical: data loss or corruption, a security hole, or a crash/hang in normal use; or the change does not do what it claims.
@@ -342,6 +342,18 @@ def salvage_verdict(f, text, repo, budget):
     return dict(v, salvaged=True, confidence="low" if v.get("confidence") == "low" else "medium")
 
 
+def token_fields(budget, split):
+    """review.json's token fields: the review passes (the calls between the two snapshots in `split`) and
+    everything else (verification, salvage, re-checks), each with its own count of calls that reported no usage.
+    With no split (the review failed before its passes ran), every call so far counts on the verify side, as its
+    cost does."""
+    end, end_unm = budget.token_snapshot()
+    (b, b_unm), (r, r_unm) = split or (({}, 0), ({}, 0))
+    rev = token_diff(r, b)
+    return {"tokens_review": token_summary(rev, r_unm - b_unm),
+            "tokens_verify": token_summary(token_diff(end, rev), end_unm - (r_unm - b_unm))}
+
+
 def needs_escalation(v):
     """After the cheap tier: escalate when the claim survived at a blocking severity, or the verifier wasn't sure.
     A confident drop or a confident keep at medium/low is final."""
@@ -586,7 +598,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         if stale:
             log(f"  re-reviewing this commit: {stale}")
     started = dt.datetime.now().isoformat(timespec="seconds")
-    budget = Budget(budget_usd)
+    budget, tok_split = Budget(budget_usd), None
     record = {"repo": project, "sha": sha, "base": base, "base_ref": base_ref, "started": started, "status": "running",
               "inputs": inputs}
     try:
@@ -665,6 +677,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         cands, chunk_status, summaries = list(scanner) + house_findings, [], []
         measured = length_measured(style_json)
         fkey, review_cost = facts_key(chk), 0.0
+        tok_before = budget.token_snapshot()       # review passes run one after another, before any verification
         for i, ch in enumerate(chunks, 1):
             prompt = review_prompt(project, sha, base, ch, rules, mem, facts, clog, all_files, house,
                                    draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured)
@@ -692,6 +705,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 if f["file"] == dlabel and draft_path:
                     f["line"] = readiness.draft_file_line(draft_full, f["line"])
                 cands.append(f)
+        tok_split = (tok_before, budget.token_snapshot())
         reviewed = {p for c in chunk_status if c["status"] == "reviewed" for p in c["files"]}
         if prev_sha:                                   # files untouched since the previous complete review stay covered
             reviewed |= set(code_files) - set(record["incremental"]["files"])
@@ -806,6 +820,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         record.update(status="failed", reason=str(e), cost_usd=round(budget.spent, 4))
     except Exception as e:  # noqa: BLE001 - never leave a half-written review
         record.update(status="failed", reason=f"{type(e).__name__}: {e}", cost_usd=round(budget.spent, 4))
+    record.update(token_fields(budget, tok_split))
     write_json(os.path.join(d, "review.json"), record)
     branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD", check=False)
     idx_p = os.path.join(project_dir(project), "branches.json")
@@ -902,6 +917,17 @@ def transcribed_note(vf):
     return " (transcribed from the verifier's prose)" if ((vf.get("tiers") or [{}])[-1]).get("salvaged") else ""
 
 
+def tokens_note(rev):
+    """' · 123,456 tokens (review 100,000, verify 23,456)' for the report header; empty for a review stored before
+    token metering, and marked as a lower bound when a call reported no usage."""
+    tr, tv = rev.get("tokens_review"), rev.get("tokens_verify")
+    if not tr or not tv:
+        return ""
+    unm = tr.get("unmetered_calls", 0) + tv.get("unmetered_calls", 0)
+    return (f" · {'at least ' if unm else ''}{tr['total'] + tv['total']:,} tokens (review {tr['total']:,}, "
+            f"verify {tv['total']:,}{f'; {unm} call(s) reported no usage' if unm else ''})")
+
+
 def report(rev, ans, waivers=None):
     """waivers: {readiness item name: reason} for this branch. A waived failing item no longer blocks readiness."""
     waivers = waivers or {}
@@ -919,7 +945,7 @@ def report(rev, ans, waivers=None):
          + (f" · catalogs read as a digest of their entries: {', '.join(cov['digested'])}" if cov.get("digested") else ""),
          f"- models: review `{rev['review_model']}`, verify `{' → '.join(rev.get('verify_tiers') or [rev['verify_model']])}`"
          f" · author {rev.get('author_models') or 'unknown'}",
-         f"- base `{rev['base_ref']}` (merge-base {rev['base'][:10]}) · cost ${rev['cost_usd']}"
+         f"- base `{rev['base_ref']}` (merge-base {rev['base'][:10]}) · cost ${rev['cost_usd']}" + tokens_note(rev)
          + (" · BUDGET EXHAUSTED" if rev.get("budget_exhausted") else ""),
          *([f"- incremental since `{rev['incremental']['from'][:10]}`: {len(rev['incremental']['files'])} file(s) re-reviewed, "
             f"{rev['incremental']['carried']} finding(s) carried, {rev['incremental']['reverified']} re-verified"]
