@@ -9,7 +9,10 @@ the next model in the preference list), so an arm is a configuration crucible wo
 Findings get their ids from their titles, so a finding another model words differently has a different id. A replayed
 finding matches a labelled one when it is on the same file and close to the same line, with some wording in common
 (`match`); each labelled finding matches at most one. A replayed finding that matches nothing has no label: it is
-counted, and listed for a person to judge, never scored. Only code findings are compared. A finding on the PR draft
+counted, and listed for a person to judge, never scored. Labels exist only for findings the stored round's reviewer
+(the first model) raised, so recall of held-up findings favours that arm by construction: another model's own real
+findings show up as unlabelled, never as wins. Comparing how many false alarms each arm re-raises is fair; held-up
+recall is a floor for the other arms, not a head-to-head. Only code findings are compared. A finding on the PR draft
 can't be scored across rounds the same way (the draft's text isn't stored, only its hash); the draft is passed to
 the replay when its current text still has the stored hash, so the reviewer sees the same prompt, and left out
 otherwise.
@@ -160,7 +163,7 @@ def draft_still_matches(r):
 
 
 def run_arm(clone, r, model, tmp, budget=None, log=print):
-    label = next((k for k, v in MODELS.items() if v == model), model)
+    label = short(model)
     tree, home = _prepare(clone, r, tmp, label)
     cmd = [sys.executable, "-m", "crucible", "review", tree, "--base", r["base"], "--full", "--fresh", "--force",
            "--no-exec", "--offline"]
@@ -171,17 +174,28 @@ def run_arm(clone, r, model, tmp, budget=None, log=print):
         cmd += ["--budget", str(budget)]
     env = dict(os.environ, CRUCIBLE_HOME=home, CRUCIBLE_CACHE=os.path.join(home, "cache"), CRUCIBLE_REVIEW_MODEL=model)
     env.pop("CRUCIBLE_VERIFY_MODEL", None)          # each arm gets the verifier review would pick for its reviewer
-    env["PYTHONPATH"] = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + os.pathsep + env.get("PYTHONPATH", "")
+    # an empty PYTHONPATH entry would add the cwd to the child's import path
+    env["PYTHONPATH"] = os.pathsep.join(p for p in (os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                                    env.get("PYTHONPATH")) if p)
     p = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=3600)
     review = read_json(os.path.join(home, "reviews", r["repo"], r["sha"], "review.json"))
     if p.returncode not in (0, 1) or not review or review.get("status") != "done":
         raise Failed(f"{r['repo']} {r['sha'][:10]} {label}: review did not finish ({(p.stderr or p.stdout)[-300:]})")
+    # a round whose review chunks failed (an unknown model id, a usage limit) is "done" with no findings: it would
+    # score as a clean zero instead of being left out
+    if not (review.get("coverage") or {}).get("complete", True):
+        raise Failed(f"{r['repo']} {r['sha'][:10]} {label}: review incomplete (a review chunk failed)")
     review["_draft_passed"] = bool(draft)
     return review
 
 
+def short(model):
+    return next((k for k, v in MODELS.items() if v == model), model)
+
+
 def run(root, clones, models, n=5, budget=None, include_self=False, log=print):
     """Pairs: every arm on the same n rounds. A round where any arm fails is left out of all of them."""
+    models = list(dict.fromkeys(models))      # an arm named twice would be run twice and counted twice
     cands = rounds(root, models[0], include_self)
     repos = anchoring.find_clones(clones)
     have = []
@@ -223,10 +237,13 @@ def totals(rows, models):
 
 
 def report(rows, skipped, models):
+    models = list(dict.fromkeys(models))
     t = totals(rows, models)
     out = [f"Reviewer replay: {len(rows)} stored full rounds, each re-reviewed by every arm at its commit and base "
            "(--no-exec --offline --full --fresh). Labels are the author's answers on the stored round: "
-           "fixed/deferred = held up, refuted = false alarm. Code findings only."]
+           "fixed/deferred = held up, refuted = false alarm. Code findings only.",
+           f"Labels come only from what {short(models[0])} raised in the stored round, so held-up recall favours it; "
+           "the other arms' own real findings are among the unlabelled ones below."]
     out += [f"  skipped {v}: {k}" for k, v in skipped.items() if v]
     for m in models:
         s = t[m]
@@ -237,7 +254,7 @@ def report(rows, skipped, models):
                    f"{s['tokens']:,} tokens; $ per held-up finding kept {per}")
     out += ["", "Per round (held kept / false alarms kept / unlabelled kept / $):"]
     for r in rows:
-        cells = "  ".join(f"{m.split('-')[1]} {a['kept_held']}/{a['kept_refuted']}/{len(a['unlabelled'])}/${a['cost']:.2f}"
+        cells = "  ".join(f"{short(m)} {a['kept_held']}/{a['kept_refuted']}/{len(a['unlabelled'])}/${a['cost']:.2f}"
                           + (" (stopped by --budget)" if a.get("budget_hit") else "")
                           for m, a in r["arms"].items())
         out.append(f"  {r['repo']} {r['sha'][:10]} (held {r['arms'][models[0]]['held']}, refuted "

@@ -4671,11 +4671,6 @@ class TestTokenMetering(unittest.TestCase):
                     os.environ["CRUCIBLE_CACHE"] = olds[3]
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
-
 class TestModelReplay(unittest.TestCase):
     """`crucible model-replay`: reviewer models re-review stored full rounds, scored by the author's answers."""
     L = {"id": "CR-a", "file": "a.py", "line": 10, "severity": "medium", "source": "review",
@@ -4811,3 +4806,67 @@ class TestModelReplay(unittest.TestCase):
                 os.environ.pop("CRUCIBLE_VERIFY_MODEL", None)
                 shutil.rmtree(proj, ignore_errors=True)
             self.assertFalse(os.path.exists(os.path.join(U.HOME, "reviews", "o__p")))
+
+    def test_report_takes_any_model_id_and_counts_a_repeated_arm_once(self):
+        from crucible import modelreplay as M
+        a = M.score_arm({"labelled": [dict(self.L, disposition="fixed")], "inputs": {}}, {"findings": [dict(self.L)]})
+        rows = [{"repo": "o__p", "sha": "s" * 12, "arms": {"claude-opus-5-5": a, "nodash": a}}]
+        out = M.report(rows, {}, ["claude-opus-5-5", "nodash", "nodash"])
+        self.assertIn("opus 1/0/0", out)
+        self.assertIn("nodash 1/0/0", out)
+        self.assertEqual(out.count("- review nodash: held-up findings re-found 1/1 raw"), 1)
+        self.assertIn("favours it", out)                         # the label bias is stated in the report
+
+    def test_draft_is_passed_only_while_its_text_has_the_stored_hash(self):
+        from crucible import modelreplay as M
+        import hashlib
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "PR_DRAFT.md")
+            with open(path, "w") as fh:
+                fh.write("Fixes #3.\n")
+            want = hashlib.sha256(R.submitted_text("Fixes #3.\n").encode()).hexdigest()[:16]
+            self.assertEqual(M.draft_still_matches({"inputs": {"draft": path, "draft_sha": want}}), path)
+            self.assertIsNone(M.draft_still_matches({"inputs": {"draft": path, "draft_sha": "0" * 16}}))
+
+    def test_run_pairs_arms_and_leaves_out_a_round_any_arm_failed(self):
+        from crucible import modelreplay as M
+        rounds = [{"repo": r, "sha": s, "base": "b", "started": t, "inputs": {}, "labelled": [dict(self.L, disposition="fixed")]}
+                  for r, s, t in (("o__a", "a1", "3"), ("o__b", "b1", "2"), ("o__c", "c1", "1"))]
+        calls = []
+
+        def fake_arm(clone, r, model, tmp, budget=None, log=None):
+            calls.append((r["sha"], model))
+            if r["sha"] == "b1" and model == "claude-sonnet-5-5":
+                raise U.Failed("review incomplete")
+            return {"findings": [dict(self.L)], "cost_usd": 0.1}
+
+        saved = (M.rounds, M.anchoring.find_clones, M.anchoring.has_commit, M.run_arm)
+        M.rounds = lambda root, model, inc=False: rounds
+        M.anchoring.find_clones = lambda dirs: ["/clone"]
+        M.anchoring.has_commit = lambda c, sha: sha != "c1"
+        M.run_arm = fake_arm
+        try:
+            rows, skipped = M.run("/r", ["/c"], ["claude-opus-5-5", "claude-sonnet-5-5", "claude-opus-5-5"], n=5,
+                                  log=lambda m: None)
+        finally:
+            M.rounds, M.anchoring.find_clones, M.anchoring.has_commit, M.run_arm = saved
+        self.assertEqual([r["sha"] for r in rows], ["a1"])
+        self.assertEqual(sorted(rows[0]["arms"]), ["claude-opus-5-5", "claude-sonnet-5-5"])
+        self.assertEqual(skipped, {"no local clone has the commit and its base": 1, "an arm failed": 1})
+        self.assertEqual(sum(1 for sha, m in calls if sha == "a1"), 2)      # the repeated opus arm ran once
+
+    def test_incomplete_review_is_a_failed_arm_not_a_clean_zero(self):
+        from crucible import modelreplay as M
+        saved = (M._prepare, M.subprocess.run, M.read_json)
+        M._prepare = lambda clone, r, tmp, label: ("/tree", "/home")
+        M.subprocess.run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "")
+        M.read_json = lambda p, d=None: {"status": "done", "findings": [], "coverage": {"complete": False}}
+        try:
+            with self.assertRaises(U.Failed):
+                M.run_arm("/c", {"repo": "o__p", "sha": "s" * 12, "base": "b", "inputs": {}}, "nodash", "/t")
+        finally:
+            M._prepare, M.subprocess.run, M.read_json = saved
+
+
+if __name__ == "__main__":
+    unittest.main()
