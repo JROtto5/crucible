@@ -22,8 +22,8 @@ throwaway CRUCIBLE_HOME that holds a copy of the project's learned rules and sty
 `stats` are never touched. Model calls: this costs money (--budget caps each arm's run)."""
 import glob, os, re, shutil, subprocess, sys, tempfile
 
-from . import anchoring
-from .util import HOME, MODELS, Failed, git, norm_words, project_key, read_json
+from . import anchoring, routing
+from .util import HOME, MODELS, TEST_PATH_RX, Failed, git, norm_words, project_key, read_json
 
 HELD = ("fixed", "deferred")
 INCOMPLETE = "stored round's coverage incomplete"
@@ -33,6 +33,9 @@ ARM_UNSET = ("CRUCIBLE_VERIFY_MODEL", "CRUCIBLE_ROUTE", "CRUCIBLE_ROUTE_DOCS_MOD
              "CRUCIBLE_CATALOG_DIGEST", "CRUCIBLE_CACHE_VERIFY", "CRUCIBLE_NO_TOOLS_CACHE")
 DISPOSITIONS = HELD + ("refuted",)
 LINE_NEAR, LINE_FAR, WORDS_MIN = 3, 15, 0.25
+# the by-shape breakdown: production lines changed (outside tests and docs), upper bounds of each size bucket
+SIZE_BUCKETS = ((50, "<=50"), (200, "51-200"), (None, ">200"))
+TOO_FEW = 60                   # labelled findings a bucket needs before its rates are worth quoting
 
 
 def _words(f):
@@ -206,6 +209,35 @@ def run_arm(clone, r, model, tmp, budget=None, log=print):
     return review
 
 
+def shape(clone, base, sha):
+    """The change a round reviewed, by what routing would care about: its kind ("docs/PR text" when every changed file
+    is docs, "tests only", "single-file" or "multi-file" by the production files changed, i.e. outside tests and docs)
+    and its size bucket by production lines changed (added + deleted; binary files count 0). None when the diff can't
+    be read, so an unreadable round is left out of the breakdown rather than counted as an empty change."""
+    try:
+        out = git(clone, "diff", "--numstat", "-z", "--no-renames", f"{base}..{sha}")
+    except Failed:
+        return None
+    files = []
+    for rec in out.split("\0"):
+        parts = rec.split("\t", 2)
+        if len(parts) == 3 and parts[2]:
+            added, deleted, path = parts
+            files.append((path, (int(added) if added.isdigit() else 0) + (int(deleted) if deleted.isdigit() else 0)))
+    prod = [(p, n) for p, n in files if not routing.is_doc(p) and not TEST_PATH_RX.search(p)]
+    lines = sum(n for _, n in prod)
+    if not files:
+        kind = "no files"
+    elif routing.change_kind([p for p, _ in files]) == "docs":
+        kind = "docs/PR text"
+    elif not prod:
+        kind = "tests only"
+    else:
+        kind = "single-file" if len(prod) == 1 else "multi-file"
+    size = next(label for top, label in SIZE_BUCKETS if top is None or lines <= top)
+    return {"kind": kind, "prod_files": len(prod), "prod_lines": lines, "size": size}
+
+
 def short(model):
     return next((k for k, v in MODELS.items() if v == model), model)
 
@@ -236,7 +268,7 @@ def run(root, clones, models, n=5, budget=None, include_self=False, log=print):
                 log(f"    left out: {ex}")
                 skipped["an arm failed"] += 1
                 continue
-            rows.append(dict(r, arms=arms))
+            rows.append(dict(r, arms=arms, shape=shape(r["clone"], r["base"], r["sha"])))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return rows, skipped
@@ -252,6 +284,34 @@ def totals(rows, models):
                 t[m][k] += a[k]
             t[m]["unlabelled"] = t[m].get("unlabelled", 0) + len(a["unlabelled"])
     return t
+
+
+def by_shape(rows, models):
+    """Per arm, per bucket of change kind and of production size: held-up kept / labelled held, false alarms kept /
+    labelled refuted, $, $ per held-up kept. Which change types a cheaper reviewer could take is a per-bucket question,
+    and the buckets are small: one under TOO_FEW labelled findings is marked so nobody quotes its rate."""
+    rows = [r for r in rows if r.get("shape")]
+    if not rows:
+        return []
+    out = ["", f"By change shape (held kept/held, false alarms kept/refuted, $, $ per held kept; under {TOO_FEW} "
+               "labelled findings = too few to quote):"]
+    for dim, title in (("kind", "kind"), ("size", "production lines")):
+        order = [lab for _, lab in SIZE_BUCKETS] if dim == "size" else sorted({r["shape"]["kind"] for r in rows})
+        for b in order:
+            sub = [r for r in rows if r["shape"][dim] == b]
+            if not sub:
+                continue
+            t = totals(sub, models)
+            labelled = t[models[0]]["held"] + t[models[0]]["refuted"]
+            cells = []
+            for m in models:
+                s = t[m]
+                per = f"${s['cost'] / s['kept_held']:.2f}" if s["kept_held"] else "n/a"
+                cells.append(f"{short(m)} {s['kept_held']}/{s['held']}, {s['kept_refuted']}/{s['refuted']}, "
+                             f"${s['cost']:.2f}, {per}")
+            few = f" too few (n={labelled})" if labelled < TOO_FEW else f" n={labelled}"
+            out.append(f"  {title} {b}: {len(sub)} round(s){few}: " + "; ".join(cells))
+    return out
 
 
 def report(rows, skipped, models):
@@ -270,13 +330,16 @@ def report(rows, skipped, models):
                    f"; false alarms re-raised {s['found_refuted']}/{s['refuted']}, kept {s['kept_refuted']}/{s['refuted']}"
                    f"; kept code findings {s['kept']} ({s['unlabelled']} match no label); ${s['cost']:.2f}, "
                    f"{s['tokens']:,} tokens; $ per held-up finding kept {per}")
+    out += by_shape(rows, models)
     out += ["", "Per round (held kept / false alarms kept / unlabelled kept / $):"]
     for r in rows:
         cells = "  ".join(f"{short(m)} {a['kept_held']}/{a['kept_refuted']}/{len(a['unlabelled'])}/${a['cost']:.2f}"
                           + (" (stopped by --budget)" if a.get("budget_hit") else "")
                           for m, a in r["arms"].items())
+        sh = r.get("shape")
+        where = f"; {sh['kind']}, {sh['prod_lines']} production lines" if sh else ""
         out.append(f"  {r['repo']} {r['sha'][:10]} (held {r['arms'][models[0]]['held']}, refuted "
-                   f"{r['arms'][models[0]]['refuted']}): {cells}")
+                   f"{r['arms'][models[0]]['refuted']}{where}): {cells}")
     for m in models:
         miss = [(r, f) for r in rows for f in r["arms"][m]["missed_held"]]
         if miss:

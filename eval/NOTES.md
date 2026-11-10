@@ -32,6 +32,28 @@
 
   Misses: current missed py-race (r1) and js-refcount (r2, the known medium-severity case); Opus missed py-race once (r2). Every arm found every bug at some severity. The recall intervals all overlap, so n=28 can't separate the arms. Cost can: Fable 5.2 costs 2.8× Opus and 5.5× the current pick per set, and it's slowest. Every bug case cost $0.94–$3.67 on Fable 5.2 vs $0.28–$0.94 on Opus, so this isn't one outlier. Decision: no reviewer change on this evidence. Fable 5.2 would only be worth it if a larger set showed a recall gain big enough to pay ~$1.05 more per caught bug than Opus.
 
+## 2026-11-10 · the 5 reviewer-replay pairs by change shape (ARMOR routing ask, $0)
+
+The 5 pairs above, re-bucketed with `model-replay`'s new by-shape breakdown (`modelreplay.shape`: kind by production
+files, i.e. outside tests and docs; size by production lines added + deleted, merge-base..head). Computed from the
+stored per-round lines plus `git diff --numstat` on the local clones (no model calls). 4 non-empty
+buckets of 6 possible (2 kinds × 3 sizes, each dimension on its own).
+
+| bucket | rounds | Opus held kept | Opus false alarms kept | Opus $ / held kept | Sonnet held kept | Sonnet false alarms kept | Sonnet $ / held kept |
+|---|---|---|---|---|---|---|---|
+| multi-file | 3 (bvh 197, Lutris 29, supavisor 48 lines) | 6/7 | 0/0 | $1.87 / $0.31 | 3/7 | 0/0 | $1.99 / $0.66 |
+| single-file | 2 (colyseus 6, MangoHud 9 lines) | 0/0 | 1/3 | $0.98 / n/a | 0/0 | 2/3 | $0.94 / n/a |
+| ≤50 production lines | 4 | 4/5 | 1/3 | $1.96 / $0.49 | 3/5 | 2/3 | $2.06 / $0.69 |
+| 51–200 production lines | 1 (bvh) | 2/2 | 0/0 | $0.89 / $0.45 | 0/2 | 0/0 | $0.87 / n/a |
+
+- **Every cell is too few to quote** (n = 2 to 8 labelled findings; the bar is 60).
+- No docs/PR-text round is in the sample, and none can be: `model-replay` only takes rounds with an answered code
+  finding. The docs-only routing rule is judged by `routing-replay`, not here.
+- What the shape says, with that caveat: both single-file rounds had only false alarms to find (Sonnet re-raised
+  2 of 3, Opus 1 of 3), and every held-up finding was on a multi-file change, where Opus kept 6/7 to Sonnet's 3/7.
+  Nothing here argues for routing small code changes to Sonnet. No routing change.
+- Spend: $0.
+
 ## 2026-11-10 · reviewer A/B on our upstream PRs: Opus vs Sonnet (`crucible model-replay`, first slice)
 
 Premise correction: the commitment said our upstream rounds ran with "the current Sonnet pick". They didn't. All

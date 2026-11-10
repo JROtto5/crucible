@@ -4884,6 +4884,55 @@ class TestModelReplay(unittest.TestCase):
         self.assertIn("skipped 2: stored round's coverage incomplete", M.report(rows, skipped, ["claude-opus-5-5"]))
         self.assertEqual(sum(1 for sha, m in calls if sha == "a1"), 2)      # the repeated opus arm ran once
 
+    def test_shape_counts_production_lines_outside_tests_and_docs(self):
+        from crucible import modelreplay as M
+        with tempfile.TemporaryDirectory() as clone:
+            U.git(clone, "init", "-q")
+            commit = lambda files: (
+                [open(os.path.join(clone, *f.split("/")), "w").write(body) for f, body in files.items()],
+                U.git(clone, "add", "-A"),
+                U.git(clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "c"),
+                U.git(clone, "rev-parse", "HEAD").strip())[-1]
+            os.makedirs(os.path.join(clone, "tests"))
+            os.makedirs(os.path.join(clone, "src"))
+            base = commit({"README.md": "a\n", "src/a.py": "x = 1\n"})
+            docs = commit({"README.md": "a\nb\nc\n"})
+            self.assertEqual(M.shape(clone, base, docs), {"kind": "docs/PR text", "prod_files": 0, "prod_lines": 0,
+                                                          "size": "<=50"})
+            tests = commit({"tests/test_a.py": "def test(): pass\n" * 80})
+            self.assertEqual(M.shape(clone, docs, tests)["kind"], "tests only")
+            one = commit({"src/a.py": "x = 2\n", "tests/test_a.py": "t\n" * 300, "src/b b.py": "y\n" * 60})
+            got = M.shape(clone, tests, one)
+            # 2 lines in a.py (1 out, 1 in) + 60 in "b b.py"; the 300+ test lines don't count
+            self.assertEqual((got["kind"], got["prod_files"], got["prod_lines"], got["size"]), ("multi-file", 2, 62, "51-200"))
+            single = commit({"src/a.py": "z\n" * 250})
+            self.assertEqual((M.shape(clone, one, single)["kind"], M.shape(clone, one, single)["size"]), ("single-file", ">200"))
+            self.assertEqual(M.shape(clone, single, single)["kind"], "no files")
+            self.assertIsNone(M.shape(clone, "0" * 40, single))      # unreadable diff: no shape, not an empty one
+
+    def test_report_breaks_arms_down_by_change_shape_and_marks_small_buckets(self):
+        from crucible import modelreplay as M
+        held = dict(self.L, disposition="fixed")
+        refuted = dict(self.L, id="CR-r", file="b.py", title="Leaks a handle", disposition="refuted")
+        hit = M.score_arm({"labelled": [held], "inputs": {}}, {"findings": [dict(self.L)], "cost_usd": 0.4})
+        miss = M.score_arm({"labelled": [held], "inputs": {}}, {"findings": [], "cost_usd": 0.1})
+        alarm = M.score_arm({"labelled": [refuted], "inputs": {}}, {"findings": [dict(refuted)], "cost_usd": 0.3})
+        mk = lambda sha, kind, lines, size, o, s: {"repo": "o__p", "sha": sha * 12, "arms": {
+            "claude-opus-5-5": o, "claude-sonnet-5-5": s},
+            "shape": {"kind": kind, "prod_files": 1, "prod_lines": lines, "size": size}}
+        rows = [mk("a", "single-file", 12, "<=50", hit, miss), mk("b", "multi-file", 300, ">200", hit, hit),
+                mk("c", "single-file", 40, "<=50", alarm, alarm)]
+        out = M.report(rows, {}, ["claude-opus-5-5", "claude-sonnet-5-5"])
+        self.assertIn("kind single-file: 2 round(s) too few (n=2): opus 1/1, 1/1, $0.70, $0.70; "
+                      "sonnet 0/1, 1/1, $0.40, n/a", out)
+        self.assertIn("kind multi-file: 1 round(s) too few (n=1): opus 1/1, 0/0, $0.40, $0.40", out)
+        self.assertIn("production lines <=50: 2 round(s)", out)
+        self.assertNotIn("production lines 51-200", out)          # empty buckets aren't printed
+        self.assertIn("(held 1, refuted 0; multi-file, 300 production lines)", out)
+        big = [mk(str(i % 10), "multi-file", 300, ">200", hit, hit) for i in range(M.TOO_FEW)]
+        self.assertIn(f"kind multi-file: {M.TOO_FEW} round(s) n={M.TOO_FEW}:", M.report(big, {}, ["claude-opus-5-5"]))
+        self.assertNotIn("By change shape", M.report([dict(r, shape=None) for r in rows], {}, ["claude-opus-5-5"]))
+
     def test_incomplete_review_is_a_failed_arm_not_a_clean_zero(self):
         from crucible import modelreplay as M
         saved = (M._prepare, M.subprocess.run, M.read_json)
