@@ -4958,7 +4958,6 @@ class TestModelReplay(unittest.TestCase):
             M._prepare, M.subprocess.run, M.read_json = saved
 
 
-
 class TestMigrationOrder(unittest.TestCase):
     """BLAZE escape 2026-11-10: a new migration numbered below one already applied ran out of order on replay."""
 
@@ -5006,10 +5005,23 @@ class TestMigrationOrder(unittest.TestCase):
                          {"database/migrations/2026_11_06_000000_c.php": "y", "db/migration/V1_10__c.sql": "y"})
         r = R.migration_order(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo))
         self.assertEqual(r["status"], "pass", r)
+        for old, new in (("V1_10__b.sql", "V1_2__new.sql"), ("V2__b.sql", "V1_5__new.sql"), ("V10__b.sql", "V9__new.sql")):
+            repo = make_repo({f"db/migration/{old}": "x"}, {f"db/migration/{new}": "y"})   # re-review CR-1a8e7f82
+            r = R.migration_order(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo))
+            self.assertEqual(r["status"], "fail", (old, new, r))
         repo = make_repo({"database/migrations/2026_11_05_000000_b.php": "x"},
                          {"database/migrations/2026_11_03_000000_new.php": "y"})
         r = R.migration_order(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo))
         self.assertEqual(r["status"], "fail", r); self.assertIn("2026_11_03_000000", r["evidence"])
+
+    def test_prisma_folder_versions(self):
+        repo = make_repo({"prisma/migrations/20261105000000_b/migration.sql": "x"},
+                         {"prisma/migrations/20261103000000_new/migration.sql": "y"})
+        r = R.migration_order(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo))
+        self.assertEqual(r["status"], "fail", r); self.assertIn("20261105000000_b", r["evidence"])
+        repo = make_repo({"prisma/migrations/20261105000000_b/migration.sql": "x"},
+                         {"prisma/migrations/20261106000000_new/migration.sql": "y"})
+        self.assertEqual(R.migration_order(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo))["status"], "pass")
 
     def test_numbered_docs_and_notes_are_not_migrations(self):
         # self-review CR-07179453: a numbered guide in docs/migrations/ gave a hard fail

@@ -860,46 +860,67 @@ MIGRATION_VER_RX = re.compile(r"^V?(\d+(?:[._]\d+)*)(?=__|[_.\-][^\d_.\-]|\.)")
 MIGRATION_EXT = (".sql", ".py", ".rb", ".js", ".ts", ".mjs", ".cjs", ".php", ".go", ".java", ".kt", ".exs", ".cql")
 
 
-def _migration_version(name):
-    """('2026_11_05_000000_x.php') -> ((4, 2, 2, 6), (2026, 11, 5, 0)): the digit-group widths say which versions are
-    comparable at all; the ints order them. None for anything that isn't a numbered migration source file."""
+def _migration_version(name, source=True):
+    """('2026_11_05_000000_x.php') -> (timestamp?, (2026, 11, 5, 0), '2026_11_05_000000'). Versions compare as dotted
+    numbers padded with zeros (Flyway 1.2 < 1.10 < 2), but a timestamp (first group of 8+ digits) never compares with a
+    short sequence. None for anything that isn't a numbered migration (source=True: a source file; False: a folder
+    name, as in Prisma's migrations/<version>_<name>/migration.sql)."""
     m = MIGRATION_VER_RX.match(name)
-    if not m or not name.lower().endswith(MIGRATION_EXT):
+    if not m or (source and not name.lower().endswith(MIGRATION_EXT)):
         return None
     groups = re.split(r"[._]", m.group(1))
-    return tuple(len(g) for g in groups), tuple(int(g) for g in groups), m.group(1)
+    return len(groups[0]) >= 8, tuple(int(g) for g in groups), m.group(1)
+
+
+def _pad(v, n):
+    return v + (0,) * (n - len(v))
+
+
+def _migration_entry(path):
+    """(directory to list, name in it, version) for a new migration file, or None. Prisma keeps the version in the
+    folder: prisma/migrations/20261101_x/migration.sql is compared with its sibling folders."""
+    d, n = os.path.split(path)
+    v = _migration_version(n)
+    if v and MIGRATION_DIR_RX.search(path):
+        return d, n, v, True
+    up, folder = os.path.split(d)
+    v = _migration_version(folder, source=False)
+    if v and n == "migration.sql" and MIGRATION_DIR_RX.search(up + "/"):
+        return up, folder, v, False
+    return None
 
 
 def migration_order(repo, base, files, base_ref=None):
     """Does a new migration sort AFTER every migration the base already has? A version lower than one already applied
     runs out of order on a fresh replay (BLAZE escape 2026-11-10: GREEN on the diff, failed on replay). Covers the
-    timestamp/sequence-prefixed layouts (Rails db/migrate, Supabase/Prisma/golang-migrate migrations/, Flyway V1__,
-    Django 0001_, Laravel 2026_11_05_000000_), source files only (.sql/.py/.rb/.js/.ts/.php/.go/...,
-    so numbered docs or notes in a migrations folder don't count). Compares only versions of the same digit-group shape in the same directory, against the merge-base and the
+    timestamp/sequence-prefixed layouts (Rails db/migrate, Supabase/golang-migrate migrations/, Flyway V1_2__,
+    Django 0001_, Laravel 2026_11_05_000000_, Prisma migrations/<version>_x/migration.sql). Source files only, so
+    numbered docs in a migrations folder don't count. Compares with the same directory on the merge-base and the
     local tracking ref (which can be ahead of it after a fetch). No model call, no execution."""
     name = "new migrations sort after the existing ones"
-    new = [f["path"] for f in files if f.get("added") and not f.get("deleted") and MIGRATION_DIR_RX.search(f["path"])
-           and _migration_version(os.path.basename(f["path"]))]
+    new = [(f["path"], e) for f in files if f.get("added") and not f.get("deleted")
+           for e in [_migration_entry(f["path"])] if e]
     if not new:
         return _item(name, "na", "no new migration file")
     refs = [r for r in dict.fromkeys([base, base_ref]) if r and util.ref_exists(repo, r)]
     lower, same, ok = [], [], []
-    for path in new:
-        d, (shape, mine, label) = os.path.dirname(path), _migration_version(os.path.basename(path))
-        existing = {}                            # version ints -> (file, ref); the merge-base wins a tie with base_ref
+    for path, (d, own, (stamp, mine, label), source) in new:
+        existing = {}                            # version ints -> (name, ref); the merge-base wins a tie with base_ref
         for r in refs:
             out = git(repo, "ls-tree", "--name-only", "-z", f"{r}:{d}" if d else r, check=False) or ""
             for n in out.split("\0"):
-                v = _migration_version(n)
-                if v and v[0] == shape and n != os.path.basename(path):   # base_ref may already hold this very file
+                v = _migration_version(n, source)
+                if v and v[0] == stamp and n != own:          # base_ref may already hold this very file
                     existing.setdefault(v[1], (n, r))
         if not existing:
             ok.append(path); continue
-        top = max(existing)
-        if mine < top:
+        w = max(len(mine), *(len(k) for k in existing))
+        top = max(existing, key=lambda k: _pad(k, w))
+        if _pad(mine, w) < _pad(top, w):
             lower.append(f"{path} ({label}) < {existing[top][0]} on {existing[top][1][:12]}")
-        elif mine in existing:
-            same.append(f"{path} reuses version {label} ({existing[mine][0]})")
+        elif any(_pad(k, w) == _pad(mine, w) for k in existing):
+            k = next(k for k in existing if _pad(k, w) == _pad(mine, w))
+            same.append(f"{path} reuses version {label} ({existing[k][0]})")
         else:
             ok.append(path)
     if lower:
