@@ -3,8 +3,8 @@ import hashlib, json, os, re, subprocess, threading
 
 HOME = os.path.expanduser(os.environ.get("CRUCIBLE_HOME", "~/.crucible"))
 
-MODELS = {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5", "haiku": "claude-haiku-5-5", "fable": "claude-fable-5-1"}
-PREFERENCE = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"]
+MODELS = {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5", "haiku": "claude-haiku-5-5", "fable": "claude-fable-5-2"}
+PREFERENCE = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-2"]
 
 SEV = ["critical", "important", "medium", "low"]
 BLOCKING = {"critical", "important"}
