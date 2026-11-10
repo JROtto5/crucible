@@ -138,3 +138,10 @@ Verdict: not shipped to the review path. The ship rule (no fixed/deferred findin
 | (11-09) Opus 5.5 review + verify | 27/28 [82%, 99%] | 0/12 | 6 | $8.29 | $0.61 | 13.4 min |
 
   Sonnet missed js-refcount once (r2), the same known medium-severity case the Opus pick missed on 11-09; every bug was found at some severity in both runs. All recall intervals overlap: at n=28 the eval can't tell Sonnet and Opus reviewers apart, and cost per caught bug is within 15%. Decision: no reviewer change from the eval. What the eval can't test is the reason for the different-model rule (Opus reviewing Opus-written code), because the cases aren't Opus-written; that part still needs the paired upstream replay (11-11 item).
+- **2026-11-10, Fable 5.2 as reviewer (BLAZE exchange: their #223 found Fable 5.2 raised more of BrianC's misses at 2.3x cost).** Same 20 cases, 2 runs pooled, `--review-model claude-fable-5-2`, default verify tiers, `--jobs 3`, not written to history.
+
+| reviewer | recall (blocking sev) | false blocking | true dropped | $/set | $/caught bug | wall/set |
+|---|---|---|---|---|---|---|
+| Fable 5.2 review | 27/28 [82%, 99%] | 0/12 [0%, 24%] | 4 | $5.29 | $0.39 | 28.0 min |
+
+  Fable 5.2 missed py-pagination once at blocking severity (r1); every bug was found at some severity in both runs (28/28). Same recall as Sonnet (27/28) and within the Opus pick's interval (26/28); cost per caught bug is 9% above Sonnet and 22% above the Opus pick, wall time ~1.5x. Unlike BLAZE's 2.3x, the cost gap here is small, likely because the eval diffs are small (fewer findings to verify). Decision: no change; Sonnet stays for Opus-written PRs. The eval cases are all small single-bug diffs, so this says nothing about bigger PRs.
