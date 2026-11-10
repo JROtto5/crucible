@@ -321,10 +321,23 @@ def facts_key(chk):
     return ";".join(f"{r.get('cmd')}={r.get('status')}/{r.get('on_base', '')}" for r in chk.get("results", []))
 
 
+def cheap_model():
+    """The cheap verifier tier's model, or None when tiering is off. CRUCIBLE_VERIFY_CHEAP picks it ("none" = off)."""
+    cheap = os.environ.get("CRUCIBLE_VERIFY_CHEAP", MODELS["haiku"])
+    return None if not cheap or cheap.lower() == "none" else cheap
+
+
+def verify_kind(model, i, tiers):
+    """The call kind a verifier call is metered under: "verify_cheap" for the cheap tier, "verify" for the strong one.
+    Decided by the model's role, not its position: a routed docs round and the re-check of carried findings run the
+    cheap tier alone (tiers[:1]), and those calls are cheap-tier spend."""
+    return "verify_cheap" if i < len(tiers) - 1 or (len(tiers) == 1 and model == cheap_model()) else "verify"
+
+
 def verify_tiers(strong, no_tiers=False):
     """[cheap, strong] or [strong]. CRUCIBLE_VERIFY_CHEAP picks the cheap tier ("none" turns tiering off)."""
-    cheap = os.environ.get("CRUCIBLE_VERIFY_CHEAP", MODELS["haiku"])
-    if no_tiers or not cheap or cheap.lower() == "none" or cheap == strong:
+    cheap = cheap_model()
+    if no_tiers or not cheap or cheap == strong:
         return [strong]
     return [cheap, strong]
 
@@ -383,7 +396,7 @@ def verify_tiered(f, code, repo, budget, tiers, fresh=False, since="", draft_lab
     trail, v = [], None
     prompt = verify_prompt(f, code, since, draft_label, argument)
     for i, model in enumerate(tiers):
-        kind = "verify_cheap" if i < len(tiers) - 1 else "verify"
+        kind = verify_kind(model, i, tiers)
         key = "v-" + hashlib.sha256((model + prompt).encode()).hexdigest()[:32]
         use_cache = not fresh and os.environ.get("CRUCIBLE_CACHE_VERIFY", "1") != "0"
         hit = cache_hit(key, budget, kind) if use_cache else None

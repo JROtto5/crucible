@@ -279,7 +279,8 @@ def kinds_line(t):
 
 def to_json(s):
     def plain(r):
-        return dict(r, kept_by_severity=dict(r["kept_by_severity"]), cost=round(r["cost"], 4))
+        return dict(r, kept_by_severity=dict(r["kept_by_severity"]), cost=round(r["cost"], 4),
+                    by_kind={n: dict(k, cost_usd=round(k["cost_usd"], 4)) for n, k in r["by_kind"].items()})
     if no_data(s):                         # "answered": false, as for any figure that isn't there
         return json.dumps({"answered": False, "overall": None, "projects": {}, "window": s["window"]}, indent=1)
     h = held_up(s["overall"])

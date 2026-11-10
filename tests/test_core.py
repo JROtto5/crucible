@@ -4108,6 +4108,65 @@ class TestTokenMetering(unittest.TestCase):
         self.assertEqual((unmetered, cached), (1, 1))
         self.assertEqual(V.token_fields(b, None)["tokens_by_kind"], k)
 
+    def test_verify_kind_by_role(self):
+        # self-review CR-14ebebac: the last tier was always "verify", so the cheap tier run alone (a routed docs round,
+        # the re-check of carried findings) was counted as strong-tier spend
+        cheap, strong = V.cheap_model(), "strong-model"
+        self.assertEqual([V.verify_kind(m, i, [cheap, strong]) for i, m in enumerate([cheap, strong])],
+                         ["verify_cheap", "verify"])
+        self.assertEqual(V.verify_kind(cheap, 0, [cheap]), "verify_cheap")
+        self.assertEqual(V.verify_kind(strong, 0, [strong]), "verify")
+        old = os.environ.get("CRUCIBLE_VERIFY_CHEAP")
+        os.environ["CRUCIBLE_VERIFY_CHEAP"] = "none"
+        try:
+            self.assertEqual(V.verify_kind(cheap, 0, [cheap]), "verify")      # tiering off: one strong tier
+        finally:
+            if old is None:
+                os.environ.pop("CRUCIBLE_VERIFY_CHEAP", None)
+            else:
+                os.environ["CRUCIBLE_VERIFY_CHEAP"] = old
+
+    def test_verify_tiered_labels_salvage_tiers_and_cache_hits(self):
+        # self-review CR-eb6a290e / CR-32bc6c82: the labels are set at the call sites, so test them there
+        cheap, strong = V.cheap_model(), "strong-model"
+
+        def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500, kind="other"):
+            budget.meter({model: {"input": 1, "output": 1, "cache_read": 0, "cache_creation": 5}}, kind, bool(tools), 0.01)
+            if model == cheap and tools:
+                raise U.NoStructuredOutput("prose", "the claim holds, I think")
+            if not tools:                                          # the salvage transcription
+                return {"keep": True, "severity": "medium", "method": "read", "actions": "", "evidence": "",
+                        "confidence": "low"}, 0.0
+            return {"keep": True, "severity": "medium", "method": "read", "actions": "a", "evidence": "e",
+                    "confidence": "high"}, 0.01
+        f = {"id": "CR-1", "file": "a.js", "line": 1, "severity": "medium", "title": "t", "problem": "p", "wrong_if": "w",
+             "fix": "x", "caused_by_this_change": True, "reachable_in_real_use": True}
+        old = (V.claude, os.environ.get("CRUCIBLE_CACHE"))
+        with tempfile.TemporaryDirectory() as d:
+            V.claude, os.environ["CRUCIBLE_CACHE"] = fake, d
+            try:
+                b = U.Budget(None)
+                V.verify_tiered(f, "code", d, b, [cheap, strong])
+                k = b.kind_snapshot()
+                self.assertEqual({n: (v["calls"], v["no_tools"]) for n, v in k.items()},
+                                 {"verify_cheap": (1, False), "salvage": (1, True), "verify": (1, False)})
+                # again: the salvaged cheap verdict is not cached (the real verifier is retried), the strong one is
+                b = U.Budget(None)
+                V.verify_tiered(f, "code", d, b, [cheap, strong])
+                k = b.kind_snapshot()
+                self.assertEqual((k["verify"]["calls"], k["verify"]["cached_calls"]), (0, 1))
+                self.assertEqual((k["verify_cheap"]["calls"], k["salvage"]["calls"]), (1, 1))
+                # the cheap tier alone (re-check of a carried finding) is cheap-tier spend
+                b = U.Budget(None)
+                V.verify_tiered(dict(f, title="other"), "code", d, b, [cheap])
+                self.assertEqual(sorted(b.kind_snapshot()), ["salvage", "verify_cheap"])
+            finally:
+                V.claude = old[0]
+                if old[1] is None:
+                    os.environ.pop("CRUCIBLE_CACHE", None)
+                else:
+                    os.environ["CRUCIBLE_CACHE"] = old[1]
+
     def test_stats_by_call_kind(self):
         from crucible import stats as ST
         f = TestStats._f
@@ -4137,6 +4196,11 @@ class TestTokenMetering(unittest.TestCase):
             self.assertIn("By call kind (2 of 3 metered reviews): review 4 calls $1.00, cache write 200 / read 1,800; "
                           "salvage (no tools) 2 calls $0.02, cache write 100 / read 0.", text)
             self.assertEqual(json.loads(ST.to_json(ST.collect(root)))["tokens"]["by_kind"]["review"]["calls"], 4)
+            # self-review CR-d3bb9ba2: the rows in --json carry by_kind too, rounded like every other cost
+            for sha, c in (("s1", 0.1), ("s2", 0.2)):
+                p = os.path.join(root, "o__p", sha, "review.json")
+                rev = U.read_json(p); rev["tokens_by_kind"]["review"]["cost_usd"] = c; U.write_json(p, rev)
+            self.assertEqual(json.loads(ST.to_json(ST.collect(root)))["overall"]["by_kind"]["review"]["cost_usd"], 0.3)
             # no review with the field: no line at all, rather than a row of zeros
             for sha in ("s1", "s2"):
                 p = os.path.join(root, "o__p", sha, "review.json")
