@@ -282,6 +282,12 @@ def claude(prompt, model, schema, cwd, budget=None, tools=TOOLS_READ, effort="hi
     env["PYTHONDONTWRITEBYTECODE"] = "1"    # a verifier's python probe must not leave __pycache__ in the checkout
     if os.environ.get("CRUCIBLE_CLAUDE_DIR"):
         env["CLAUDE_CONFIG_DIR"] = os.path.expanduser(os.environ["CRUCIBLE_CLAUDE_DIR"])
+    if not tools and os.environ.get("CRUCIBLE_NO_TOOLS_CACHE", "0") != "1":
+        # A tool-less call (learn rules, learn style, verdict salvage) is one request that never re-reads its own
+        # prompt, so caching only adds the write premium (2x input at the CLI's 1-hour TTL): a cold 8.6k-token call
+        # cost 49% less uncached (eval/NOTES.md, 2026-11-10). Tool loops (review, verify, polish, prep, reply)
+        # re-read their prompt every turn and keep caching. CRUCIBLE_NO_TOOLS_CACHE=1 restores it (the A/B lever).
+        env["DISABLE_PROMPT_CACHING"] = "1"
     cmd = ["claude", "-p", "--model", model, "--effort", effort, "--output-format", "json",
            "--json-schema", json.dumps(schema), "--no-session-persistence",
            # never load the checked-out project's settings/hooks or the user's MCP servers

@@ -164,6 +164,7 @@ Environment variables:
 - `CRUCIBLE_ASSIST_MODEL`: the model for `polish`, `prep` and `reply`.
 - `CRUCIBLE_CLAUDE_DIR`: which Claude account to bill.
 - `CRUCIBLE_VERIFY_CHEAP`: the cheap verification tier (default `claude-haiku-5-5`; `none` turns tiering off, as does `--no-tiers`).
+- `CRUCIBLE_NO_TOOLS_CACHE=1`: keep prompt caching on for tool-less calls (`learn`, verdict salvage). They run uncached by default: one request never re-reads its cache, so the cache write only adds cost.
 - `CRUCIBLE_CATALOG_DIGEST=0`: review big `.po`/`.pot` changes as a raw diff instead of the entry digest.
 - `CRUCIBLE_HOME`: where state is kept (default `~/.crucible`). `CRUCIBLE_CACHE` can point at a shared cache.
 

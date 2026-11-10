@@ -32,6 +32,30 @@
 
   Misses: current missed py-race (r1) and js-refcount (r2, the known medium-severity case); Opus missed py-race once (r2). Every arm found every bug at some severity. The recall intervals all overlap, so n=28 can't separate the arms. Cost can: Fable 5.2 costs 2.8× Opus and 5.5× the current pick per set, and it's slowest. Every bug case cost $0.94–$3.67 on Fable 5.2 vs $0.28–$0.94 on Opus, so this isn't one outlier. Decision: no reviewer change on this evidence. Fable 5.2 would only be worth it if a larger set showed a recall gain big enough to pay ~$1.05 more per caught bug than Opus.
 
+## 2026-11-10 · prompt caching off for tool-less calls (BLAZE 11-10 technique), A/B
+
+Every model call site (code read): tool loops, which re-read their prompt on every turn and keep caching: the review
+pass (review.py `run_review`), verification (both tiers, `TOOLS_RUN`), `polish`, `prep` and `reply` (`TOOLS_READ`).
+**Three tool-less call sites**, one request each, nothing re-reads their prompt: `learn` rules (learn.py, Sonnet,
+up to ~19k tokens), `learn` style conventions (style.py, Sonnet, up to ~4.5k tokens), and verdict salvage (review.py
+`salvage_verdict`, Haiku). Before this commit all three ran with the CLI's default caching (1-hour TTL, writes at 2x input).
+
+Probe (Haiku, one 8.6k-token prompt, `--tools ""` + `--json-schema`): cached, it wrote 8,615 tokens and read 0,
+$0.00179. Uncached: 8,617 input, $0.00092 (−49%). Three back-to-back cached calls with different prompts read a
+shared 3,183-token CLI system prefix and wrote the rest. So caching pays only when that prefix is warm and the
+unique part is under ~2.9k tokens (cached = 0.1R + 2W vs uncached R + W).
+
+A/B on 5 paired real inputs: the actual `salvage_verdict` on verifier actions + evidence from the newest stored upstream
+reviews (702-2,674 chars), each run cached then uncached. Verdicts identical 5/5 (same keep, same schema keys). First
+call (cold prefix) $0.0012 → $0.0007 (−42%); the next four (prefix warm from the call before) $0.0006-0.0009 →
+$0.0007-0.0008 (+0 to +33%); total $0.0040 → $0.0038 (−5%). A burst like this is the worst case for uncached, and it
+doesn't happen in practice: salvage ran in 0 of 304 stored reviews, so a real salvage call is a lone cold one (−42%).
+The `learn` calls are larger and cold (one per learn run), past the break-even on both counts.
+
+Decision: tool-less calls run with `DISABLE_PROMPT_CACHING=1` (`CRUCIBLE_NO_TOOLS_CACHE=1` restores caching for an
+A/B). The review pipeline's cost doesn't move (its only tool-less call is salvage, which no stored review used). The
+saving is on `learn`: by the token math, about half of the two Sonnet calls' input $. Spend for this note: $0.009.
+
 ## 2026-11-09 · cache write vs read $ per call kind ($0 baseline for the no-tools caching A/B)
 
 From the 23 metered review.json files since 003b1a2 with no unmetered call and no cache hit (10 upstream Lutris rounds,

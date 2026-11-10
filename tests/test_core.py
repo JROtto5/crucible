@@ -4055,6 +4055,28 @@ class TestTokenMetering(unittest.TestCase):
                          (153, 14, 12, 100, 27))
         self.assertEqual(s["unmetered_calls"], 4)
 
+    def test_tool_less_calls_run_uncached(self):
+        """A one-request call never re-reads its cache, so it runs with prompt caching off; tool loops keep it, and
+        CRUCIBLE_NO_TOOLS_CACHE=1 turns it back on for tool-less calls."""
+        from unittest import mock
+        seen = []
+
+        def fake_run(cmd, **kw):
+            seen.append(kw["env"].get("DISABLE_PROMPT_CACHING"))
+            return subprocess.CompletedProcess(cmd, 0, json.dumps({"structured_output": {}, "total_cost_usd": 0}), "")
+
+        with mock.patch.object(U.subprocess, "run", fake_run), \
+                mock.patch.dict(os.environ, {"DISABLE_PROMPT_CACHING": ""}):
+            os.environ.pop("DISABLE_PROMPT_CACHING")
+            os.environ.pop("CRUCIBLE_NO_TOOLS_CACHE", None)
+            U.claude("p", "m", {"type": "object"}, ".", tools=None)
+            U.claude("p", "m", {"type": "object"}, ".", tools=[])
+            U.claude("p", "m", {"type": "object"}, ".")                      # default: read tools
+            U.claude("p", "m", {"type": "object"}, ".", tools=U.TOOLS_RUN)
+            os.environ["CRUCIBLE_NO_TOOLS_CACHE"] = "1"
+            U.claude("p", "m", {"type": "object"}, ".", tools=None)
+        self.assertEqual(seen, ["1", "1", None, None, None])
+
     def test_review_and_verify_split(self):
         b = U.Budget(None)
         b.meter({"m": {"input": 1, "output": 1, "cache_read": 0, "cache_creation": 0}})   # before the passes
