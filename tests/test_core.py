@@ -2720,9 +2720,12 @@ class TestNoExec(unittest.TestCase):
                 self.assertEqual(verify_tools, [U.TOOLS_READ])
                 # round 4: a read-only round may build on a read-only one (CRUCIBLE_NO_EXEC=1 set for good)
                 open(os.path.join(repo, "a.py"), "a").write("w = 5\n"); g("commit", "-qam", "once more")
+                verify_tools.clear()
                 r4 = U.read_json(os.path.join(V.run_review(repo, "main", offline=True, no_tiers=True,
                                                            log=lambda *_: None), "review.json"))
+                self.assertEqual(r4["status"], "done", r4.get("reason"))
                 self.assertEqual(r4["incremental"]["from"], r3["sha"])
+                self.assertEqual(verify_tools, [U.TOOLS_READ])
 
     def test_cli_flag_reaches_run_review(self):
         from unittest import mock
