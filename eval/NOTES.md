@@ -97,3 +97,13 @@ Today's prompt (no reviewer argument), one vote vs two votes on the same 39:
 With the reviewer argument added (anchoring arm): false alarms kept 10/15 → 9/15, real dropped 4/24 → 5/24 (two votes lost one real finding). The argument arm again keeps more false alarms (9 vs 5), as on 11-07.
 
 Verdict: not shipped to the review path. The ship rule (no fixed/deferred finding lost) holds on today's prompt, but the gain is one false alarm out of 15 for double the verifier cost, with n=39 paired, under the n≥60 bar for quoting a rate. Next: rerun with a cap that covers all 48 replayable findings (~$18) only if a cheaper verifier tier makes the second vote affordable; otherwise drop the idea.
+
+- **2026-11-10, Sonnet as reviewer (the arm the upstream lane really runs; johnr's 11-09 "Opus vs current pick, cost per finding" ask).** Our upstream PRs are Opus-written, so the different-model rule makes Sonnet 5.5 review them, and the 11-09 table had no Sonnet-review arm. Same 20 cases, 2 runs pooled, `--review-model claude-sonnet-5-5`, default verify tiers, `--jobs 3`, not written to history.
+
+| arm | blocking recall (pooled) | false blocking on clean | true findings dropped | $ per set | $ per caught bug | wall per set |
+|---|---|---|---|---|---|---|
+| Sonnet 5.5 review (upstream lane today) | 27/28 [82%, 99%] | 0/12 [0%, 24%] | 7 | $4.83 | $0.36 | 18.0 min |
+| (11-09) current pick, Opus 5.5 review | 26/28 [77%, 98%] | 0/12 | 4 | $4.20 | $0.32 | 19.7 min |
+| (11-09) Opus 5.5 review + verify | 27/28 [82%, 99%] | 0/12 | 6 | $8.29 | $0.61 | 13.4 min |
+
+  Sonnet missed js-refcount once (r2), the same known medium-severity case the Opus pick missed on 11-09; every bug was found at some severity in both runs. All recall intervals overlap: at n=28 the eval can't tell Sonnet and Opus reviewers apart, and cost per caught bug is within 15%. Decision: no reviewer change from the eval. What the eval can't test is the reason for the different-model rule (Opus reviewing Opus-written code), because the cases aren't Opus-written; that part still needs the paired upstream replay (11-11 item).
