@@ -3892,6 +3892,22 @@ class TestAIAttribution(unittest.TestCase):
         # the summary judges the text that was written, which no longer has the footer (or its emoji)
         self.assertIn("remaining tells: none", logs[-1])
 
+    def test_polish_matches_the_upstream_issue_url_to_hash_form(self):
+        """self-review b6c5466: polish() must pass the upstream slug, or a reworded URL line comes back twice."""
+        d = make_repo({"a.js": "1\n"})
+        sh(d, "git", "remote", "add", "upstream", "https://github.com/o/r.git")
+        with open(os.path.join(d, "PR_DRAFT.md"), "w") as fh:
+            fh.write("# Fix a\n\nThe worker swallowed errors.\n\nCloses https://github.com/o/r/issues/12\n")
+        orig = S.claude
+        S.claude = lambda *a, **k: ({"title": "Fix a", "body": "Worker errors now reject.\n\nCloses #12\n",
+                                     "removed": [], "kept_facts": []}, 0.0)
+        try:
+            S.polish(d, "t__polish_slug", log=lambda *_: None)
+        finally:
+            S.claude = orig
+        self.assertEqual(open(os.path.join(d, "PR_DRAFT.polished.md")).read(),
+                         "# Fix a\n\nWorker errors now reject.\n\nCloses https://github.com/o/r/issues/12\n")
+
     def test_polish_keeps_disclosure_the_author_wrote(self):
         # a project that asks for AI disclosure gets the author's own line back; polish only removes what it invented
         body, removed = S.strip_new_attribution("Fix.\n\nCo-authored-by: Claude <noreply@anthropic.com>",
