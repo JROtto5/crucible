@@ -4111,24 +4111,24 @@ class TestTokenMetering(unittest.TestCase):
     def test_verify_kind_by_role(self):
         # self-review CR-14ebebac: the last tier was always "verify", so the cheap tier run alone (a routed docs round,
         # the re-check of carried findings) was counted as strong-tier spend
-        cheap, strong = V.cheap_model(), "strong-model"
-        self.assertEqual([V.verify_kind(m, i, [cheap, strong]) for i, m in enumerate([cheap, strong])],
-                         ["verify_cheap", "verify"])
-        self.assertEqual(V.verify_kind(cheap, 0, [cheap]), "verify_cheap")
-        self.assertEqual(V.verify_kind(strong, 0, [strong]), "verify")
-        old = os.environ.get("CRUCIBLE_VERIFY_CHEAP")
-        os.environ["CRUCIBLE_VERIFY_CHEAP"] = "none"
-        try:
+        from unittest import mock
+        cheap, strong = U.MODELS["haiku"], "strong-model"
+        # self-review CR-696d3f81: pin the cheap tier, so an ambient CRUCIBLE_VERIFY_CHEAP can't change the result
+        with mock.patch.dict(os.environ, {"CRUCIBLE_VERIFY_CHEAP": cheap}):
+            self.assertEqual([V.verify_kind(m, i, [cheap, strong]) for i, m in enumerate([cheap, strong])],
+                             ["verify_cheap", "verify"])
+            self.assertEqual(V.verify_kind(cheap, 0, [cheap]), "verify_cheap")
+            self.assertEqual(V.verify_kind(strong, 0, [strong]), "verify")
+            # CR-95987648: --no-tiers with the strong verifier set to the cheap model is still cheap-tier spend
+            self.assertEqual([V.verify_kind(m, 0, V.verify_tiers(cheap, no_tiers=True)) for m in V.verify_tiers(cheap, True)],
+                             ["verify_cheap"])
+        with mock.patch.dict(os.environ, {"CRUCIBLE_VERIFY_CHEAP": "none"}):
             self.assertEqual(V.verify_kind(cheap, 0, [cheap]), "verify")      # tiering off: one strong tier
-        finally:
-            if old is None:
-                os.environ.pop("CRUCIBLE_VERIFY_CHEAP", None)
-            else:
-                os.environ["CRUCIBLE_VERIFY_CHEAP"] = old
 
     def test_verify_tiered_labels_salvage_tiers_and_cache_hits(self):
         # self-review CR-eb6a290e / CR-32bc6c82: the labels are set at the call sites, so test them there
-        cheap, strong = V.cheap_model(), "strong-model"
+        from unittest import mock
+        cheap, strong = U.MODELS["haiku"], "strong-model"
 
         def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500, kind="other"):
             budget.meter({model: {"input": 1, "output": 1, "cache_read": 0, "cache_creation": 5}}, kind, bool(tools), 0.01)
@@ -4141,9 +4141,10 @@ class TestTokenMetering(unittest.TestCase):
                     "confidence": "high"}, 0.01
         f = {"id": "CR-1", "file": "a.js", "line": 1, "severity": "medium", "title": "t", "problem": "p", "wrong_if": "w",
              "fix": "x", "caused_by_this_change": True, "reachable_in_real_use": True}
-        old = (V.claude, os.environ.get("CRUCIBLE_CACHE"))
-        with tempfile.TemporaryDirectory() as d:
-            V.claude, os.environ["CRUCIBLE_CACHE"] = fake, d
+        old = V.claude
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.dict(os.environ, {"CRUCIBLE_CACHE": d, "CRUCIBLE_VERIFY_CHEAP": cheap}):
+            V.claude = fake
             try:
                 b = U.Budget(None)
                 V.verify_tiered(f, "code", d, b, [cheap, strong])
@@ -4161,11 +4162,7 @@ class TestTokenMetering(unittest.TestCase):
                 V.verify_tiered(dict(f, title="other"), "code", d, b, [cheap])
                 self.assertEqual(sorted(b.kind_snapshot()), ["salvage", "verify_cheap"])
             finally:
-                V.claude = old[0]
-                if old[1] is None:
-                    os.environ.pop("CRUCIBLE_CACHE", None)
-                else:
-                    os.environ["CRUCIBLE_CACHE"] = old[1]
+                V.claude = old
 
     def test_stats_by_call_kind(self):
         from crucible import stats as ST

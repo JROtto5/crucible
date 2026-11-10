@@ -330,7 +330,9 @@ def cheap_model():
 def verify_kind(model, i, tiers):
     """The call kind a verifier call is metered under: "verify_cheap" for the cheap tier, "verify" for the strong one.
     Decided by the model's role, not its position: a routed docs round and the re-check of carried findings run the
-    cheap tier alone (tiers[:1]), and those calls are cheap-tier spend."""
+    cheap tier alone (tiers[:1]), and those calls are cheap-tier spend. A lone tier on the cheap model is always
+    "verify_cheap", also when the strong verifier is set to that same model or tiering is off with --no-tiers: the
+    kind follows the model's price, which is what the per-kind $ is read for."""
     return "verify_cheap" if i < len(tiers) - 1 or (len(tiers) == 1 and model == cheap_model()) else "verify"
 
 
