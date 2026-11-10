@@ -4958,9 +4958,6 @@ class TestModelReplay(unittest.TestCase):
             M._prepare, M.subprocess.run, M.read_json = saved
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class TestMigrationOrder(unittest.TestCase):
     """BLAZE escape 2026-11-10: a new migration numbered below one already applied ran out of order on replay."""
@@ -5002,3 +4999,25 @@ class TestMigrationOrder(unittest.TestCase):
     def test_no_migration_is_na(self):
         repo = make_repo({"a.py": "x"}, {"b.py": "y", "docs/migrations.md": "z"})
         self.assertEqual(R.migration_order(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo))["status"], "na")
+
+    def test_laravel_dates_compare_whole_and_flyway_dotted(self):
+        # self-review CR-ff896901: the year alone was the version, so every new Laravel migration "reused" 2026
+        repo = make_repo({"database/migrations/2026_11_05_000000_b.php": "x", "db/migration/V1_2__b.sql": "x"},
+                         {"database/migrations/2026_11_06_000000_c.php": "y", "db/migration/V1_10__c.sql": "y"})
+        r = R.migration_order(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo))
+        self.assertEqual(r["status"], "pass", r)
+        repo = make_repo({"database/migrations/2026_11_05_000000_b.php": "x"},
+                         {"database/migrations/2026_11_03_000000_new.php": "y"})
+        r = R.migration_order(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo))
+        self.assertEqual(r["status"], "fail", r); self.assertIn("2026_11_03_000000", r["evidence"])
+
+    def test_numbered_docs_and_notes_are_not_migrations(self):
+        # self-review CR-07179453: a numbered guide in docs/migrations/ gave a hard fail
+        repo = make_repo({"docs/migrations/0005-v3-notes.md": "x", "scripts/migrate/12_users.txt": "x"},
+                         {"docs/migrations/0004-upgrade-guide.md": "y", "scripts/migrate/04_orgs.txt": "y"})
+        self.assertEqual(R.migration_order(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo))["status"], "na")
+
+
+if __name__ == "__main__":
+    unittest.main()
+

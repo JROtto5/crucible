@@ -854,38 +854,52 @@ def base_moved(repo, base_ref, base):
 
 
 MIGRATION_DIR_RX = re.compile(r"(?:^|/)(?:migrations?|migrate|schema_migrations)(?:/|$)", re.I)
-MIGRATION_VER_RX = re.compile(r"^V?(\d+)(?=[_.\-])")
+# a version is every leading digit group: Rails/Supabase 20261103000000_, Django 0001_, golang-migrate 000001_,
+# Laravel/Phinx 2026_11_05_000000_ (four groups, not the year alone), Flyway V1_1__ (1.1)
+MIGRATION_VER_RX = re.compile(r"^V?(\d+(?:[._]\d+)*)(?=__|[_.\-][^\d_.\-]|\.)")
+MIGRATION_EXT = (".sql", ".py", ".rb", ".js", ".ts", ".mjs", ".cjs", ".php", ".go", ".java", ".kt", ".exs", ".cql")
+
+
+def _migration_version(name):
+    """('2026_11_05_000000_x.php') -> ((4, 2, 2, 6), (2026, 11, 5, 0)): the digit-group widths say which versions are
+    comparable at all; the ints order them. None for anything that isn't a numbered migration source file."""
+    m = MIGRATION_VER_RX.match(name)
+    if not m or not name.lower().endswith(MIGRATION_EXT):
+        return None
+    groups = re.split(r"[._]", m.group(1))
+    return tuple(len(g) for g in groups), tuple(int(g) for g in groups), m.group(1)
 
 
 def migration_order(repo, base, files, base_ref=None):
     """Does a new migration sort AFTER every migration the base already has? A version lower than one already applied
     runs out of order on a fresh replay (BLAZE escape 2026-11-10: GREEN on the diff, failed on replay). Covers the
     timestamp/sequence-prefixed layouts (Rails db/migrate, Supabase/Prisma/golang-migrate migrations/, Flyway V1__,
-    Django 0001_). Compares only versions of the same digit width in the same directory, against the merge-base and the
+    Django 0001_, Laravel 2026_11_05_000000_), source files only (.sql/.py/.rb/.js/.ts/.php/.go/...,
+    so numbered docs or notes in a migrations folder don't count). Compares only versions of the same digit-group shape in the same directory, against the merge-base and the
     local tracking ref (which can be ahead of it after a fetch). No model call, no execution."""
     name = "new migrations sort after the existing ones"
     new = [f["path"] for f in files if f.get("added") and not f.get("deleted") and MIGRATION_DIR_RX.search(f["path"])
-           and MIGRATION_VER_RX.match(os.path.basename(f["path"]))]
+           and _migration_version(os.path.basename(f["path"]))]
     if not new:
         return _item(name, "na", "no new migration file")
     refs = [r for r in dict.fromkeys([base, base_ref]) if r and util.ref_exists(repo, r)]
     lower, same, ok = [], [], []
     for path in new:
-        d, mine = os.path.dirname(path), MIGRATION_VER_RX.match(os.path.basename(path)).group(1)
-        existing = {}
+        d, (shape, mine, label) = os.path.dirname(path), _migration_version(os.path.basename(path))
+        existing = {}                            # version ints -> (file, ref); the merge-base wins a tie with base_ref
         for r in refs:
             out = git(repo, "ls-tree", "--name-only", "-z", f"{r}:{d}" if d else r, check=False) or ""
             for n in out.split("\0"):
-                m = MIGRATION_VER_RX.match(n)
-                if m and len(m.group(1)) == len(mine) and n != os.path.basename(path):
-                    existing.setdefault(m.group(1), (n, r))
+                v = _migration_version(n)
+                if v and v[0] == shape and n != os.path.basename(path):   # base_ref may already hold this very file
+                    existing.setdefault(v[1], (n, r))
         if not existing:
             ok.append(path); continue
-        top = max(existing, key=int)
-        if int(mine) < int(top):
-            lower.append(f"{path} ({mine}) < {existing[top][0]} on {existing[top][1][:12]}")
+        top = max(existing)
+        if mine < top:
+            lower.append(f"{path} ({label}) < {existing[top][0]} on {existing[top][1][:12]}")
         elif mine in existing:
-            same.append(f"{path} reuses version {mine} ({existing[mine][0]})")
+            same.append(f"{path} reuses version {label} ({existing[mine][0]})")
         else:
             ok.append(path)
     if lower:
