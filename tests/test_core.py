@@ -4888,19 +4888,23 @@ class TestModelReplay(unittest.TestCase):
         from crucible import modelreplay as M
         with tempfile.TemporaryDirectory() as clone:
             U.git(clone, "init", "-q")
-            commit = lambda files: (
-                [open(os.path.join(clone, *f.split("/")), "w").write(body) for f, body in files.items()],
-                U.git(clone, "add", "-A"),
-                U.git(clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "c"),
-                U.git(clone, "rev-parse", "HEAD").strip())[-1]
+
+            def commit(files):
+                for f, body in files.items():
+                    with open(os.path.join(clone, *f.split("/")), "w") as fh:
+                        fh.write(body)
+                U.git(clone, "add", "-A")
+                U.git(clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "c")
+                return U.git(clone, "rev-parse", "HEAD").strip()
             os.makedirs(os.path.join(clone, "tests"))
             os.makedirs(os.path.join(clone, "src"))
             base = commit({"README.md": "a\n", "src/a.py": "x = 1\n"})
             docs = commit({"README.md": "a\nb\nc\n"})
             self.assertEqual(M.shape(clone, base, docs), {"kind": "docs/PR text", "prod_files": 0, "prod_lines": 0,
-                                                          "size": "<=50"})
+                                                          "size": None})
             tests = commit({"tests/test_a.py": "def test(): pass\n" * 80})
-            self.assertEqual(M.shape(clone, docs, tests)["kind"], "tests only")
+            # no production files, so no size bucket: "<=50" would mix it in with small code changes
+            self.assertEqual((M.shape(clone, docs, tests)["kind"], M.shape(clone, docs, tests)["size"]), ("tests only", None))
             one = commit({"src/a.py": "x = 2\n", "tests/test_a.py": "t\n" * 300, "src/b b.py": "y\n" * 60})
             got = M.shape(clone, tests, one)
             # 2 lines in a.py (1 out, 1 in) + 60 in "b b.py"; the 300+ test lines don't count
@@ -4928,6 +4932,10 @@ class TestModelReplay(unittest.TestCase):
         self.assertIn("kind multi-file: 1 round(s) too few (n=1): opus 1/1, 0/0, $0.40, $0.40", out)
         self.assertIn("production lines <=50: 2 round(s)", out)
         self.assertNotIn("production lines 51-200", out)          # empty buckets aren't printed
+        tests_only = mk("d", "tests only", 0, None, hit, hit)
+        out = M.report(rows + [tests_only], {}, ["claude-opus-5-5"])
+        self.assertIn("kind tests only: 1 round(s)", out)
+        self.assertIn("production lines <=50: 2 round(s)", out)  # the tests-only round has no size row
         self.assertIn("(held 1, refuted 0; multi-file, 300 production lines)", out)
         big = [mk(str(i % 10), "multi-file", 300, ">200", hit, hit) for i in range(M.TOO_FEW)]
         self.assertIn(f"kind multi-file: {M.TOO_FEW} round(s) n={M.TOO_FEW}:", M.report(big, {}, ["claude-opus-5-5"]))

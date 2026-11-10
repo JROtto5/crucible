@@ -212,7 +212,8 @@ def run_arm(clone, r, model, tmp, budget=None, log=print):
 def shape(clone, base, sha):
     """The change a round reviewed, by what routing would care about: its kind ("docs/PR text" when every changed file
     is docs, "tests only", "single-file" or "multi-file" by the production files changed, i.e. outside tests and docs)
-    and its size bucket by production lines changed (added + deleted; binary files count 0). None when the diff can't
+    and its size bucket by production lines changed (added + deleted; binary files count 0; None with no production
+    files). None when the diff can't
     be read, so an unreadable round is left out of the breakdown rather than counted as an empty change."""
     try:
         out = git(clone, "diff", "--numstat", "-z", "--no-renames", f"{base}..{sha}")
@@ -234,7 +235,8 @@ def shape(clone, base, sha):
         kind = "tests only"
     else:
         kind = "single-file" if len(prod) == 1 else "multi-file"
-    size = next(label for top, label in SIZE_BUCKETS if top is None or lines <= top)
+    # a round with no production files has no production size: in "<=50" it would sit with small code changes
+    size = next(label for top, label in SIZE_BUCKETS if top is None or lines <= top) if prod else None
     return {"kind": kind, "prod_files": len(prod), "prod_lines": lines, "size": size}
 
 
