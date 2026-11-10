@@ -135,13 +135,14 @@ def tally(rows):
     findings), and `split` counts verdicts whose votes disagreed: the verifier's own noise, measured."""
     def blank():
         return {"false_alarms_kept": 0, "refuted": 0, "real_dropped": 0, "real": 0}
-    t = {arm: dict(blank(), failed=0, cost=0.0, split=0, first=blank()) for arm in ARMS}
+    t = {arm: dict(blank(), failed=0, budget=0, cost=0.0, split=0, first=blank()) for arm in ARMS}
     t["excluded"] = 0
     for r in rows:
         res = {arm: r["arms"].get(arm) or {"keep": None, "cost": 0.0} for arm in ARMS}
         for arm in ARMS:
             t[arm]["cost"] += res[arm]["cost"]
             t[arm]["failed"] += res[arm]["keep"] is None
+            t[arm]["budget"] += res[arm]["keep"] is None and "budget exhausted" in (res[arm].get("error") or "")
         if any(res[arm]["keep"] is None for arm in ARMS):
             t["excluded"] += 1
             continue
@@ -175,7 +176,8 @@ def report(rows, skipped, votes=1):
         s = t[arm]
         label = "without the argument (today's prompt)" if arm == "without" else "with the argument"
         out.append(f"- {label}: false alarms still kept {s['false_alarms_kept']}/{s['refuted']}, "
-                   f"real findings dropped {s['real_dropped']}/{s['real']}, failed calls {s['failed']}, ${s['cost']:.2f}")
+                   f"real findings dropped {s['real_dropped']}/{s['real']}, failed calls {s['failed']}"
+                   + (f" ({s['budget']} stopped by --budget)" if s["budget"] else "") + f", ${s['cost']:.2f}")
         if votes > 1:
             v1, paired = s["first"], s["refuted"] + s["real"]
             out.append(f"    first vote alone: false alarms still kept {v1['false_alarms_kept']}/{v1['refuted']}, "

@@ -3691,6 +3691,23 @@ class TestAnchorReplay(unittest.TestCase):
         self.assertAlmostEqual(t["with"]["cost"], 0.75)
         self.assertIn("R [refuted] without: dropped, with: kept", A.report(A.judge(es, verify), {}))
 
+    def test_budget_stops_are_counted_apart_from_failed_calls(self):
+        from crucible import anchoring as A
+        es = [{"repo": "o__p", "disposition": "fixed", "finding": dict(self.F, id=i)} for i in ("A", "B", "C")]
+
+        def verify(r, argument):        # A: a real failure; B: the run's --budget ran out; C: judged
+            if r["finding"]["id"] == "A" and argument:
+                raise U.Failed("usage limit")
+            if r["finding"]["id"] == "B" and argument:
+                raise U.Failed("budget exhausted")
+            return True, 0.1
+        rows = A.judge(es, verify, jobs=1)
+        t = A.tally(rows)
+        self.assertEqual((t["with"]["failed"], t["with"]["budget"], t["without"]["budget"]), (2, 1, 0))
+        out = A.report(rows, {})
+        self.assertIn("failed calls 2 (1 stopped by --budget)", out)
+        self.assertNotIn("stopped by --budget", out.split("- without")[1].split("\n")[0])
+
     def test_sample_is_taken_from_replayable_findings_only(self):
         from unittest import mock
         from crucible import anchoring as A
