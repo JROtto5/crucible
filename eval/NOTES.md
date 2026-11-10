@@ -32,6 +32,37 @@
 
   Misses: current missed py-race (r1) and js-refcount (r2, the known medium-severity case); Opus missed py-race once (r2). Every arm found every bug at some severity. The recall intervals all overlap, so n=28 can't separate the arms. Cost can: Fable 5.2 costs 2.8× Opus and 5.5× the current pick per set, and it's slowest. Every bug case cost $0.94–$3.67 on Fable 5.2 vs $0.28–$0.94 on Opus, so this isn't one outlier. Decision: no reviewer change on this evidence. Fable 5.2 would only be worth it if a larger set showed a recall gain big enough to pay ~$1.05 more per caught bug than Opus.
 
+## 2026-11-10 · reviewer A/B on our upstream PRs: Opus vs Sonnet (`crucible model-replay`, first slice)
+
+Premise correction: the commitment said our upstream rounds ran with "the current Sonnet pick". They didn't. All
+174 stored upstream rounds were reviewed by Opus: our upstream commits carry no AI trailer (RULES 6), so crucible
+never knows Opus wrote them and the different-model rule picks Opus. Sonnet is what the rule *would* pick if it knew.
+So the arms are Opus (today's upstream reviewer) vs Sonnet (the author-aware pick), each with the verifier `review`
+pairs with it (Opus → Sonnet verify, Sonnet → Opus verify), tiers on.
+
+Run: `crucible model-replay --clones ~/dev/oss-grind/work --rounds 5 --budget 0.8` at 5540690 (raw output
+~/.crucible/replays/model-2026-11-10.txt). 5 paired rounds (three-mesh-bvh, Lutris, colyseus, supavisor, MangoHud),
+the newest labelled full round of each project. Read-only verification (--no-exec) in both arms. Labels: 7 held up
+(fixed/deferred), 3 refuted, all raised by Opus in the stored round, so recall favours Opus by construction.
+
+| arm | held up kept | false alarms kept | kept code findings (unlabelled) | $ | tokens | $ / held-up kept |
+|---|---|---|---|---|---|---|
+| Opus review | 6/7 (Wilson 49–97%) | 1/3 | 17 (10) | $2.84 | 5.16M | $0.47 |
+| Sonnet review | 3/7 (16–75%); 4/7 by hand | 2/3 | 14 (9) | $2.94 | 6.42M | $0.98 |
+
+- By hand: Sonnet's bvh `GenerateMeshBVHWorker.js:78` "no changelog entry, regenerated API.md" covers the labelled
+  "API.md not regenerated" (cited at line 8, 70 lines away, so the matcher can't pair them). Its other two misses are
+  real: the SharedArrayBuffer copy path (bvh) and the prefix outside `game.directory` (Lutris, fixed upstream).
+- Both arms hit the $0.80 budget on the bvh round (verification cut short, rest kept unverified); the other 4 are
+  complete.
+- Unlabelled kept findings look alike in kind: mostly test-gap / docs lows, plus one medium each on supavisor's
+  rolling-upgrade message compatibility (both arms found it, cited at different lines).
+- n is far too small to quote (7 held-up labels, 3 refuted). It points one way, though: Sonnet is not cheaper per
+  round here ($0.59 vs $0.57; the Opus verifier costs more than the Sonnet one) and kept fewer held-up findings.
+- Decision: no change. Opus stays the upstream reviewer (already the default, and johnr's 11-09 call). Revisit
+  when ≥20 paired rounds exist; the eval arm (0d50436) also couldn't tell them apart at n=28.
+- Spend: $5.78 for the 10 arms.
+
 ## 2026-11-10 · prompt caching off for tool-less calls (BLAZE 11-10 technique), A/B
 
 Every model call site (code read): tool loops, which re-read their prompt on every turn and keep caching: the review
