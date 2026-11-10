@@ -4960,3 +4960,45 @@ class TestModelReplay(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMigrationOrder(unittest.TestCase):
+    """BLAZE escape 2026-11-10: a new migration numbered below one already applied ran out of order on replay."""
+
+    def _files(self, repo):
+        return D.parse(sh(repo, "git", "diff", "main...HEAD"))
+
+    def test_lower_version_fails_and_names_both_files(self):
+        repo = make_repo({"supabase/migrations/20261101000000_a.sql": "x", "supabase/migrations/20261105000000_b.sql": "y"},
+                         {"supabase/migrations/20261103000000_new.sql": "z"})
+        r = R.migration_order(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo))
+        self.assertEqual(r["status"], "fail", r)
+        self.assertIn("20261103000000_new.sql", r["evidence"]); self.assertIn("20261105000000_b.sql", r["evidence"])
+
+    def test_newer_version_passes_and_other_layouts(self):
+        repo = make_repo({"db/migrate/001_a.rb": "x", "app/migrations/0001_initial.py": "x", "app/migrations/__init__.py": ""},
+                         {"db/migrate/002_b.rb": "y", "app/migrations/0002_more.py": "y"})
+        r = R.migration_order(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo))
+        self.assertEqual(r["status"], "pass", r); self.assertIn("2 new migration", r["evidence"])
+
+    def test_reused_version_warns_and_other_widths_are_ignored(self):
+        repo = make_repo({"migrations/0003_a.sql": "x", "migrations/20260101000000_old.sql": "x"},
+                         {"migrations/0003_b.sql": "y"})
+        r = R.migration_order(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo))
+        self.assertEqual(r["status"], "warn", r); self.assertIn("reuses version 0003", r["evidence"])
+
+    def test_tracking_ref_ahead_of_merge_base_counts(self):
+        repo = make_repo({"migrations/V1__init.sql": "x"}, {"migrations/V2__mine.sql": "y"})
+        base = sh(repo, "git", "rev-parse", "main")
+        sh(repo, "git", "checkout", "-q", "main")
+        open(os.path.join(repo, "migrations/V3__theirs.sql"), "w").write("z")
+        sh(repo, "git", "add", "-A"); sh(repo, "git", "commit", "-qm", "upstream")
+        sh(repo, "git", "checkout", "-q", "fix")
+        files = D.parse(sh(repo, "git", "diff", f"{base}..HEAD"))
+        self.assertEqual(R.migration_order(repo, base, files)["status"], "pass")
+        r = R.migration_order(repo, base, files, "main")
+        self.assertEqual(r["status"], "fail", r); self.assertIn("V3__theirs.sql", r["evidence"])
+
+    def test_no_migration_is_na(self):
+        repo = make_repo({"a.py": "x"}, {"b.py": "y", "docs/migrations.md": "z"})
+        self.assertEqual(R.migration_order(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo))["status"], "na")

@@ -853,6 +853,50 @@ def base_moved(repo, base_ref, base):
                  "any numbers quoted in the draft)")
 
 
+MIGRATION_DIR_RX = re.compile(r"(?:^|/)(?:migrations?|migrate|schema_migrations)(?:/|$)", re.I)
+MIGRATION_VER_RX = re.compile(r"^V?(\d+)(?=[_.\-])")
+
+
+def migration_order(repo, base, files, base_ref=None):
+    """Does a new migration sort AFTER every migration the base already has? A version lower than one already applied
+    runs out of order on a fresh replay (BLAZE escape 2026-11-10: GREEN on the diff, failed on replay). Covers the
+    timestamp/sequence-prefixed layouts (Rails db/migrate, Supabase/Prisma/golang-migrate migrations/, Flyway V1__,
+    Django 0001_). Compares only versions of the same digit width in the same directory, against the merge-base and the
+    local tracking ref (which can be ahead of it after a fetch). No model call, no execution."""
+    name = "new migrations sort after the existing ones"
+    new = [f["path"] for f in files if f.get("added") and not f.get("deleted") and MIGRATION_DIR_RX.search(f["path"])
+           and MIGRATION_VER_RX.match(os.path.basename(f["path"]))]
+    if not new:
+        return _item(name, "na", "no new migration file")
+    refs = [r for r in dict.fromkeys([base, base_ref]) if r and util.ref_exists(repo, r)]
+    lower, same, ok = [], [], []
+    for path in new:
+        d, mine = os.path.dirname(path), MIGRATION_VER_RX.match(os.path.basename(path)).group(1)
+        existing = {}
+        for r in refs:
+            out = git(repo, "ls-tree", "--name-only", "-z", f"{r}:{d}" if d else r, check=False) or ""
+            for n in out.split("\0"):
+                m = MIGRATION_VER_RX.match(n)
+                if m and len(m.group(1)) == len(mine) and n != os.path.basename(path):
+                    existing.setdefault(m.group(1), (n, r))
+        if not existing:
+            ok.append(path); continue
+        top = max(existing, key=int)
+        if int(mine) < int(top):
+            lower.append(f"{path} ({mine}) < {existing[top][0]} on {existing[top][1][:12]}")
+        elif mine in existing:
+            same.append(f"{path} reuses version {mine} ({existing[mine][0]})")
+        else:
+            ok.append(path)
+    if lower:
+        return _item(name, "fail", "lower than a migration the base already has, so a fresh replay runs it out of "
+                     "order: " + "; ".join(lower[:3]) + ". Renumber it after the newest one (and re-run the migrations)")
+    if same:
+        return _item(name, "warn", "; ".join(same[:3]) + ". Two migrations with one version: the runner may skip or "
+                     "reject one; renumber")
+    return _item(name, "pass", f"{len(ok)} new migration(s), each after the newest one on the base")
+
+
 def current_login():
     """The GitHub login of whoever runs crucible: CRUCIBLE_GH_USER, else the account `gh` is logged in as, else None.
     The claim checks skip this person's own assignment and PRs; the default used to be the maintainer's own handle,
@@ -897,6 +941,7 @@ def evaluate(repo, project, base, files, draft=None, me=None, offline=False, bas
         _item("no open PR changes the same lines", "na", "offline") if offline else overlapping_prs(repo, files, me),
         _item("base branch hasn't moved under the change", "na", "offline") if offline else
         base_moved(repo, base_ref, base),
+        migration_order(repo, base, files, base_ref),
     ]
     return {"draft": draft_path, "issue": issue, "items": items,
             "ready": not any(i["status"] == "fail" for i in items)}
