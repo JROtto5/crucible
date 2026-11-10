@@ -2626,6 +2626,79 @@ class TestVerifyFailedRetried(unittest.TestCase):
                 os.environ["CRUCIBLE_CACHE"] = olds[3]
 
 
+class TestNoExec(unittest.TestCase):
+    """ROADMAP (independent bench, 2026-11-09): --skip-checks still let the verifier run node/pytest/python probes; in
+    a sandbox that refused them, all 59 attempts were blocked. --no-exec (or CRUCIBLE_NO_EXEC=1) gives the verifier
+    the read-only tool set and a prompt that doesn't ask it to run anything."""
+    F = {"title": "off by one", "file": "a.js", "line": 3, "severity": "medium", "wrong_if": "x"}
+
+    def test_read_only_tools_and_prompt(self):
+        from unittest import mock
+        calls = []
+
+        def fake(prompt, model, schema, cwd, budget=None, tools=None, **kw):
+            calls.append((prompt, tools))
+            return {"keep": True, "severity": "medium", "confidence": "high", "method": "executed",
+                    "actions": "ran node -e", "evidence": "e"}, 0
+        with mock.patch.object(V, "claude", fake), mock.patch.dict(os.environ, {"CRUCIBLE_CACHE_VERIFY": "0"}):
+            v, _ = V.verify_tiered(self.F, "code", ".", None, ["strong"], no_exec=True)
+            V.verify_tiered(self.F, "code", ".", None, ["strong"])
+        (ro_prompt, ro_tools), (prompt, tools) = calls
+        self.assertEqual(ro_tools, U.TOOLS_READ)
+        runners = ("node", "npm", "npx", "python", "pytest")
+        self.assertFalse([t for t in ro_tools if any(r in t for r in runners)])
+        self.assertEqual(tools, U.TOOLS_RUN)                       # default unchanged
+        for r in ("node -e", "python3 -c", "npm test"):
+            self.assertNotIn(r, ro_prompt)
+            self.assertIn(r, prompt)
+        self.assertIn("--no-exec", ro_prompt)
+        self.assertEqual(v["method"], "read")                       # it had no runner: an "executed" claim is wrong
+        # the default prompt is byte-identical to before the flag, so cached verdicts still match
+        self.assertEqual(V.verify_prompt(self.F, "code"), V.verify_prompt(self.F, "code", no_exec=False))
+
+    def test_read_only_verdict_isnt_reused_for_an_executing_run(self):
+        inp = {"base": "b", "draft": None, "draft_sha": None}
+        ro = {"status": "done", "inputs": dict(inp, no_exec=True)}
+        self.assertEqual(V.stale_inputs(ro, inp), "its verification was read-only (--no-exec)")
+        self.assertIsNone(V.stale_inputs(ro, dict(inp, no_exec=True)))
+        # an executed verdict may stand in for a --no-exec run: nothing runs now either way
+        self.assertIsNone(V.stale_inputs({"status": "done", "inputs": dict(inp)}, dict(inp, no_exec=True)))
+
+    def test_review_end_to_end(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            repo, home = os.path.join(d, "r"), os.path.join(d, "home")
+            os.makedirs(repo)
+            env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
+                       GIT_COMMITTER_EMAIL="t@t", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+            g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True, env=env)
+            open(os.path.join(repo, "a.py"), "w").write("x = 1\n")
+            g("init", "-q", "-b", "main"); g("add", "-A"); g("commit", "-qm", "base"); g("checkout", "-qb", "x")
+            open(os.path.join(repo, "a.py"), "w").write("x = 2\n"); g("commit", "-qam", "change")
+            verify_tools = []
+
+            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500, kind="other"):
+                if "findings" in schema["properties"]:
+                    return {"summary": "s", "findings": [
+                        {"severity": "low", "file": "a.py", "line": 1, "title": "magic number", "problem": "p",
+                         "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "w", "fix": "f"}]}, 0
+                verify_tools.append(tools)
+                return {"keep": True, "severity": "low", "confidence": "high", "method": "read", "actions": "a",
+                        "evidence": "e"}, 0
+            with mock.patch.object(V, "HOME", home), mock.patch.object(U, "HOME", home), \
+                    mock.patch.object(V, "claude", fake), \
+                    mock.patch.dict(os.environ, {"CRUCIBLE_CACHE": os.path.join(home, "c"), "CRUCIBLE_NO_EXEC": "1"}):
+                with mock.patch.object(V.checks_mod, "run_all", side_effect=AssertionError("checks ran")):
+                    rd = V.run_review(repo, "main", offline=True, no_tiers=True, log=lambda *_: None)   # implies skip
+                r = U.read_json(os.path.join(rd, "review.json"))
+                self.assertEqual(r["status"], "done", r.get("reason"))
+                self.assertTrue(r["no_exec"])
+                self.assertTrue(r["inputs"]["no_exec"])
+                self.assertEqual(verify_tools, [U.TOOLS_READ])
+                self.assertEqual(r["checks"]["note"], "skipped by --no-exec")
+                self.assertIn("execution off (--no-exec)", V.report(r, {}))
+
+
 class TestRerunSameCommit(unittest.TestCase):
     """Real-use bug i: a rerun on the same commit reused the verdict even when the untracked PR_DRAFT.md (or the
     base) had changed, and --fresh without --force did too. The verdict is reused only for identical inputs."""

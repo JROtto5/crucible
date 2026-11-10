@@ -26,7 +26,8 @@ Reviews HEAD against the branch the PR targets. The default base is `upstream/<d
 - `--full`: review the whole change, not just what changed since the last review of this branch.
 - `--draft PATH`: the PR description to judge (default `PR_DRAFT.md` in the repo).
 - `--budget USD`: stop making model calls once this much is spent.
-- `--skip-checks`: don't run the project's lint/test commands. `--base-checks` re-runs failing checks on the base, to tell pre-existing failures from new ones.
+- `--skip-checks`: don't run the project's lint/test commands. The verifier may still run small probes (`node -e`, `python3 -c`, the test runner).
+- `--no-exec` (or `CRUCIBLE_NO_EXEC=1`): run nothing from the checkout. Implies `--skip-checks`, and the verifier gets only read tools (Read/Grep/Glob, `git diff|log|show|grep|blame`, `ls`), so every verification is by reading. Use it in sandboxes and on code you don't trust. A later run without the flag re-reviews instead of reusing the read-only verdict. `--base-checks` re-runs failing checks on the base, to tell pre-existing failures from new ones.
 - `--offline`: no GitHub calls (readiness skips the issue, claim and open-PR checks).
 - `--author MODEL`: the model that wrote the change, if any (else read from `Co-Authored-By`). The reviewer is chosen to be a different model.
 - `--no-tiers`: verify every finding with the strong model only (default: cheap model first, escalate when unsure or blocking).

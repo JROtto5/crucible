@@ -30,7 +30,7 @@ def cmd_review(a):
     from .review import run_review
     try:
         run_review(_p(a.repo), a.base, a.force, a.budget, a.author, a.draft, a.base_checks, a.offline, a.skip_checks,
-                   full=a.full, fresh=a.fresh, no_tiers=a.no_tiers, route=a.route or None)
+                   full=a.full, fresh=a.fresh, no_tiers=a.no_tiers, route=a.route or None, no_exec=a.no_exec)
     except Failed as e:
         sys.exit(f"crucible: {e}")
     return cmd_status(a)
@@ -201,7 +201,11 @@ def main(argv=None):
     r.add_argument("--author", help="model id that wrote the change (else read from Co-Authored-By trailers)")
     r.add_argument("--draft", help="path to the PR description draft (default PR_DRAFT.md in the repo)")
     r.add_argument("--base-checks", action="store_true", help="re-run failing checks on the base to spot pre-existing failures")
-    r.add_argument("--skip-checks", action="store_true", help="don't run the project's lint/test commands")
+    r.add_argument("--skip-checks", action="store_true", help="don't run the project's lint/test commands (the "
+                   "verifier may still run probes; see --no-exec)")
+    r.add_argument("--no-exec", action="store_true", help="run nothing from the checkout: implies --skip-checks, and "
+                   "the verifier only reads (no node/npm/python/pytest probes). For sandboxes and untrusted code "
+                   "(also CRUCIBLE_NO_EXEC=1)")
     r.add_argument("--offline", action="store_true", help="no GitHub calls (readiness skips the issue, claim and "
                    "open-PR checks)")
     r.add_argument("--full", action="store_true", help="review the whole change, not just what changed since the last review")
