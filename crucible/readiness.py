@@ -790,24 +790,30 @@ REMOTE_TIMEOUT = 30
 
 
 def _remote_git(repo, *args):
-    """A git call that talks to a remote: never prompts for credentials and gives up after REMOTE_TIMEOUT s.
-    Returns stdout, or None on any failure (unreachable, auth, timeout)."""
+    """A git call that talks to a remote: no credential or host-key prompt, and it gives up after REMOTE_TIMEOUT s.
+    Returns stdout, or None on any failure (unreachable, auth, timeout). ssh ignores GIT_TERMINAL_PROMPT and asks for
+    a passphrase or an unknown host key on /dev/tty, so the child gets its own session with no controlling terminal;
+    ssh then falls back to SSH_ASKPASS (`true`) and fails at once (self-review CR-3f1c7fbd)."""
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="true", SSH_ASKPASS="true")
     try:
         r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, env=env, timeout=REMOTE_TIMEOUT,
-                           stdin=subprocess.DEVNULL)
+                           stdin=subprocess.DEVNULL, start_new_session=True)
     except (OSError, subprocess.TimeoutExpired):
         return None
     return r.stdout.strip() if r.returncode == 0 else None
 
 
-def base_moved(repo, base_ref, base, paths):
+def base_moved(repo, base_ref, base):
     """Has the base branch moved on the remote since the merge-base, in files this change touches? crucible diffs
     against the local remote-tracking ref and never fetches, so commits that landed upstream after the last fetch
     were invisible: the change is judged against code that no longer exists (BLAZE's 11-08 "stale base" class: 0 of
     4 caught). Reads the remote tip with `git ls-remote`; if that commit isn't local, fetches it by URL, which updates
     no ref (FETCH_HEAD included), so the checkout and its tracking refs stay as they were. No model call, no
-    execution. Only a remote-tracking base (`<remote>/<branch>`) can be checked; a local branch or a SHA is "na"."""
+    execution. Only a remote-tracking base (`<remote>/<branch>`) can be checked; a local branch or a SHA is "na".
+    The fetch does add the tip's objects to the clone (no ref points at them; gc prunes them) and skips submodules.
+
+    Both sides are listed with `-z --no-renames`: a quoted path (space, non-ASCII) would match nothing, and a file the
+    change renamed must still meet an upstream edit to its old name (self-review CR-8dec074c)."""
     name = "base branch hasn't moved under the change"
     remotes = git(repo, "remote", check=False).split()
     remote = next((r for r in sorted(remotes, key=len, reverse=True) if (base_ref or "").startswith(r + "/")), None)
@@ -826,7 +832,8 @@ def base_moved(repo, base_ref, base, paths):
     if not util.ref_exists(repo, tip):
         url = git(repo, "remote", "get-url", remote, check=False)
         # by URL, not by remote name: a named fetch also moves refs/remotes/<remote>/<branch> as a side effect
-        if not url or _remote_git(repo, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", url,
+        if not url or _remote_git(repo, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head",
+                                  "--no-recurse-submodules", url,
                                   f"refs/heads/{branch}") is None or not util.ref_exists(repo, tip):
             return _item(name, "warn", f"{remote}'s {branch} is at {tip[:10]}, not the merge-base {base[:10]}, and "
                          "that commit couldn't be fetched to compare. `git fetch` and re-run")
@@ -835,8 +842,8 @@ def base_moved(repo, base_ref, base, paths):
         return _item(name, "warn", f"{remote}'s {branch} was rewritten: the merge-base {base[:10]} is no longer on it "
                      f"(tip {tip[:10]}). Rebase onto the new {base_ref} and re-run")
     n = git(repo, "rev-list", "--count", f"{base}..{tip}", check=False) or "?"
-    changed = set(git(repo, "diff", "--name-only", "--no-renames", base, tip, check=False).split("\n")) - {""}
-    both = sorted(changed.intersection(paths))
+    names = lambda a, b: set(git(repo, "diff", "--name-only", "-z", "--no-renames", a, b, check=False).split("\0")) - {""}
+    both = sorted(names(base, tip) & names(base, "HEAD"))
     where = f"{n} commit(s) landed on {remote}'s {branch} since the merge-base {base[:10]} (tip {tip[:10]})"
     if not both:
         return _item(name, "pass", f"{where}, none in the files this change touches")
@@ -889,7 +896,7 @@ def evaluate(repo, project, base, files, draft=None, me=None, offline=False, bas
         _item("issue still unclaimed", "na", "offline") if offline else unclaimed(repo, issue, me),
         _item("no open PR changes the same lines", "na", "offline") if offline else overlapping_prs(repo, files, me),
         _item("base branch hasn't moved under the change", "na", "offline") if offline else
-        base_moved(repo, base_ref, base, paths),
+        base_moved(repo, base_ref, base),
     ]
     return {"draft": draft_path, "issue": issue, "items": items,
             "ready": not any(i["status"] == "fail" for i in items)}

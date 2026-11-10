@@ -1948,7 +1948,7 @@ class TestClaimOwner(unittest.TestCase):
         up, clone, base, land = self._moved_base_fixture()
         before = sh(clone, "git", "rev-parse", "origin/main")
         tip = land("a.py", "x = 3\n")
-        r = R.base_moved(clone, "origin/main", base, ["a.py"])
+        r = R.base_moved(clone, "origin/main", base)
         self.assertEqual(r["status"], "warn", r)
         self.assertIn("a.py", r["evidence"]); self.assertIn(tip[:10], r["evidence"]); self.assertIn("1 commit", r["evidence"])
         # the fetch is by URL: the clone's tracking ref and FETCH_HEAD are untouched
@@ -1957,24 +1957,67 @@ class TestClaimOwner(unittest.TestCase):
 
     def test_base_moved_passes_when_unchanged_or_moved_elsewhere(self):
         up, clone, base, land = self._moved_base_fixture()
-        r = R.base_moved(clone, "origin/main", base, ["a.py"])
+        r = R.base_moved(clone, "origin/main", base)
         self.assertEqual(r["status"], "pass", r); self.assertIn("still at the merge-base", r["evidence"])
         land("b.py", "y = 2\n")                                  # moved, but not in a file the change touches
-        r = R.base_moved(clone, "origin/main", base, ["a.py"])
+        r = R.base_moved(clone, "origin/main", base)
         self.assertEqual(r["status"], "pass", r); self.assertIn("none in the files", r["evidence"])
 
     def test_base_moved_rewritten_unreachable_and_local_bases(self):
         up, clone, base, land = self._moved_base_fixture()
         sh(up, "git", "commit", "-q", "--amend", "-m", "rewritten")       # force-pushed base: merge-base gone from it
-        r = R.base_moved(clone, "origin/main", base, ["a.py"])
+        r = R.base_moved(clone, "origin/main", base)
         self.assertEqual(r["status"], "warn", r); self.assertIn("rewritten", r["evidence"])
-        self.assertEqual(R.base_moved(clone, "main", base, ["a.py"])["status"], "na")      # local ref / SHA: na
-        self.assertEqual(R.base_moved(clone, None, base, ["a.py"])["status"], "na")
-        r = R.base_moved(clone, "origin/gone", base, ["a.py"])
+        self.assertEqual(R.base_moved(clone, "main", base)["status"], "na")      # local ref / SHA: na
+        self.assertEqual(R.base_moved(clone, None, base)["status"], "na")
+        r = R.base_moved(clone, "origin/gone", base)
         self.assertEqual(r["status"], "warn", r); self.assertIn("no branch", r["evidence"])
         sh(clone, "git", "remote", "set-url", "origin", os.path.join(up, "missing"))
-        r = R.base_moved(clone, "origin/main", base, ["a.py"])
+        r = R.base_moved(clone, "origin/main", base)
         self.assertEqual(r["status"], "warn", r); self.assertIn("could not reach", r["evidence"])
+
+    def test_base_moved_meets_renamed_and_quoted_paths(self):
+        # self-review CR-8dec074c: upstream edits the old name of a file the change renamed, and a non-ASCII name
+        # (C-quoted by `git diff --name-only` without -z); both used to read as "none in the files"
+        up = make_repo({"old.py": "x = 1\n", "café.py": "c = 1\n", "b.py": "y = 1\n"})
+        clone = tempfile.mkdtemp(prefix="crucible-clone-")
+        subprocess.run(["git", "clone", "-q", up, clone], check=True)
+        sh(clone, "git", "config", "user.email", "t@t"); sh(clone, "git", "config", "user.name", "t")
+        sh(clone, "git", "checkout", "-qb", "fix")
+        sh(clone, "git", "mv", "old.py", "new.py")
+        open(os.path.join(clone, "café.py"), "w").write("c = 2\n")
+        sh(clone, "git", "commit", "-qam", "rename + edit")
+        base = sh(clone, "git", "merge-base", "origin/main", "HEAD")
+        for path, text in (("old.py", "x = 3\n"), ("café.py", "c = 3\n")):
+            open(os.path.join(up, path), "w").write(text)
+        sh(up, "git", "commit", "-qam", "upstream edits")
+        r = R.base_moved(clone, "origin/main", base)
+        self.assertEqual(r["status"], "warn", r)
+        self.assertIn("old.py", r["evidence"]); self.assertIn("café.py", r["evidence"]); self.assertIn("2 of them", r["evidence"])
+
+    def test_base_moved_slashed_branch_and_unfetchable_tip(self):
+        up, clone, base, land = self._moved_base_fixture()
+        sh(up, "git", "branch", "feature/x", "main"); sh(clone, "git", "fetch", "-q", "origin")
+        self.assertEqual(R.base_moved(clone, "origin/feature/x", base)["status"], "pass")
+        # self-review CR-bc4e60e6: ls-remote sees a tip the fetch can't bring (a push between the two calls, a drop)
+        orig = R._remote_git
+        R._remote_git = lambda repo, *a: ("f" * 40 + "\trefs/heads/main") if a[0] == "ls-remote" else None
+        try:
+            r = R.base_moved(clone, "origin/main", base)
+        finally:
+            R._remote_git = orig
+        self.assertEqual(r["status"], "warn", r); self.assertIn("couldn't be fetched", r["evidence"])
+
+    def test_remote_git_runs_without_a_controlling_terminal(self):
+        # self-review CR-3f1c7fbd: ssh prompts on /dev/tty despite GIT_TERMINAL_PROMPT=0; a new session has no tty
+        seen = {}
+        orig = R.subprocess.run
+        R.subprocess.run = lambda *a, **k: seen.update(k) or subprocess.CompletedProcess(a, 0, "", "")
+        try:
+            R._remote_git(".", "ls-remote", "origin")
+        finally:
+            R.subprocess.run = orig
+        self.assertTrue(seen.get("start_new_session")); self.assertEqual(seen["env"]["GIT_TERMINAL_PROMPT"], "0")
 
     def test_evaluate_runs_base_moved_with_the_base_ref_unless_offline(self):
         up, clone, base, land = self._moved_base_fixture()
