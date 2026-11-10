@@ -877,8 +877,9 @@ def _pad(v, n):
 
 
 def _migration_entry(path):
-    """(directory to list, name in it, version) for a new migration file, or None. Prisma keeps the version in the
-    folder: prisma/migrations/20261101_x/migration.sql is compared with its sibling folders."""
+    """(directory to list, name in it, version, source) for a new migration file, or None. source is False for
+    Prisma, which keeps the version in the folder: prisma/migrations/20261101_x/migration.sql is compared with its
+    sibling folders only, never with plain files next to them."""
     d, n = os.path.split(path)
     v = _migration_version(n)
     if v and MIGRATION_DIR_RX.search(path):
@@ -907,7 +908,8 @@ def migration_order(repo, base, files, base_ref=None):
     for path, (d, own, (stamp, mine, label), source) in new:
         existing = {}                            # version ints -> (name, ref); the merge-base wins a tie with base_ref
         for r in refs:
-            out = git(repo, "ls-tree", "--name-only", "-z", f"{r}:{d}" if d else r, check=False) or ""
+            out = git(repo, "ls-tree", "--name-only", "-z", *([] if source else ["-d"]), f"{r}:{d}" if d else r,
+                      check=False) or ""
             for n in out.split("\0"):
                 v = _migration_version(n, source)
                 if v and v[0] == stamp and n != own:          # base_ref may already hold this very file

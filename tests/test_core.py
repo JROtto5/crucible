@@ -5023,6 +5023,18 @@ class TestMigrationOrder(unittest.TestCase):
                          {"prisma/migrations/20261106000000_new/migration.sql": "y"})
         self.assertEqual(R.migration_order(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo))["status"], "pass")
 
+    def test_padded_equal_versions_and_prisma_reuse_warn(self):
+        # re-review CR-b6425b18 / CR-18937888: V1 == V1_0 is a reuse; a numbered note beside Prisma folders isn't one
+        for base_files, new in (({"db/migration/V1__a.sql": "x"}, "db/migration/V1_0__b.sql"),
+                                ({"prisma/migrations/20261105000000_a/migration.sql": "x"},
+                                 "prisma/migrations/20261105000000_b/migration.sql")):
+            repo = make_repo(base_files, {new: "y"})
+            r = R.migration_order(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo))
+            self.assertEqual(r["status"], "warn", (new, r)); self.assertIn("reuses version", r["evidence"])
+        repo = make_repo({"prisma/migrations/20261201000000_readme.md": "x", "prisma/migrations/20261101000000_a/migration.sql": "x"},
+                         {"prisma/migrations/20261105000000_b/migration.sql": "y"})
+        self.assertEqual(R.migration_order(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo))["status"], "pass")
+
     def test_numbered_docs_and_notes_are_not_migrations(self):
         # self-review CR-07179453: a numbered guide in docs/migrations/ gave a hard fail
         repo = make_repo({"docs/migrations/0005-v3-notes.md": "x", "scripts/migrate/12_users.txt": "x"},
