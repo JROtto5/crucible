@@ -420,8 +420,8 @@ def verify_tiered(f, code, repo, budget, tiers, fresh=False, since="", draft_lab
             v = hit
         else:
             try:
-                v, cost = claude(prompt, model, VERIFY_SCHEMA, repo, budget, tools=TOOLS_READ if no_exec else TOOLS_RUN, effort="high",
-                                 kind=kind)
+                tools = TOOLS_READ if no_exec else TOOLS_RUN
+                v, cost = claude(prompt, model, VERIFY_SCHEMA, repo, budget, tools=tools, effort="high", kind=kind)
                 v = dict(v, cost=round(cost or 0, 4))
             except NoStructuredOutput as e:
                 v = salvage_verdict(f, e.text, repo, budget)
@@ -461,20 +461,21 @@ def branch_history(repo, project, sha):
     return [s for s in hist if s != sha and is_ancestor(repo, s, sha)]
 
 
-def previous_review(repo, project, sha, base):
+def previous_review(repo, project, sha, base, no_exec=False):
     """The newest complete review of an earlier commit on this branch with the same merge-base, or (None, None).
     The commit needn't be an ancestor of HEAD: after `git commit --amend` (or a squash) it has left HEAD's history,
     but with the same merge-base `git diff prev..HEAD` (two-dot compares trees) is still exactly what changed between
     the rounds. Before this, 38 of 57 upstream reviews were full re-reviews of an amended commit (67% of spend).
     The old commit must still exist (not garbage-collected), and a non-ancestor must share a changed file with HEAD:
-    a branch name reused for an unrelated change starts over with a full review."""
+    a branch name reused for an unrelated change starts over with a full review.
+    A read-only (--no-exec) review isn't a base for a run that may execute: its verdicts would be carried unexecuted."""
     for prev in reversed(branch_history(repo, project, sha)):
         if prev == sha:
             continue
         rev = read_json(os.path.join(HOME, "reviews", project, prev, "review.json"))
         if not rev or rev.get("status") != "done" or rev.get("base") != base or not rev.get("coverage", {}).get("complete"):
             continue
-        if rev.get("budget_exhausted"):
+        if rev.get("budget_exhausted") or (rev.get("no_exec") and not no_exec):
             continue
         if subprocess.run(["git", "-C", repo, "cat-file", "-e", f"{prev}^{{commit}}"], capture_output=True).returncode:
             continue
@@ -718,7 +719,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         house = style_text(project)
 
         # incremental re-review: only what changed since the last complete review of this branch
-        prev_sha, prev_rev = (None, None) if full else previous_review(repo, project, sha, base)
+        prev_sha, prev_rev = (None, None) if full else previous_review(repo, project, sha, base, no_exec)
         carried, carried_dropped, reverify = [], [], []
         if prev_sha:
             delta = git(repo, "diff", "--unified=5", "--no-color", f"{prev_sha}..HEAD")
@@ -1030,7 +1031,7 @@ def report(rev, ans, waivers=None):
          + (f" · catalogs read as a digest of their entries: {', '.join(cov['digested'])}" if cov.get("digested") else ""),
          f"- models: review `{rev['review_model']}`, verify `{' → '.join(rev.get('verify_tiers') or [rev['verify_model']])}`"
          f" · author {rev.get('author_models') or 'unknown'}"
-         + (" · execution off (--no-exec): verification read the code, ran nothing" if rev.get("no_exec") else ""),
+         + (" · execution off (--no-exec): nothing ran in this round" if rev.get("no_exec") else ""),
          f"- base `{rev['base_ref']}` (merge-base {rev['base'][:10]}) · cost ${rev['cost_usd']}" + tokens_note(rev)
          + (" · BUDGET EXHAUSTED" if rev.get("budget_exhausted") else ""),
          *([f"- incremental since `{rev['incremental']['from'][:10]}`: {len(rev['incremental']['files'])} file(s) re-reviewed, "

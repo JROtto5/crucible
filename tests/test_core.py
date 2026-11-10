@@ -2697,6 +2697,26 @@ class TestNoExec(unittest.TestCase):
                 self.assertEqual(verify_tools, [U.TOOLS_READ])
                 self.assertEqual(r["checks"]["note"], "skipped by --no-exec")
                 self.assertIn("execution off (--no-exec)", V.report(r, {}))
+                # round 2 executes: the read-only round isn't its incremental base, so its verdict isn't carried
+                open(os.path.join(repo, "a.py"), "a").write("y = 3\n"); g("commit", "-qam", "more")
+                verify_tools.clear()
+                with mock.patch.dict(os.environ, {"CRUCIBLE_NO_EXEC": "0"}), \
+                        mock.patch.object(V.checks_mod, "run_all", return_value={"results": []}):
+                    r2 = U.read_json(os.path.join(V.run_review(repo, "main", offline=True, no_tiers=True,
+                                                               log=lambda *_: None), "review.json"))
+                self.assertEqual(r2["status"], "done", r2.get("reason"))
+                self.assertNotIn("incremental", r2)
+                self.assertNotIn("no_exec", r2)
+                self.assertEqual(verify_tools, [U.TOOLS_RUN])
+
+    def test_cli_flag_reaches_run_review(self):
+        from unittest import mock
+        from crucible import cli
+        seen = []
+        with mock.patch("crucible.review.run_review", lambda *a, **kw: seen.append(kw["no_exec"])), \
+                mock.patch.object(cli, "cmd_status", lambda a: 0):
+            cli.main(["review", ".", "--no-exec"]); cli.main(["review", "."])
+        self.assertEqual(seen, [True, False])
 
 
 class TestRerunSameCommit(unittest.TestCase):
