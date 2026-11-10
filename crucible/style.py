@@ -375,18 +375,24 @@ REQUIRED_LINE_RX = re.compile(r"^\s*(?:[-*]\s*)?(?:\*\*)?" + ISSUE_KW + r"\b(?:\
                               r"|github\.com/[^/\s]+/[^/\s]+/issues/\d+", re.I)
 
 
-LINKED_REF_RX = re.compile(r"(?<![\w/])#(\d+)\b|github\.com/[^/\s]+/[^/\s]+/(?:issues|pull)/(\d+)", re.I)
+LINKED_REF_RX = re.compile(r"(?<![\w/])#(\d+)\b|github\.com/([^/\s]+/[^/\s]+)/(?:issues|pull)/(\d+)", re.I)
+# A reworded link line: an optional linking lead-in, then only links. Must match: "Fix #947", "**Resolves:** #947.",
+# "- Part of [#8](url)", "Closes #1 and #2". Must not: "Unrelated to #947", "Does not fix #947", "Reverts #947",
+# "Fixes: #12, #13 is separate" (a negation or a contrast the author wrote is not a reworded closing line).
+_LEAD_RX = re.compile(r"(?:(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?|address(?:es)?|part\s+of|related(?:\s+issues?|\s+to)?"
+                      r"|refs?|references|see(?:\s+also)?|issues?|for)\s*)?", re.I)
+_REF_TOKEN = r"(?:\[[^\]]*\]\([^)]*\)|<?https?://\S+?>?|#\d+)"
+_LINK_LINE_RX = re.compile(r"^(?:[-*]\s+)?(?:\*\*|__)?(" + _LEAD_RX.pattern + r")(?:\*\*|__)?\s*:?\s*(?:\*\*|__)?\s*"
+                           + _REF_TOKEN + r"(?:\s*(?:,|and|&)?\s*" + _REF_TOKEN + r")*[\s.;,]*$", re.I)
 
 
 def _issue_refs(line):
-    return {a or b for a, b in LINKED_REF_RX.findall(line)}
+    """(repo or None, number) per link: "#8" and a URL for another repo's issue 8 are different issues."""
+    return {(None, a) if a else (repo.lower(), b) for a, repo, b in LINKED_REF_RX.findall(line)}
 
 
 def _is_link_line(line):
-    """'Fix #947', '**Resolves:** #947.', '- Part of https://github.com/o/r/issues/8': at most three words besides the links."""
-    t = re.sub(r"\[[^\]]*\]\([^)]*\)|<?https?://\S+|#\d+", " ", line)
-    words = re.findall(r"[A-Za-z]+", t)
-    return len(words) <= 3 and not re.search(r"[^\sA-Za-z*_:.,;()\-&]", t)
+    return bool(_LINK_LINE_RX.match(line.strip()))
 
 
 def keep_required_lines(original, rewritten):

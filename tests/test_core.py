@@ -1857,6 +1857,13 @@ class TestQuotedDiffPaths(unittest.TestCase):
         self.assertTrue(files["keep.png"]["deleted"])
         self.assertEqual(files["café.py"]["hunks"][0]["lines"][-1][:2], ("+", "b"))
 
+    def test_binary_names_with_and_and_deleted_binaries(self):
+        """self-review de472ed (verifier side finding): ' and ' inside a binary name split the path wrongly."""
+        d = make_repo({"p and q.png": "\x00a", "gone.bin": "\x00z"}, {"p and q.png": "\x00b", "gone.bin": None})
+        files = {f["path"]: f for f in D.parse(sh(d, "git", "diff", "main", "fix"))}
+        self.assertEqual(set(files), {"p and q.png", "gone.bin"})
+        self.assertTrue(files["gone.bin"]["deleted"] and files["gone.bin"]["binary"])
+
     def test_quoted_header_fallback_and_binary_line(self):
         self.assertEqual(D.parse('diff --git "a/caf\\303\\251 x" "b/caf\\303\\251 x"\nold mode 100644\nnew mode 100755')[0]["path"],
                          "café x")
@@ -1886,6 +1893,24 @@ class TestRequiredLineReworded(unittest.TestCase):
         self.assertEqual(restored, ["Fixes #947"])
         self.assertIn("by rejecting worker errors", body)
         self.assertTrue(body.startswith("Fixes #947\n\n"))
+
+    def test_negations_and_contrasts_are_not_link_lines(self):
+        """self-review de472ed: a short line that says something else about the issue must survive."""
+        for line in ["Unrelated to #947", "Does not fix #947.", "Not fixing #947", "Reverts #947", "Follow-up to #947",
+                     "Duplicate of #947", "Fixes: #12, #13 is separate"]:
+            self.assertFalse(S._is_link_line(line), line)
+        for line in ["Fix #947", "**Resolves:** #947.", "- Part of [#8](https://github.com/o/r/issues/8)",
+                     "Closes #1 and #2", "#947", "Related to: #5", "See also https://github.com/o/r/issues/8"]:
+            self.assertTrue(S._is_link_line(line), line)
+        body, _ = S.keep_required_lines("Related to #947\n\nbody", "Body text.\n\nDoes not fix #947.")
+        self.assertIn("Does not fix #947.", body)
+        self.assertTrue(body.startswith("Related to #947\n\n"))  # it was first in the original
+
+    def test_another_repos_issue_with_the_same_number_is_kept(self):
+        body, _ = S.keep_required_lines("Closes #12\n\nBody.\n\nSee also https://github.com/other/repo/issues/12",
+                                        "Body, polished.\n\nSee also https://github.com/other/repo/issues/12")
+        self.assertIn("other/repo/issues/12", body)
+        self.assertTrue(body.startswith("Closes #12\n\n"))
 
     def test_other_issue_and_verbatim_lines_untouched(self):
         body, _ = S.keep_required_lines("Closes #1\nFixes #2\n\nx", "Closes #1\n\nFix #3\n\ny")

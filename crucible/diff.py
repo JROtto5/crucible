@@ -54,8 +54,14 @@ def parse(diff):
                 cur["path"] = _git_path(raw[4:], "b/")
         elif raw.startswith("Binary files "):
             cur["binary"] = True
-            m = re.search(r" and (\"(?:[^\"\\\\]|\\\\.)*\"|\S.*?) differ$", raw)
-            cur["path"] = cur["path"] or (_git_path(m.group(1), "b/") if m else None)
+            # the greedy old side makes " and " inside a name harmless: the split is the last " and " before b/
+            m = re.match(r'Binary files (.*) and ("b/(?:[^"\\]|\\.)*"|b/.*|/dev/null) differ$', raw)
+            if m and not cur["path"]:
+                if m.group(2) == "/dev/null":
+                    cur["deleted"], cur["path"] = True, _git_path(m.group(1), "a/")
+                else:
+                    cur["added"] = m.group(1) == "/dev/null"
+                    cur["path"] = _git_path(m.group(2), "b/")
         elif HUNK_RX.match(raw):
             m = HUNK_RX.match(raw)
             hunk = {"old_start": int(m.group(1)), "old_len": int(m.group(2) or 1),
