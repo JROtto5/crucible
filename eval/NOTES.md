@@ -32,6 +32,35 @@
 
   Misses: current missed py-race (r1) and js-refcount (r2, the known medium-severity case); Opus missed py-race once (r2). Every arm found every bug at some severity. The recall intervals all overlap, so n=28 can't separate the arms. Cost can: Fable 5.2 costs 2.8× Opus and 5.5× the current pick per set, and it's slowest. Every bug case cost $0.94–$3.67 on Fable 5.2 vs $0.28–$0.94 on Opus, so this isn't one outlier. Decision: no reviewer change on this evidence. Fable 5.2 would only be worth it if a larger set showed a recall gain big enough to pay ~$1.05 more per caught bug than Opus.
 
+## 2026-11-09 · cache write vs read $ per call kind ($0 baseline for the no-tools caching A/B)
+
+From the 23 metered review.json files since 003b1a2 with no unmetered call and no cache hit (10 upstream Lutris rounds,
+13 crucible self-reviews). No model calls. review.json had tokens by model, split only into review passes and
+"everything else", so the call kinds below are inferred from the model: the cheap verifier tier and salvage both run
+on Haiku and cannot be told apart. **The no-tools slice (salvage) is not split by call kind in these reviews**;
+`tokens_by_kind` (this commit) records it from now on. $ is priced from the token counts (Opus 5.5 $4/$20, read $0.20;
+Sonnet 5.5 $2/$10, read $0.20; Haiku 5.5 $0.10/$0.50, read assumed $0.01) with cache writes at 2x input (the 1-hour
+rate): that lands at 1.00-1.17x each review's recorded cost_usd (median 1.05); 1.25x (5-minute) lands at 0.75-0.96x.
+So shares are approximate; the per-kind $ in `tokens_by_kind` is the CLI's own figure and replaces this.
+
+| call kind (upstream, n=10) | $ | cache write | cache read | output |
+|---|---|---|---|---|
+| review pass (Opus) | 4.87 | 2.53 (52%) | 0.60 (12%) | 1.74 (36%) |
+| verify cheap tier + salvage (Haiku) | 0.95 | 0.32 (34%) | 0.23 (24%) | 0.40 (42%) |
+| verify full tier (Sonnet) | 1.29 | 0.63 (49%) | 0.30 (24%) | 0.36 (28%) |
+
+| call kind (own, n=13) | $ | cache write | cache read | output |
+|---|---|---|---|---|
+| review pass (Sonnet) | 2.05 | 1.25 (61%) | 0.40 (19%) | 0.40 (20%) |
+| verify cheap tier + salvage (Haiku) | 0.46 | 0.20 (42%) | 0.11 (25%) | 0.15 (33%) |
+| verify full tier (Opus) | 3.25 | 1.86 (57%) | 0.50 (15%) | 0.89 (28%) |
+
+Read: cache writes are the largest line in every kind (34-61% of $), but every kind here is a tool loop that re-reads
+its writes (the upstream review pass read 8x the tokens it wrote), so turning caching off there would price those
+reads at full input. The BLAZE technique only fits one-turn calls with no tools: in a review that is salvage alone
+(learn/style/polish run outside reviews). Next (commitment due 11-11 07:00): read salvage's own write/read split from
+`tokens_by_kind` once metered reviews have it, and A/B `DISABLE_PROMPT_CACHING=1` on the no-tools calls only.
+
 ## 2026-11-09 · two verifier votes (`anchor-replay --votes 2`), first run
 
 `crucible anchor-replay --clones ~/dev/oss-grind/work --votes 2 --jobs 3 --budget 10`, all answered code findings (69; 21 skipped as PR-draft findings). The $10 cap ran out ($4.75 + $5.25), so 30 findings were left out of both arms; 39 paired (15 refuted, 24 fixed/deferred).

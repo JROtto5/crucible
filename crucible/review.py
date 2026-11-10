@@ -99,14 +99,14 @@ def cache_put(key, val):
     write_json(os.path.join(cache_dir(), key + ".json"), val)
 
 
-def cache_hit(key, budget):
+def cache_hit(key, budget, kind="other"):
     """A cached model result (review pass or verdict), or None. A hit makes no call and uses no tokens, but the
     review that paid for it may be gone (a --force re-run overwrites the same commit's review.json) or not counted
     (failed, outside a --since window), so the hit is counted and `stats` leaves the review out of its token figures
     instead of quoting them too low. 1 of 149 stored upstream reviews had a hit (2026-11-09)."""
     hit = cache_get(key)
     if hit is not None and budget:
-        budget.cached_call()
+        budget.cached_call(kind)
     return hit
 
 
@@ -349,7 +349,8 @@ def salvage_verdict(f, text, repo, budget):
         {text[:8000]}
         >>>
         """)
-    v, _ = claude(prompt, SALVAGE_MODEL, VERIFY_SCHEMA, repo, budget, tools=None, effort="low", timeout=300)
+    v, _ = claude(prompt, SALVAGE_MODEL, VERIFY_SCHEMA, repo, budget, tools=None, effort="low", timeout=300,
+                  kind="salvage")
     return dict(v, salvaged=True, confidence="low" if v.get("confidence") == "low" else "medium")
 
 
@@ -357,13 +358,15 @@ def token_fields(budget, split):
     """review.json's token fields: the review passes (the calls between the two snapshots in `split`) and
     everything else (verification, salvage, re-checks), each with its own counts of calls that reported no usage and
     of cache hits. With no split (the review failed before its passes ran), every call so far counts on the verify
-    side, as its cost does."""
+    side, as its cost does. tokens_by_kind splits every call by what it was for (review, verify_cheap, verify,
+    salvage) with the CLI's own $, whatever the split."""
     end = budget.token_snapshot()
     before, after = split or (({}, 0, 0), ({}, 0, 0))
     rev = token_diff(after[0], before[0])
     return {"tokens_review": token_summary(rev, after[1] - before[1], after[2] - before[2]),
             "tokens_verify": token_summary(token_diff(end[0], rev), end[1] - (after[1] - before[1]),
-                                           end[2] - (after[2] - before[2]))}
+                                           end[2] - (after[2] - before[2])),
+            "tokens_by_kind": budget.kind_snapshot()}
 
 
 def needs_escalation(v):
@@ -380,14 +383,16 @@ def verify_tiered(f, code, repo, budget, tiers, fresh=False, since="", draft_lab
     trail, v = [], None
     prompt = verify_prompt(f, code, since, draft_label, argument)
     for i, model in enumerate(tiers):
+        kind = "verify_cheap" if i < len(tiers) - 1 else "verify"
         key = "v-" + hashlib.sha256((model + prompt).encode()).hexdigest()[:32]
         use_cache = not fresh and os.environ.get("CRUCIBLE_CACHE_VERIFY", "1") != "0"
-        hit = cache_hit(key, budget) if use_cache else None
+        hit = cache_hit(key, budget, kind) if use_cache else None
         if hit:
             v = hit
         else:
             try:
-                v, cost = claude(prompt, model, VERIFY_SCHEMA, repo, budget, tools=TOOLS_RUN, effort="high")
+                v, cost = claude(prompt, model, VERIFY_SCHEMA, repo, budget, tools=TOOLS_RUN, effort="high",
+                                 kind=kind)
                 v = dict(v, cost=round(cost or 0, 4))
             except NoStructuredOutput as e:
                 v = salvage_verdict(f, e.text, repo, budget)
@@ -709,13 +714,13 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             key_prompt = review_prompt(project, sha, base, ch, rules, mem, fkey, clog, all_files, house,
                                        draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured)
             key = hashlib.sha256((review_model + "\0" + key_prompt).encode()).hexdigest()[:32]
-            hit = None if fresh else cache_hit(key, budget)
+            hit = None if fresh else cache_hit(key, budget, "review")
             if hit:
                 out, cost = hit, 0
             else:
                 log(f"  review pass {i}/{len(chunks)}: {', '.join(ch['files'])[:90]}")
                 try:
-                    out, cost = claude(prompt, review_model, FINDINGS_SCHEMA, repo, budget)
+                    out, cost = claude(prompt, review_model, FINDINGS_SCHEMA, repo, budget, kind="review")
                     review_cost += cost or 0
                     cache_put(key, out)
                 except Failed as e:

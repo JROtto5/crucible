@@ -2213,7 +2213,7 @@ class TestRunReviewIncremental(unittest.TestCase):
             g("commit", "-qam", "add f and g")
             calls = []
 
-            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
+            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500, kind="other"):
                 calls.append((model, "findings" in schema["properties"], "changed since then" in prompt))
                 if "findings" in schema["properties"]:
                     found = [] if "src/a.js" not in prompt else [
@@ -2283,7 +2283,7 @@ class TestRunReviewAmended(unittest.TestCase):
             g("commit", "-qam", "add f and g")
             passes = []
 
-            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
+            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500, kind="other"):
                 if "findings" in schema["properties"]:
                     passes.append(prompt)
                     found = [{"severity": "medium", "file": "src/b.js", "line": 2, "title": "g returns a constant",
@@ -2355,7 +2355,7 @@ class TestRunReviewTranscribed(unittest.TestCase):
 
             transcribed = []
 
-            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
+            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500, kind="other"):
                 if "findings" in schema["properties"]:
                     return {"summary": "s", "findings": [finding(p, t) for p, t in
                             (("src/a.js", "f reads past the end"), ("src/b.js", "g returns a constant")) if p in prompt]}, 0
@@ -2414,7 +2414,7 @@ class TestRunReviewAbsenceAnchor(unittest.TestCase):
             w("guard.py", "def ok(v):\n    return not v.get('salvaged')\n"); g("commit", "-qam", "guard")
             verify_prompts = []
 
-            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
+            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500, kind="other"):
                 if "findings" in schema["properties"]:
                     if "BOOM" in prompt:
                         raise U.Failed("model call failed")
@@ -2703,7 +2703,7 @@ class TestRerunSameCommit(unittest.TestCase):
         home = tempfile.mkdtemp(prefix="crucible-home-")
         seen = []
 
-        def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
+        def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500, kind="other"):
             if "findings" in schema["properties"]:
                 seen.append(prompt)
                 return {"summary": "s", "findings": []}, 0.01
@@ -3087,7 +3087,7 @@ class TestRouting(unittest.TestCase):
                 g("commit", "-qam", "change")
                 calls = []
 
-                def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
+                def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500, kind="other"):
                     calls.append((model, "findings" in schema["properties"]))
                     if "findings" in schema["properties"]:
                         return {"summary": "s", "findings": [
@@ -3138,7 +3138,7 @@ class TestRouting(unittest.TestCase):
             w("src/a.js", "export const a = 1;\nexport const b = () => 2;\n"); g("commit", "-qam", "add b")
             calls = []
 
-            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
+            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500, kind="other"):
                 recheck = "changed since then" in prompt
                 calls.append((model, "findings" in schema["properties"], recheck))
                 if "findings" in schema["properties"]:
@@ -3389,7 +3389,7 @@ class TestDraftCitation(unittest.TestCase):
                                                           "## Explain it to me\n\nPRIVATE NOTE\n")
         prompts = {"review": [], "verify": []}
 
-        def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
+        def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500, kind="other"):
             if "findings" in schema["properties"]:
                 prompts["review"].append(prompt)
                 return {"summary": "s", "findings": [
@@ -3915,7 +3915,7 @@ class TestLengthLeftToHouseCheck(unittest.TestCase):
                         "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "w", "fix": "x"}
             verified = []
 
-            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
+            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500, kind="other"):
                 if "findings" in schema["properties"]:
                     return {"summary": "s", "findings": [finding(draft, "PR body is about 3x the project's median length"),
                                                          finding(draft, "PR body is long and uses a table")]}, 0
@@ -4078,6 +4078,71 @@ class TestTokenMetering(unittest.TestCase):
         self.assertEqual(V.tokens_note(rev), " · at least 1,525 tokens (review 1,500, verify 25; 1 call(s) without a token count)")
         self.assertEqual(V.tokens_note({"cost_usd": 1}), "")
 
+    def test_tokens_and_cost_per_call_kind(self):
+        # BLAZE 11-10 "caching off for one-shot calls that never re-read": the A/B needs the cache-write vs read
+        # split per call kind, which review/verify-by-model metering could not give (salvage hid in "verify")
+        from unittest import mock
+        u = {"structured_output": {}, "total_cost_usd": 0.25,
+             "modelUsage": {"m": {"inputTokens": 1, "outputTokens": 2, "cacheReadInputTokens": 30,
+                                  "cacheCreationInputTokens": 40}}}
+        outs = iter([json.dumps(u), json.dumps(u), json.dumps(u), "not json"])
+        b = U.Budget(None)
+        with mock.patch.object(U.subprocess, "run",
+                               lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, next(outs), "")):
+            U.claude("p", "m", {}, ".", b, kind="review")
+            U.claude("p", "m", {}, ".", b, kind="review")
+            U.claude("p", "m", {}, ".", b, tools=None, kind="salvage")
+            with self.assertRaises(U.Failed):
+                U.claude("p", "m", {}, ".", b, tools=None, kind="salvage")
+        b.cached_call("review")
+        k = b.kind_snapshot()
+        self.assertEqual(sorted(k), ["review", "salvage"])
+        self.assertEqual((k["review"]["calls"], k["review"]["cost_usd"], k["review"]["cache_creation"],
+                          k["review"]["cache_read"], k["review"]["no_tools"], k["review"]["cached_calls"]),
+                         (2, 0.5, 80, 60, False, 1))
+        self.assertEqual((k["salvage"]["calls"], k["salvage"]["unmetered_calls"], k["salvage"]["no_tools"],
+                          k["salvage"]["output"]), (2, 1, True, 2))
+        # the per-kind counts add up to the per-model ones: nothing is metered twice or dropped
+        tokens, unmetered, cached = b.token_snapshot()
+        self.assertEqual(sum(v["cache_creation"] for v in k.values()), tokens["m"]["cache_creation"])
+        self.assertEqual((unmetered, cached), (1, 1))
+        self.assertEqual(V.token_fields(b, None)["tokens_by_kind"], k)
+
+    def test_stats_by_call_kind(self):
+        from crucible import stats as ST
+        f = TestStats._f
+
+        def tok(total):
+            return {"total": total, "input": total, "output": 0, "cache_read": 0, "cache_creation": 0,
+                    "by_model": {}, "unmetered_calls": 0}
+
+        def kind(calls, cost, write, read, no_tools=False):
+            return {"calls": calls, "no_tools": no_tools, "cost_usd": cost, "unmetered_calls": 0, "cached_calls": 0,
+                    "input": 0, "output": 0, "cache_read": read, "cache_creation": write}
+        with tempfile.TemporaryDirectory() as root:
+            for sha in ("s1", "s2", "s3"):
+                TestStats._store(root, "o__p", sha, [f("CR-" + sha, sha)])
+                p = os.path.join(root, "o__p", sha, "review.json")
+                rev = U.read_json(p)
+                rev.update(tokens_review=tok(10), tokens_verify=tok(10))
+                if sha != "s3":                         # s3 was metered before per-kind metering
+                    rev["tokens_by_kind"] = {"review": kind(2, 0.5, 100, 900),
+                                             "salvage": kind(1, 0.01, 50, 0, no_tools=True)}
+                U.write_json(p, rev)
+            t = ST.tokens(ST.collect(root))
+            self.assertEqual(t["by_kind_reviews"], 2)
+            self.assertEqual(t["by_kind"]["review"]["cache_read"], 1800)
+            self.assertEqual((t["by_kind"]["salvage"]["calls"], t["by_kind"]["salvage"]["no_tools"]), (2, True))
+            text = ST.report(ST.collect(root))
+            self.assertIn("By call kind (2 of 3 metered reviews): review 4 calls $1.00, cache write 200 / read 1,800; "
+                          "salvage (no tools) 2 calls $0.02, cache write 100 / read 0.", text)
+            self.assertEqual(json.loads(ST.to_json(ST.collect(root)))["tokens"]["by_kind"]["review"]["calls"], 4)
+            # no review with the field: no line at all, rather than a row of zeros
+            for sha in ("s1", "s2"):
+                p = os.path.join(root, "o__p", sha, "review.json")
+                rev = U.read_json(p); rev.pop("tokens_by_kind"); U.write_json(p, rev)
+            self.assertNotIn("By call kind", ST.report(ST.collect(root)))
+
     def test_cache_hits_are_counted(self):
         # self-review CR-ce3e4b57: a hit makes no call, and the review that paid for it may be gone (a --force re-run
         # overwrites the same commit's review.json), so a review with hits looked fully metered at too few tokens
@@ -4146,10 +4211,11 @@ class TestTokenMetering(unittest.TestCase):
             open(os.path.join(repo, "src/a.js"), "w").write("export const a = 1;\nexport const f = xs => xs[xs.length];\n")
             g("commit", "-qam", "f")
 
-            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500):
+            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500, kind="other"):
                 review = "findings" in schema["properties"]
                 budget.add(0.01)
-                budget.meter({model: {"input": 100 if review else 7, "output": 10, "cache_read": 0, "cache_creation": 0}})
+                budget.meter({model: {"input": 100 if review else 7, "output": 10, "cache_read": 0, "cache_creation": 0}},
+                             kind, bool(tools), 0.01)
                 if review:
                     return {"summary": "s", "findings": [
                         {"severity": "medium", "file": "src/a.js", "line": 2, "title": "f reads past the end",
@@ -4168,6 +4234,11 @@ class TestTokenMetering(unittest.TestCase):
                 self.assertEqual(rev["status"], "done", rev.get("reason"))
                 self.assertEqual(rev["tokens_review"]["total"], 110)
                 self.assertEqual(rev["tokens_verify"]["total"], 17)   # one confident cheap-tier verdict, no escalation
+                kinds = rev["tokens_by_kind"]
+                self.assertEqual(sorted(kinds), ["review", "verify_cheap"])
+                self.assertEqual((kinds["review"]["calls"], kinds["review"]["input"], kinds["review"]["cost_usd"]),
+                                 (1, 100, 0.01))
+                self.assertEqual((kinds["verify_cheap"]["calls"], kinds["verify_cheap"]["no_tools"]), (1, False))
                 self.assertEqual(rev["tokens_review"]["unmetered_calls"] + rev["tokens_verify"]["unmetered_calls"], 0)
                 self.assertIn("tokens (review 110, verify", V.report(rev, {}))
                 from crucible import stats as ST

@@ -126,7 +126,8 @@ def collect(root, include_self=False, project=None, since=None, metered_only=Fal
     def row():
         return {"unique": 0, "kept": 0, "dropped": 0, "kept_by_severity": collections.Counter(),
                 "fixed": 0, "deferred": 0, "refuted": 0, "unanswered": 0, "reviews": 0, "cost": 0.0,
-                "metered_reviews": 0, "tokens": dict.fromkeys(("total", "review", "verify") + TOKEN_KINDS, 0)}
+                "metered_reviews": 0, "tokens": dict.fromkeys(("total", "review", "verify") + TOKEN_KINDS, 0),
+                "by_kind_reviews": 0, "by_kind": {}}
     overall, per = row(), collections.defaultdict(row)
     for u in uniq.values():
         latest = None
@@ -155,6 +156,17 @@ def collect(root, include_self=False, project=None, since=None, metered_only=Fal
                     t["total"] += p.get("total", 0)
                     for k in TOKEN_KINDS:
                         t[k] += p.get(k, 0)
+                if rev.get("tokens_by_kind"):          # stored since per-kind metering; older reviews lack it
+                    r["by_kind_reviews"] += 1
+                    for name, k in rev["tokens_by_kind"].items():
+                        a = r["by_kind"].setdefault(name, {"calls": 0, "no_tools": True, "cost_usd": 0.0,
+                                                           **dict.fromkeys(TOKEN_KINDS, 0)})
+                        a["calls"] += k.get("calls", 0)
+                        a["cost_usd"] += k.get("cost_usd", 0)
+                        if k.get("calls"):
+                            a["no_tools"] = a["no_tools"] and k.get("no_tools", False)
+                        for n in TOKEN_KINDS:
+                            a[n] += k.get(n, 0)
     out = {"overall": overall, "projects": dict(sorted(per.items())), "window": window}
     if not metered_only:
         out["metered"] = collect(root, include_self, project, since, metered_only=True)["overall"]
@@ -227,7 +239,9 @@ def tokens(s):
     if not n:
         return None
     t, h = m["tokens"], held_up(m)
+    kinds = {name: dict(k, cost_usd=round(k["cost_usd"], 4)) for name, k in sorted(m.get("by_kind", {}).items())}
     return {"metered_reviews": n, "reviews": s["overall"]["reviews"], **t, "per_review": round(t["total"] / n),
+            "by_kind_reviews": m.get("by_kind_reviews", 0), "by_kind": kinds,
             "held_up": {"held": h[0], "answered": h[1]} if h else None,
             "per_held_up": round(t["total"] / h[0]) if h and h[0] else None}
 
@@ -240,6 +254,7 @@ def tokens_line(s):
     parts = ", ".join(f"{k.replace('_', ' ')} {t[k]:,}" for k in TOKEN_KINDS)
     line = (f"Tokens ({t['metered_reviews']} of {t['reviews']} reviews metered): {t['per_review']:,} per review "
             f"({t['total']:,} in all: {parts}; review passes {t['review']:,}, verification {t['verify']:,}). ")
+    line += kinds_line(t)
     h = t["held_up"]
     if not h:
         return line + "Tokens per held-up finding: none answered yet in the metered reviews."
@@ -249,6 +264,17 @@ def tokens_line(s):
     quote = "" if h["answered"] >= QUOTE_N else f"; n={h['answered']} < {QUOTE_N}, too few to quote as a rate"
     return line + (f"Tokens per held-up finding: {t['per_held_up']:,} ({h['held']}/{h['answered']} held up in the "
                    f"metered reviews, Wilson 95% {lo:.0%}-{hi:.0%}{quote}).")
+
+
+def kinds_line(t):
+    """By call kind, over the metered reviews that stored it: calls, the CLI's own $ and the cache write / read
+    tokens. The split the no-tools caching A/B starts from (a no-tools call is one turn: its cache writes are only
+    re-read by a later identical prefix). Empty when no metered review has it."""
+    if not t.get("by_kind"):
+        return ""
+    parts = [f"{name}{' (no tools)' if k['no_tools'] else ''} {k['calls']} calls ${k['cost_usd']:.2f}, "
+             f"cache write {k['cache_creation']:,} / read {k['cache_read']:,}" for name, k in t["by_kind"].items()]
+    return f"By call kind ({t['by_kind_reviews']} of {t['metered_reviews']} metered reviews): " + "; ".join(parts) + ". "
 
 
 def to_json(s):

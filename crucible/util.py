@@ -208,21 +208,44 @@ class Budget:
     def __init__(self, limit):
         self.limit, self.spent, self.lock = limit, 0.0, threading.Lock()
         self.tokens, self.unmetered, self.cached = {}, 0, 0   # model -> counts; calls with no usage; cache hits
+        self.kinds = {}                                       # call kind -> calls, cost, tokens (kind_snapshot)
 
-    def meter(self, usage):
-        """Record one model call's usage (usage_of's result); None counts the call as unmetered."""
+    def _kind(self, kind, tools):
+        k = self.kinds.setdefault(kind, {"calls": 0, "no_tools": True, "cost_usd": 0.0, "unmetered_calls": 0,
+                                         "cached_calls": 0, **dict.fromkeys(TOKEN_KINDS, 0)})
+        k["no_tools"] = k["no_tools"] and not tools
+        return k
+
+    def meter(self, usage, kind="other", tools=True, cost=0.0):
+        """Record one model call's usage (usage_of's result); None counts the call as unmetered. `kind` names what
+        the call was for (review, verify, salvage, ...) and `tools` whether it could use any, so the cache-write vs
+        cache-read split can be read per kind: a call with no tools is one turn and never re-reads its own cache
+        writes, a tool loop does."""
         with self.lock:
+            k = self._kind(kind, tools)
+            k["calls"] += 1
+            k["cost_usd"] += cost or 0
             if usage is None:
                 self.unmetered += 1
+                k["unmetered_calls"] += 1
                 return
             for m, u in usage.items():
                 t = self.tokens.setdefault(m, dict.fromkeys(TOKEN_KINDS, 0))
-                for k in TOKEN_KINDS:
-                    t[k] += u.get(k, 0)
+                for n in TOKEN_KINDS:
+                    t[n] += u.get(n, 0)
+                    k[n] += u.get(n, 0)
 
-    def cached_call(self):
+    def cached_call(self, kind="other"):
         with self.lock:
             self.cached += 1
+            self._kind(kind, False)["cached_calls"] += 1
+
+    def kind_snapshot(self):
+        """-> {kind: {calls, no_tools, cost_usd, unmetered_calls, cached_calls, input, output, cache_read,
+        cache_creation}}. cost_usd is the CLI's own per-call figure, so it needs no price table. A kind with only
+        cache hits made no call; its no_tools says nothing then."""
+        with self.lock:
+            return {n: dict(k, cost_usd=round(k["cost_usd"], 4)) for n, k in sorted(self.kinds.items())}
 
     def token_snapshot(self):
         """-> (per-model counts, unmetered calls, cache hits) so far."""
@@ -250,8 +273,9 @@ TOOLS_RUN = TOOLS_READ + ["Bash(node:*)", "Bash(npx vitest:*)", "Bash(npx jest:*
                           "Bash(npm test:*)", "Bash(npm run test:*)", "Bash(pytest:*)"] + PY_RUNNERS
 
 
-def claude(prompt, model, schema, cwd, budget=None, tools=TOOLS_READ, effort="high", timeout=1500):
-    """One isolated, structured model call. Raises Failed on any problem."""
+def claude(prompt, model, schema, cwd, budget=None, tools=TOOLS_READ, effort="high", timeout=1500, kind="other"):
+    """One isolated, structured model call. Raises Failed on any problem. `kind` labels its tokens and cost in the
+    budget (Budget.kind_snapshot)."""
     if budget and budget.exhausted():
         raise Failed("budget exhausted")
     env = dict(os.environ)
@@ -274,7 +298,7 @@ def claude(prompt, model, schema, cwd, budget=None, tools=TOOLS_READ, effort="hi
         r = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, input=prompt, timeout=timeout)
     except subprocess.TimeoutExpired:
         if budget:
-            budget.meter(None)      # it may well have used tokens; unknown is not zero
+            budget.meter(None, kind, bool(tools))      # it may well have used tokens; unknown is not zero
         raise Failed(f"model call timed out after {timeout}s")
     try:
         d = json.loads(r.stdout)
@@ -282,11 +306,11 @@ def claude(prompt, model, schema, cwd, budget=None, tools=TOOLS_READ, effort="hi
             raise ValueError
     except ValueError:
         if budget:
-            budget.meter(None)
+            budget.meter(None, kind, bool(tools))
         raise Failed(f"model call failed: {(r.stderr or r.stdout)[-500:]}")
     if budget:
         budget.add(d.get("total_cost_usd", 0))
-        budget.meter(usage_of(d, model))
+        budget.meter(usage_of(d, model), kind, bool(tools), d.get("total_cost_usd", 0))
     if not d.get("is_error") and "structured_output" not in d and d.get("subtype") == "success" \
             and isinstance(d.get("result"), str) and d["result"].strip():
         raise NoStructuredOutput(f"model call failed (success): {d['result'][:500]}", d["result"])
