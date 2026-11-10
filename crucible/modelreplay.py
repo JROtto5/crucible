@@ -95,16 +95,15 @@ def rounds(root, model, include_self=False, skipped=None):
         rev = read_json(p) or {}
         if rev.get("status") != "done" or rev.get("incremental") or rev.get("review_model") != model:
             continue
-        if not (rev.get("coverage") or {}).get("complete"):     # a replay of it would be incomplete too
-            if skipped is not None:
-                skipped[INCOMPLETE] = skipped.get(INCOMPLETE, 0) + 1
-            continue
         ans = repo_answers(os.path.dirname(d))
         draft = (rev.get("inputs") or {}).get("draft")
         labelled = [dict(f, disposition=ans[f["id"]]["disposition"]) for f in rev.get("findings", [])
                     if f.get("source") == "review" and not _is_draft(f, draft)
                     and (ans.get(f.get("id")) or {}).get("disposition") in DISPOSITIONS]
-        if labelled:
+        if labelled and not (rev.get("coverage") or {}).get("complete"):    # a replay would be incomplete too
+            if skipped is not None:
+                skipped[INCOMPLETE] = skipped.get(INCOMPLETE, 0) + 1
+        elif labelled:
             out.append({"repo": repo, "sha": rev["sha"], "base": rev["base"], "started": rev.get("started") or "",
                         "inputs": rev.get("inputs") or {}, "labelled": labelled})
     return sorted(out, key=lambda r: r["started"], reverse=True)

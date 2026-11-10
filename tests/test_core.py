@@ -4719,6 +4719,8 @@ class TestModelReplay(unittest.TestCase):
                         {"CR-a": {"disposition": "refuted"}})
             self._store(root, "o__p", "s0", {"started": "2026-11-04", "findings": [self.L], "coverage": {"complete": False}})
             self._store(root, "o__p", "s9", {"started": "2026-11-03", "findings": [self.L], "coverage": None})
+            # incomplete but with nothing answered: not a candidate either way, so not counted
+            self._store(root, "o__p", "s8", {"started": "2026-11-02", "findings": [other], "coverage": None})
             sk = {}
             got = M.rounds(root, "claude-opus-5-5", skipped=sk)
             self.assertEqual(sk, {M.INCOMPLETE: 2})
@@ -4864,7 +4866,10 @@ class TestModelReplay(unittest.TestCase):
             return {"findings": [dict(self.L)], "cost_usd": 0.1}
 
         saved = (M.rounds, M.anchoring.find_clones, M.anchoring.has_commit, M.run_arm)
-        M.rounds = lambda root, model, inc=False, skipped=None: rounds
+        def fake_rounds(root, model, inc=False, skipped=None):
+            skipped[M.INCOMPLETE] = 2
+            return rounds
+        M.rounds = fake_rounds
         M.anchoring.find_clones = lambda dirs: ["/clone"]
         M.anchoring.has_commit = lambda c, sha: sha != "c1"
         M.run_arm = fake_arm
@@ -4875,7 +4880,8 @@ class TestModelReplay(unittest.TestCase):
             M.rounds, M.anchoring.find_clones, M.anchoring.has_commit, M.run_arm = saved
         self.assertEqual([r["sha"] for r in rows], ["a1"])
         self.assertEqual(sorted(rows[0]["arms"]), ["claude-opus-5-5", "claude-sonnet-5-5"])
-        self.assertEqual(skipped, {"no local clone has the commit and its base": 1, "an arm failed": 1})
+        self.assertEqual(skipped, {"no local clone has the commit and its base": 1, "an arm failed": 1, M.INCOMPLETE: 2})
+        self.assertIn("skipped 2: stored round's coverage incomplete", M.report(rows, skipped, ["claude-opus-5-5"]))
         self.assertEqual(sum(1 for sha, m in calls if sha == "a1"), 2)      # the repeated opus arm ran once
 
     def test_incomplete_review_is_a_failed_arm_not_a_clean_zero(self):
