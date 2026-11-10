@@ -4718,7 +4718,10 @@ class TestModelReplay(unittest.TestCase):
             self._store(root, "JROtto5__crucible", "c1", {"started": "2026-11-08", "findings": [self.L]},
                         {"CR-a": {"disposition": "refuted"}})
             self._store(root, "o__p", "s0", {"started": "2026-11-04", "findings": [self.L], "coverage": {"complete": False}})
-            got = M.rounds(root, "claude-opus-5-5")
+            self._store(root, "o__p", "s9", {"started": "2026-11-03", "findings": [self.L], "coverage": None})
+            sk = {}
+            got = M.rounds(root, "claude-opus-5-5", skipped=sk)
+            self.assertEqual(sk, {M.INCOMPLETE: 2})
             # incremental, sonnet-reviewed, incomplete and self rounds are left out
             self.assertEqual([(r["repo"], r["sha"]) for r in got], [("o__p", "s1")])
             self.assertEqual([(f["id"], f["disposition"]) for f in got[0]["labelled"]], [("CR-a", "fixed")])  # draft out
@@ -4861,7 +4864,7 @@ class TestModelReplay(unittest.TestCase):
             return {"findings": [dict(self.L)], "cost_usd": 0.1}
 
         saved = (M.rounds, M.anchoring.find_clones, M.anchoring.has_commit, M.run_arm)
-        M.rounds = lambda root, model, inc=False: rounds
+        M.rounds = lambda root, model, inc=False, skipped=None: rounds
         M.anchoring.find_clones = lambda dirs: ["/clone"]
         M.anchoring.has_commit = lambda c, sha: sha != "c1"
         M.run_arm = fake_arm

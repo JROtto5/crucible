@@ -26,10 +26,11 @@ from . import anchoring
 from .util import HOME, MODELS, Failed, git, norm_words, project_key, read_json
 
 HELD = ("fixed", "deferred")
+INCOMPLETE = "stored round's coverage incomplete"
 # settings that would change an arm's pipeline away from the default for its reviewer: the verifier pick, cost
 # routing (which can swap the reviewer on a docs-only round), the cheap tier, and cache/prompt switches
 ARM_UNSET = ("CRUCIBLE_VERIFY_MODEL", "CRUCIBLE_ROUTE", "CRUCIBLE_ROUTE_DOCS_MODEL", "CRUCIBLE_VERIFY_CHEAP",
-             "CRUCIBLE_CATALOG_DIGEST", "CRUCIBLE_CACHE_VERIFY", "CRUCIBLE_NO_TOOLS_CACHE", "CRUCIBLE_NO_EXEC")
+             "CRUCIBLE_CATALOG_DIGEST", "CRUCIBLE_CACHE_VERIFY", "CRUCIBLE_NO_TOOLS_CACHE")
 DISPOSITIONS = HELD + ("refuted",)
 LINE_NEAR, LINE_FAR, WORDS_MIN = 3, 15, 0.25
 
@@ -82,8 +83,9 @@ def repo_answers(repo_dir):
     return out
 
 
-def rounds(root, model, include_self=False):
-    """Stored full rounds reviewed by `model` with at least one answered code finding, newest first."""
+def rounds(root, model, include_self=False, skipped=None):
+    """Stored full rounds reviewed by `model` with at least one answered code finding, newest first. Rounds left out
+    only because their stored coverage wasn't complete are counted in `skipped`."""
     out = []
     for p in glob.glob(os.path.join(root, "*", "*", "review.json")):
         d = os.path.dirname(p)
@@ -94,6 +96,8 @@ def rounds(root, model, include_self=False):
         if rev.get("status") != "done" or rev.get("incremental") or rev.get("review_model") != model:
             continue
         if not (rev.get("coverage") or {}).get("complete"):     # a replay of it would be incomplete too
+            if skipped is not None:
+                skipped[INCOMPLETE] = skipped.get(INCOMPLETE, 0) + 1
             continue
         ans = repo_answers(os.path.dirname(d))
         draft = (rev.get("inputs") or {}).get("draft")
@@ -210,7 +214,8 @@ def short(model):
 def run(root, clones, models, n=5, budget=None, include_self=False, log=print):
     """Pairs: every arm on the same n rounds. A round where any arm fails is left out of all of them."""
     models = list(dict.fromkeys(models))      # an arm named twice would be run twice and counted twice
-    cands = rounds(root, models[0], include_self)
+    incomplete = {}
+    cands = rounds(root, models[0], include_self, incomplete)
     repos = anchoring.find_clones(clones)
     have = []
     for r in cands:
@@ -218,7 +223,7 @@ def run(root, clones, models, n=5, budget=None, include_self=False, log=print):
         if c:
             have.append(dict(r, clone=c))
     sample = pick(have, n)
-    skipped = {"no local clone has the commit and its base": len(cands) - len(have), "an arm failed": 0}
+    skipped = {"no local clone has the commit and its base": len(cands) - len(have), "an arm failed": 0, **incomplete}
     tmp = tempfile.mkdtemp(prefix="crucible-modelreplay-")
     rows = []
     try:
