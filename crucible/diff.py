@@ -54,8 +54,9 @@ def parse(diff):
                 cur["path"] = _git_path(raw[4:], "b/")
         elif raw.startswith("Binary files "):
             cur["binary"] = True
-            # the greedy old side makes " and " inside a name harmless: the split is the last " and " before b/
-            m = re.match(r'Binary files (.*) and ("b/(?:[^"\\]|\\.)*"|b/.*|/dev/null) differ$', raw)
+            # a /dev/null side is unambiguous; otherwise split at the last " and " before b/ (a " and " inside a name)
+            m = (re.match(r"Binary files (/dev/null) and (.*) differ$", raw)
+                 or re.match(r'Binary files (.*) and ("b/(?:[^"\\]|\\.)*"|b/.*|/dev/null) differ$', raw))
             if m and not cur["path"]:
                 if m.group(2) == "/dev/null":
                     cur["deleted"], cur["path"] = True, _git_path(m.group(1), "a/")

@@ -1859,10 +1859,12 @@ class TestQuotedDiffPaths(unittest.TestCase):
 
     def test_binary_names_with_and_and_deleted_binaries(self):
         """self-review de472ed (verifier side finding): ' and ' inside a binary name split the path wrongly."""
-        d = make_repo({"p and q.png": "\x00a", "gone.bin": "\x00z"}, {"p and q.png": "\x00b", "gone.bin": None})
+        d = make_repo({"p and q.png": "\x00a", "gone.bin": "\x00z"},
+                      {"p and q.png": "\x00b", "gone.bin": None, "p and b/q.png": "\x00n"})
         files = {f["path"]: f for f in D.parse(sh(d, "git", "diff", "main", "fix"))}
-        self.assertEqual(set(files), {"p and q.png", "gone.bin"})
+        self.assertEqual(set(files), {"p and q.png", "gone.bin", "p and b/q.png"})
         self.assertTrue(files["gone.bin"]["deleted"] and files["gone.bin"]["binary"])
+        self.assertTrue(files["p and b/q.png"]["added"] and not files["p and q.png"]["added"])
 
     def test_quoted_header_fallback_and_binary_line(self):
         self.assertEqual(D.parse('diff --git "a/caf\\303\\251 x" "b/caf\\303\\251 x"\nold mode 100644\nnew mode 100755')[0]["path"],
@@ -1905,6 +1907,19 @@ class TestRequiredLineReworded(unittest.TestCase):
         body, _ = S.keep_required_lines("Related to #947\n\nbody", "Body text.\n\nDoes not fix #947.")
         self.assertIn("Does not fix #947.", body)
         self.assertTrue(body.startswith("Related to #947\n\n"))  # it was first in the original
+
+    def test_this_repos_url_and_hash_form_are_the_same_issue(self):
+        """self-review 3a4ab90: "Closes <url of #12>" reworded to "Closes #12" must not come back as a second line."""
+        body, _ = S.keep_required_lines("Closes https://github.com/o/r/issues/12\n\nBody.", "Body, better.\n\nCloses #12",
+                                        slug="O/r")
+        self.assertEqual(body, "Body, better.\n\nCloses https://github.com/o/r/issues/12")
+
+    def test_link_line_match_is_linear(self):
+        import time
+        t = time.time()
+        for line in ["Fix https://x" + "#1" * 5000 + " !", "Fix " + "#1 " * 5000 + "x", "Fix [" + "a" * 5000]:
+            self.assertFalse(S._is_link_line(line))
+        self.assertLess(time.time() - t, 1.0)
 
     def test_another_repos_issue_with_the_same_number_is_kept(self):
         body, _ = S.keep_required_lines("Closes #12\n\nBody.\n\nSee also https://github.com/other/repo/issues/12",

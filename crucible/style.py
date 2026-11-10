@@ -6,7 +6,7 @@
 import collections, datetime as dt, os, re, statistics, subprocess, textwrap
 from .diff import authored_added
 from .util import (CODE_EXT_RX, ISSUE_KW, LEARN_VERSION, TEST_PATH_RX, Budget, Failed, claude, default_base, gh_json, git,
-                   is_bot, project_dir, read_json, write_json)
+                   is_bot, project_dir, read_json, upstream_slug, write_json)
 
 EMOJI_RX = re.compile("[\U0001F300-\U0001FAFF\U00002700-\U000027BF\U0001F000-\U0001F2FF☀-⛿⭐✅❌]")
 BOILERPLATE_RX = re.compile(r"^[^\w\n]*(this (pr|pull request|change|commit) (introduces|adds|aims|implements|fixes|addresses)|"
@@ -381,21 +381,24 @@ LINKED_REF_RX = re.compile(r"(?<![\w/])#(\d+)\b|github\.com/([^/\s]+/[^/\s]+)/(?
 # "Fixes: #12, #13 is separate" (a negation or a contrast the author wrote is not a reworded closing line).
 _LEAD_RX = re.compile(r"(?:(?:fix(?:es|ed)?|close[sd]?|resolve[sd]?|address(?:es)?|part\s+of|related(?:\s+issues?|\s+to)?"
                       r"|refs?|references|see(?:\s+also)?|issues?|for)\s*)?", re.I)
-_REF_TOKEN = r"(?:\[[^\]]*\]\([^)]*\)|<?https?://\S+?>?|#\d+)"
+# tokens need a separator between them and a URL runs to whitespace, so the match is linear (no backtracking blowup)
+_REF_TOKEN = r"(?:\[[^\]]*\]\([^)\s]*\)|<?https?://[^\s>]+>?|#\d+)"
 _LINK_LINE_RX = re.compile(r"^(?:[-*]\s+)?(?:\*\*|__)?(" + _LEAD_RX.pattern + r")(?:\*\*|__)?\s*:?\s*(?:\*\*|__)?\s*"
-                           + _REF_TOKEN + r"(?:\s*(?:,|and|&)?\s*" + _REF_TOKEN + r")*[\s.;,]*$", re.I)
+                           + _REF_TOKEN + r"(?:(?:\s*[,&]\s*|\s+(?:and\s+)?)" + _REF_TOKEN + r")*[\s.;,]*$", re.I)
 
 
-def _issue_refs(line):
-    """(repo or None, number) per link: "#8" and a URL for another repo's issue 8 are different issues."""
-    return {(None, a) if a else (repo.lower(), b) for a, repo, b in LINKED_REF_RX.findall(line)}
+def _issue_refs(line, slug=None):
+    """(repo or None, number) per link: "#8" and a URL for another repo's issue 8 are different issues; a URL for
+    this repo (slug) is the same issue as "#8"."""
+    here = (slug or "").lower()
+    return {(None, a) if a else (None if r.lower() == here else r.lower(), b) for a, r, b in LINKED_REF_RX.findall(line)}
 
 
 def _is_link_line(line):
     return bool(_LINK_LINE_RX.match(line.strip()))
 
 
-def keep_required_lines(original, rewritten):
+def keep_required_lines(original, rewritten, slug=None):
     """Issue-link lines ("Closes #12", "Related issue: #34697") are required by many PR templates and must survive a
     rewrite verbatim. Returns (body, restored lines). A line that was first in the original goes back on top, else at the end."""
     def required(line):
@@ -412,8 +415,8 @@ def keep_required_lines(original, rewritten):
     # just a short lead-in plus the link counts; a sentence that merely mentions the issue keeps its text.
     lines, placed = rewritten.strip("\n").split("\n"), []
     for m in missing:
-        refs = _issue_refs(m)
-        i = next((i for i, l in enumerate(lines) if refs & _issue_refs(l) and _is_link_line(l)
+        refs = _issue_refs(m, slug)
+        i = next((i for i, l in enumerate(lines) if refs & _issue_refs(l, slug) and _is_link_line(l)
                   and l.strip() not in req), None)
         if i is not None:
             lines[i] = re.match(r"\s*", lines[i]).group(0) + m
@@ -459,7 +462,7 @@ def polish(repo, project, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-
     if added_attr:
         log(f"  dropped AI attribution the rewrite added: {added_attr}")
         out["removed"] = list(out["removed"]) + [f"AI attribution added by the rewrite: {a}" for a in added_attr]
-    body, restored = keep_required_lines(parts["body"], body)
+    body, restored = keep_required_lines(parts["body"], body, upstream_slug(repo))
     if restored:
         log(f"  restored required line(s) the rewrite dropped: {restored}")
     txt = f"# {out['title']}\n\n{body.strip()}\n"
