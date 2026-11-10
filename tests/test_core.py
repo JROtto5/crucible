@@ -4674,3 +4674,140 @@ class TestTokenMetering(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+
+class TestModelReplay(unittest.TestCase):
+    """`crucible model-replay`: reviewer models re-review stored full rounds, scored by the author's answers."""
+    L = {"id": "CR-a", "file": "a.py", "line": 10, "severity": "medium", "source": "review",
+         "title": "Cache key ignores the draft", "wrong_if": "the key includes the draft hash"}
+
+    def _store(self, root, repo, sha, rev, answers=None, mtime=None):
+        d = os.path.join(root, repo, sha)
+        os.makedirs(d)
+        U.write_json(os.path.join(d, "review.json"), dict({"repo": repo, "sha": sha, "base": "b" + sha, "status": "done",
+                                                           "review_model": "claude-opus-5-5", "findings": []}, **rev))
+        if answers is not None:
+            p = os.path.join(d, "answers.json")
+            U.write_json(p, answers)
+            if mtime:
+                os.utime(p, (mtime, mtime))
+
+    def test_match_needs_same_file_and_nearby_line_or_shared_wording(self):
+        from crucible import modelreplay as M
+        reworded = dict(self.L, line=12, title="Draft edits don't invalidate the verdict", wrong_if="x")
+        far_same_words = dict(self.L, line=22)
+        far_other_words = dict(self.L, line=22, title="Unrelated thing", wrong_if="nothing alike")
+        self.assertIsNotNone(M.score(self.L, reworded))           # within LINE_NEAR: wording may differ
+        self.assertIsNotNone(M.score(self.L, far_same_words))     # beyond it, the wording has to overlap
+        self.assertIsNone(M.score(self.L, far_other_words))
+        self.assertIsNone(M.score(self.L, dict(self.L, file="b.py")))
+        self.assertIsNone(M.score(self.L, dict(self.L, line=10 + M.LINE_FAR + 1)))
+        # one-to-one, the best pair first: the exact copy takes the label, the reworded one is left unmatched
+        self.assertEqual(M.match([self.L], [reworded, dict(self.L)]), {0: 1})
+        self.assertEqual(M.match([self.L, dict(self.L, line=40, title="Other")], [dict(self.L)]), {0: 0})
+
+    def test_rounds_label_full_rounds_by_answers_from_any_round_of_the_repo(self):
+        from crucible import modelreplay as M
+        draft_f = dict(self.L, id="CR-d", file="PR_DRAFT.md")
+        other = dict(self.L, id="CR-u", title="Never answered")
+        with tempfile.TemporaryDirectory() as root:
+            # the full round raised CR-a; the author answered it on the later incremental round
+            self._store(root, "o__p", "s1", {"started": "2026-11-05", "findings": [self.L, draft_f, other],
+                                             "inputs": {"draft": "/w/PR_DRAFT.md"}}, {}, mtime=1000)
+            self._store(root, "o__p", "s2", {"started": "2026-11-06", "findings": [self.L],
+                                             "incremental": {"from": "s1"}},
+                        {"CR-a": {"disposition": "fixed"}, "CR-d": {"disposition": "refuted"}}, mtime=2000)
+            self._store(root, "o__q", "q1", {"started": "2026-11-07", "findings": [self.L], "review_model": "claude-sonnet-5-5"},
+                        {"CR-a": {"disposition": "refuted"}})
+            self._store(root, "JROtto5__crucible", "c1", {"started": "2026-11-08", "findings": [self.L]},
+                        {"CR-a": {"disposition": "refuted"}})
+            got = M.rounds(root, "claude-opus-5-5")
+            self.assertEqual([(r["repo"], r["sha"]) for r in got], [("o__p", "s1")])   # incremental, sonnet, self out
+            self.assertEqual([(f["id"], f["disposition"]) for f in got[0]["labelled"]], [("CR-a", "fixed")])  # draft out
+            self.assertEqual([r["sha"] for r in M.rounds(root, "claude-opus-5-5", include_self=True)], ["c1", "s1"])
+            # a later answer to the same id wins
+            self._store(root, "o__p", "s3", {"started": "2026-11-09", "findings": [], "incremental": {"from": "s2"}},
+                        {"CR-a": {"disposition": "refuted"}}, mtime=3000)
+            self.assertEqual(M.rounds(root, "claude-opus-5-5")[0]["labelled"][0]["disposition"], "refuted")
+
+    def test_pick_takes_each_projects_newest_in_turn(self):
+        from crucible import modelreplay as M
+        c = [{"repo": r, "started": t} for r, t in (("a", "9"), ("a", "8"), ("a", "7"), ("b", "6"), ("c", "5"))]
+        self.assertEqual([(r["repo"], r["started"]) for r in M.pick(c, 4)], [("a", "9"), ("b", "6"), ("c", "5"), ("a", "8")])
+
+    def test_score_arm_counts_raw_and_kept_and_lists_the_rest(self):
+        from crucible import modelreplay as M
+        held = dict(self.L, disposition="fixed")
+        refuted = dict(self.L, id="CR-r", file="b.py", title="Leaks a handle", disposition="refuted")
+        missed = dict(self.L, id="CR-m", file="c.py", title="Missing await", disposition="deferred")
+        r = {"labelled": [held, refuted, missed], "inputs": {"draft": "/w/PR_DRAFT.md"}}
+        review = {"findings": [dict(self.L, title="Draft change keeps old verdict"), dict(self.L, file="z.py", title="New"),
+                               dict(self.L, file="PR_DRAFT.md", title="Too long")],
+                  "dropped": [dict(refuted)], "cost_usd": 0.5,
+                  "tokens_review": {"total": 100}, "tokens_verify": {"total": 20}}
+        s = M.score_arm(r, review)
+        self.assertEqual((s["held"], s["refuted"], s["found_held"], s["kept_held"]), (2, 1, 1, 1))
+        self.assertEqual((s["found_refuted"], s["kept_refuted"]), (1, 0))      # raised, then dropped by verification
+        self.assertEqual((s["kept"], s["raw"], s["tokens"]), (2, 3, 120))      # the draft finding isn't counted
+        self.assertEqual([f["file"] for f in s["unlabelled"]], ["z.py"])
+        self.assertEqual([f["id"] for f in s["missed_held"]], ["CR-m"])
+        rows = [dict(r, repo="o__p", sha="s" * 12, arms={"claude-opus-5-5": s, "claude-sonnet-5-5": s})]
+        out = M.report(rows, {"an arm failed": 1}, ["claude-opus-5-5", "claude-sonnet-5-5"])
+        self.assertIn("held-up findings re-found 1/2 raw, kept 1/2", out)
+        self.assertIn("$ per held-up finding kept $0.50", out)
+        self.assertIn("skipped 1: an arm failed", out)
+        self.assertIn("c.py:10 [medium] Missing await", out)
+
+    def test_run_arm_reviews_a_throwaway_checkout_read_only_in_a_throwaway_home(self):
+        from crucible import modelreplay as M
+        with tempfile.TemporaryDirectory() as tmp:
+            clone = os.path.join(tmp, "clone")
+            os.makedirs(clone)
+            for cmd in (["init", "-q"], ["remote", "add", "upstream", "https://github.com/o/p.git"]):
+                U.git(clone, *cmd)
+            with open(os.path.join(clone, "a.py"), "w") as fh:
+                fh.write("x = 1\n")
+            U.git(clone, "add", "a.py")
+            U.git(clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "c")
+            sha = U.git(clone, "rev-parse", "HEAD").strip()
+            proj = os.path.join(U.HOME, "projects", "o__p")
+            os.makedirs(proj, exist_ok=True)
+            with open(os.path.join(proj, "rules.md"), "w") as fh:
+                fh.write("learned")
+            seen = {}
+
+            def fake_run(cmd, *a, env=None, **kw):
+                if "crucible" not in cmd:                              # git calls go through
+                    return real(cmd, *a, env=env, **kw)
+                seen.update(cmd=cmd, env=env)
+                tree = cmd[cmd.index("review") + 1]
+                seen["key"] = U.project_key(tree)
+                seen["rules"] = os.path.exists(os.path.join(env["CRUCIBLE_HOME"], "projects", "o__p", "rules.md"))
+                d = os.path.join(env["CRUCIBLE_HOME"], "reviews", "o__p", sha)
+                os.makedirs(d)
+                U.write_json(os.path.join(d, "review.json"), {"status": seen.get("status", "done"), "findings": []})
+                return subprocess.CompletedProcess(cmd, 1, "", "")
+
+            r = {"repo": "o__p", "sha": sha, "base": sha, "inputs": {"draft": "/gone/PR_DRAFT.md", "draft_sha": "x"}}
+            real = M.subprocess.run
+            M.subprocess.run = fake_run
+            try:
+                os.environ["CRUCIBLE_VERIFY_MODEL"] = "pinned"
+                rev = M.run_arm(clone, r, "claude-sonnet-5-5", os.path.join(tmp, "w"))
+                self.assertEqual(rev["status"], "done")
+                for flag in ("--no-exec", "--offline", "--full", "--fresh", "--force"):
+                    self.assertIn(flag, seen["cmd"])
+                self.assertNotIn("--draft", seen["cmd"])                # the stored draft is gone
+                self.assertEqual(seen["env"]["CRUCIBLE_REVIEW_MODEL"], "claude-sonnet-5-5")
+                self.assertNotIn("CRUCIBLE_VERIFY_MODEL", seen["env"])  # the arm's own verifier pick
+                self.assertNotEqual(seen["env"]["CRUCIBLE_HOME"], U.HOME)
+                self.assertEqual(seen["key"], "o__p")                   # so the learned rules apply
+                self.assertTrue(seen["rules"])
+                seen["status"] = "running"
+                with self.assertRaises(U.Failed):
+                    M.run_arm(clone, r, "claude-opus-5-5", os.path.join(tmp, "w2"))
+            finally:
+                M.subprocess.run = real
+                os.environ.pop("CRUCIBLE_VERIFY_MODEL", None)
+                shutil.rmtree(proj, ignore_errors=True)
+            self.assertFalse(os.path.exists(os.path.join(U.HOME, "reviews", "o__p")))

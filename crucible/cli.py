@@ -14,12 +14,13 @@
   crucible eval    [--cases ...] [--split S] [--no-tiers] [--label L] score the reviewer on fixtures (eval/)
   crucible routing-replay [--include-self]                        what cost-routing rules would lose, on stored reviews
   crucible anchor-replay --clones DIR [--per-class N] [--votes N] verifier with vs without the reviewer's argument
+  crucible model-replay --clones DIR [--models opus sonnet] [--rounds N]  reviewer models on stored rounds, scored by answers
   crucible stats   [--project P] [--since T] [--include-self] [--json]  real-PR precision, held up with its 95% interval
 
 crucible never pushes, comments, approves or posts. A human submits."""
 import argparse, datetime as dt, os, sys
 from . import __version__
-from .util import Failed, HOME, project_dir, project_key, read_json, write_json
+from .util import Failed, HOME, MODELS, project_dir, project_key, read_json, write_json
 
 
 def _p(repo):
@@ -160,6 +161,14 @@ def cmd_anchor_replay(a):
     print(anchoring.report(rows, skipped, a.votes))
 
 
+def cmd_model_replay(a):
+    from . import modelreplay
+    models = [MODELS.get(m, m) for m in a.models]
+    rows, skipped = modelreplay.run(os.path.join(HOME, "reviews"), a.clones, models, a.rounds, a.budget, a.include_self,
+                                    log=lambda m: print(m, file=sys.stderr))
+    print(modelreplay.report(rows, skipped, models))
+
+
 def _positive_int(v):
     """argparse type: an integer of at least 1."""
     try:
@@ -248,6 +257,15 @@ def main(argv=None):
     ar.add_argument("--include-self", action="store_true", help="include crucible's reviews of itself")
     ar.add_argument("--votes", type=_positive_int, default=1,
                     help="verifier calls per arm; kept only if every vote keeps it (default 1; each vote costs a call)")
+    mr = s.add_parser("model-replay", help="re-review stored full rounds with each reviewer model and score them "
+                      "against the author's answers (model calls: costs money)")
+    mr.add_argument("--clones", nargs="+", required=True, help="directories holding local clones of the reviewed repos")
+    mr.add_argument("--models", nargs="+", default=["opus", "sonnet"],
+                    help="reviewer models, the first being the one the stored rounds used (opus|sonnet|fable|haiku or "
+                    "an id; default: opus sonnet)")
+    mr.add_argument("--rounds", type=_positive_int, default=5, help="stored rounds to replay (default 5)")
+    mr.add_argument("--budget", type=float, help="USD cap for each arm's review of one round")
+    mr.add_argument("--include-self", action="store_true", help="include crucible's reviews of itself")
     sa = s.add_parser("stats", help="real-PR precision log from stored reviews: unique kept/dropped/fixed/deferred/refuted")
     sa.add_argument("--project", help="owner/name (default: every project)")
     sa.add_argument("--include-self", action="store_true", help="include crucible's reviews of itself")
@@ -264,7 +282,8 @@ def main(argv=None):
     a = p.parse_args(argv)
     {"review": cmd_review, "status": cmd_status, "answer": cmd_answer, "waive": cmd_waive, "learn": cmd_learn, "prep": cmd_prep,
      "polish": cmd_polish, "reply": cmd_reply, "vote": cmd_vote, "remember": cmd_remember, "proposals": cmd_proposals, "eval": cmd_eval,
-     "routing-replay": cmd_routing_replay, "anchor-replay": cmd_anchor_replay, "stats": cmd_stats}[a.cmd](a)
+     "routing-replay": cmd_routing_replay, "anchor-replay": cmd_anchor_replay, "stats": cmd_stats,
+     "model-replay": cmd_model_replay}[a.cmd](a)
 
 
 if __name__ == "__main__":
