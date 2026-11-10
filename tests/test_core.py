@@ -2708,6 +2708,13 @@ class TestNoExec(unittest.TestCase):
                 self.assertNotIn("incremental", r2)
                 self.assertNotIn("no_exec", r2)
                 self.assertEqual(verify_tools, [U.TOOLS_RUN])
+                # round 3 is read-only again: an executed round may be its base (nothing runs now either way)
+                open(os.path.join(repo, "a.py"), "a").write("z = 4\n"); g("commit", "-qam", "again")
+                r3 = U.read_json(os.path.join(V.run_review(repo, "main", offline=True, no_tiers=True,
+                                                           log=lambda *_: None), "review.json"))
+                self.assertEqual(r3["status"], "done", r3.get("reason"))
+                self.assertTrue(r3["no_exec"])
+                self.assertEqual(r3["incremental"]["from"], r2["sha"])
 
     def test_cli_flag_reaches_run_review(self):
         from unittest import mock
