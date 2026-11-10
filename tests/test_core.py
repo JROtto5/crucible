@@ -1926,6 +1926,71 @@ class TestClaimOwner(unittest.TestCase):
             if env is not None:
                 os.environ["CRUCIBLE_GH_USER"] = env
 
+    def _moved_base_fixture(self):
+        """An upstream repo, a clone whose branch `fix` changes a.py off upstream/main, and a helper that lands a
+        commit on upstream's main AFTER the clone's last fetch (so origin/main in the clone is stale)."""
+        up = make_repo({"a.py": "x = 1\n", "b.py": "y = 1\n"})
+        clone = tempfile.mkdtemp(prefix="crucible-clone-")
+        subprocess.run(["git", "clone", "-q", up, clone], check=True)
+        sh(clone, "git", "config", "user.email", "t@t"); sh(clone, "git", "config", "user.name", "t")
+        sh(clone, "git", "checkout", "-qb", "fix")
+        open(os.path.join(clone, "a.py"), "w").write("x = 2\n")
+        sh(clone, "git", "commit", "-qam", "fix")
+        base = sh(clone, "git", "merge-base", "origin/main", "HEAD")
+
+        def land(path, text):
+            open(os.path.join(up, path), "w").write(text)
+            sh(up, "git", "commit", "-qam", f"upstream edits {path}")
+            return sh(up, "git", "rev-parse", "HEAD")
+        return up, clone, base, land
+
+    def test_base_moved_fires_when_upstream_changed_a_touched_file_after_the_fetch(self):
+        up, clone, base, land = self._moved_base_fixture()
+        before = sh(clone, "git", "rev-parse", "origin/main")
+        tip = land("a.py", "x = 3\n")
+        r = R.base_moved(clone, "origin/main", base, ["a.py"])
+        self.assertEqual(r["status"], "warn", r)
+        self.assertIn("a.py", r["evidence"]); self.assertIn(tip[:10], r["evidence"]); self.assertIn("1 commit", r["evidence"])
+        # the fetch is by URL: the clone's tracking ref and FETCH_HEAD are untouched
+        self.assertEqual(sh(clone, "git", "rev-parse", "origin/main"), before)
+        self.assertFalse(os.path.exists(os.path.join(clone, ".git", "FETCH_HEAD")))
+
+    def test_base_moved_passes_when_unchanged_or_moved_elsewhere(self):
+        up, clone, base, land = self._moved_base_fixture()
+        r = R.base_moved(clone, "origin/main", base, ["a.py"])
+        self.assertEqual(r["status"], "pass", r); self.assertIn("still at the merge-base", r["evidence"])
+        land("b.py", "y = 2\n")                                  # moved, but not in a file the change touches
+        r = R.base_moved(clone, "origin/main", base, ["a.py"])
+        self.assertEqual(r["status"], "pass", r); self.assertIn("none in the files", r["evidence"])
+
+    def test_base_moved_rewritten_unreachable_and_local_bases(self):
+        up, clone, base, land = self._moved_base_fixture()
+        sh(up, "git", "commit", "-q", "--amend", "-m", "rewritten")       # force-pushed base: merge-base gone from it
+        r = R.base_moved(clone, "origin/main", base, ["a.py"])
+        self.assertEqual(r["status"], "warn", r); self.assertIn("rewritten", r["evidence"])
+        self.assertEqual(R.base_moved(clone, "main", base, ["a.py"])["status"], "na")      # local ref / SHA: na
+        self.assertEqual(R.base_moved(clone, None, base, ["a.py"])["status"], "na")
+        r = R.base_moved(clone, "origin/gone", base, ["a.py"])
+        self.assertEqual(r["status"], "warn", r); self.assertIn("no branch", r["evidence"])
+        sh(clone, "git", "remote", "set-url", "origin", os.path.join(up, "missing"))
+        r = R.base_moved(clone, "origin/main", base, ["a.py"])
+        self.assertEqual(r["status"], "warn", r); self.assertIn("could not reach", r["evidence"])
+
+    def test_evaluate_runs_base_moved_with_the_base_ref_unless_offline(self):
+        up, clone, base, land = self._moved_base_fixture()
+        land("a.py", "x = 3\n")
+        files = [{"path": "a.py", "hunks": []}]
+        orig = (R.unclaimed, R.overlapping_prs, R.resolve_issue)
+        R.unclaimed = lambda repo, issue, me=None: R._item("issue still unclaimed", "pass", "")
+        R.overlapping_prs = lambda repo, files, me=None: R._item("no open PR changes the same lines", "pass", "")
+        R.resolve_issue = lambda repo, numbers: (None, [])
+        try:
+            item = lambda res: next(i for i in res["items"] if i["item"].startswith("base branch"))
+            self.assertEqual(item(R.evaluate(clone, "o__r", base, files, me="t", base_ref="origin/main"))["status"], "warn")
+            self.assertEqual(item(R.evaluate(clone, "o__r", base, files, offline=True, base_ref="origin/main"))["status"], "na")
+        finally:
+            R.unclaimed, R.overlapping_prs, R.resolve_issue = orig
+
     def test_evaluate_passes_the_login_to_both_claim_checks(self):
         # self-review CR-a8ea6b56: the wiring from evaluate() to the two checks had no test
         seen, env = {}, os.environ.pop("CRUCIBLE_GH_USER", None)

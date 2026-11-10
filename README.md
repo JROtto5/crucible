@@ -83,6 +83,7 @@ Those 16 cases are the **build** split: crucible's prompts and verifier have bee
    - size: the lines changed outside test files, compared with the same count over the project's merged PRs (`crucible learn` measures it; older learned data falls back to all lines and says so);
    - the issue is still open, unassigned and has no competing open PR (`gh`).
    - no other open PR changes the same lines, whatever issue it links (`gh`, warn only). Up to the 300 most recently updated open PRs are read; the 20 most focused that share a file are compared line by line (a line you change inside one of their hunks), listed most focused first. PRs that share only a file are counted, and any PR that couldn't be compared is named, never passed. Bots, your own PRs, lockfiles, changelogs and package.json are ignored.
+   - the base branch hasn't moved under the change (`git ls-remote`, warn only, skipped by `--offline`): crucible diffs against your local `<remote>/<branch>` and never fetches, so this reads the remote's live tip and names the files changed upstream since your merge-base that your change also touches. A missing tip commit is fetched by URL, which moves no ref in your checkout. A local branch or SHA as `--base` makes it "na".
 
 **GREEN** means coverage is complete, no non-pre-existing check failures remain, no critical or important finding is left unless it's fixed or refuted, and every finding has an answer. **Ready to submit** means GREEN plus no failed readiness item.
 

@@ -786,6 +786,66 @@ def newer_draft(repo, draft_path):
                  "about the judged file only")
 
 
+REMOTE_TIMEOUT = 30
+
+
+def _remote_git(repo, *args):
+    """A git call that talks to a remote: never prompts for credentials and gives up after REMOTE_TIMEOUT s.
+    Returns stdout, or None on any failure (unreachable, auth, timeout)."""
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_ASKPASS="true", SSH_ASKPASS="true")
+    try:
+        r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, env=env, timeout=REMOTE_TIMEOUT,
+                           stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def base_moved(repo, base_ref, base, paths):
+    """Has the base branch moved on the remote since the merge-base, in files this change touches? crucible diffs
+    against the local remote-tracking ref and never fetches, so commits that landed upstream after the last fetch
+    were invisible: the change is judged against code that no longer exists (BLAZE's 11-08 "stale base" class: 0 of
+    4 caught). Reads the remote tip with `git ls-remote`; if that commit isn't local, fetches it by URL, which updates
+    no ref (FETCH_HEAD included), so the checkout and its tracking refs stay as they were. No model call, no
+    execution. Only a remote-tracking base (`<remote>/<branch>`) can be checked; a local branch or a SHA is "na"."""
+    name = "base branch hasn't moved under the change"
+    remotes = git(repo, "remote", check=False).split()
+    remote = next((r for r in sorted(remotes, key=len, reverse=True) if (base_ref or "").startswith(r + "/")), None)
+    if not remote:
+        return _item(name, "na", f"base {base_ref or base[:10]} is not a remote-tracking branch")
+    branch = base_ref[len(remote) + 1:]
+    out = _remote_git(repo, "ls-remote", "--heads", remote, f"refs/heads/{branch}")
+    if out is None:
+        return _item(name, "warn", f"could not reach {remote} to read {branch}'s tip (offline, auth or timeout); "
+                     f"the review is against the last fetch of {base_ref}")
+    tip = next((ln.split()[0] for ln in out.splitlines() if ln.endswith(f"\trefs/heads/{branch}")), None)
+    if not tip:
+        return _item(name, "warn", f"{remote} has no branch {branch!r} any more; the base may have been renamed")
+    if tip == base:
+        return _item(name, "pass", f"{remote}'s {branch} is still at the merge-base {base[:10]}")
+    if not util.ref_exists(repo, tip):
+        url = git(repo, "remote", "get-url", remote, check=False)
+        # by URL, not by remote name: a named fetch also moves refs/remotes/<remote>/<branch> as a side effect
+        if not url or _remote_git(repo, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", url,
+                                  f"refs/heads/{branch}") is None or not util.ref_exists(repo, tip):
+            return _item(name, "warn", f"{remote}'s {branch} is at {tip[:10]}, not the merge-base {base[:10]}, and "
+                         "that commit couldn't be fetched to compare. `git fetch` and re-run")
+    if subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", base, tip],
+                      capture_output=True).returncode != 0:
+        return _item(name, "warn", f"{remote}'s {branch} was rewritten: the merge-base {base[:10]} is no longer on it "
+                     f"(tip {tip[:10]}). Rebase onto the new {base_ref} and re-run")
+    n = git(repo, "rev-list", "--count", f"{base}..{tip}", check=False) or "?"
+    changed = set(git(repo, "diff", "--name-only", "--no-renames", base, tip, check=False).split("\n")) - {""}
+    both = sorted(changed.intersection(paths))
+    where = f"{n} commit(s) landed on {remote}'s {branch} since the merge-base {base[:10]} (tip {tip[:10]})"
+    if not both:
+        return _item(name, "pass", f"{where}, none in the files this change touches")
+    shown = ", ".join(both[:5]) + (f" +{len(both) - 5} more" if len(both) > 5 else "")
+    return _item(name, "warn", f"{where}; {len(both)} of them change files this change touches too: {shown}. The review "
+                 f"judged the old base: `git fetch {remote} && git rebase {base_ref}`, then re-run (and re-measure "
+                 "any numbers quoted in the draft)")
+
+
 def current_login():
     """The GitHub login of whoever runs crucible: CRUCIBLE_GH_USER, else the account `gh` is logged in as, else None.
     The claim checks skip this person's own assignment and PRs; the default used to be the maintainer's own handle,
@@ -797,7 +857,7 @@ def current_login():
     return d.get("login") if isinstance(d, dict) else None
 
 
-def evaluate(repo, project, base, files, draft=None, me=None, offline=False):
+def evaluate(repo, project, base, files, draft=None, me=None, offline=False, base_ref=None):
     if me is None and not offline and upstream_slug(repo):    # both claim checks are "na" without a GitHub remote
         me = current_login()
     paths = [f["path"] for f in files]
@@ -828,6 +888,8 @@ def evaluate(repo, project, base, files, draft=None, me=None, offline=False):
         learned_data(project),
         _item("issue still unclaimed", "na", "offline") if offline else unclaimed(repo, issue, me),
         _item("no open PR changes the same lines", "na", "offline") if offline else overlapping_prs(repo, files, me),
+        _item("base branch hasn't moved under the change", "na", "offline") if offline else
+        base_moved(repo, base_ref, base, paths),
     ]
     return {"draft": draft_path, "issue": issue, "items": items,
             "ready": not any(i["status"] == "fail" for i in items)}

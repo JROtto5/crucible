@@ -691,7 +691,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         chk = {"results": [], "note": "skipped by " + ("--no-exec" if no_exec else "--skip-checks")} if skip_checks else \
             checks_mod.run_all(repo, project, base, on_base=base_checks, log=log, paths=[f["path"] for f in files])
         record["checks"] = chk
-        ready = readiness.evaluate(repo, project, base, files, draft=draft, offline=offline)
+        ready = readiness.evaluate(repo, project, base, files, draft=draft, offline=offline, base_ref=base_ref)
         record["readiness"] = ready
         draft_path, draft_full = readiness.find_draft(repo, draft)
         draft_text = readiness.submitted_text(draft_full)
