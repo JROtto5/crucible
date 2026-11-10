@@ -10,6 +10,29 @@ CONFLICT_RX = re.compile(r"^(<<<<<<< |>>>>>>> |=======$)")
 HUNK_RX = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 
+_C_ESC = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13, '"': 34, "\\": 92}
+
+
+def _git_path(s, prefix=""):
+    """A path as git prints it in diff headers -> the real path. Git C-quotes names with non-ASCII or special bytes
+    ("b/caf\\303\\251.py", octal UTF-8 bytes) and ends a ---/+++ name that has a space with a tab ("b/a b.py\\t")."""
+    s = s.rstrip("\t") if not s.startswith('"') else s.split("\t")[0]
+    if len(s) >= 2 and s[0] == s[-1] == '"':
+        out, i, body = bytearray(), 0, s[1:-1]
+        while i < len(body):
+            c = body[i]
+            if c == "\\" and i + 1 < len(body):
+                n = body[i + 1]
+                if n in "01234567" and re.match(r"[0-7]{3}", body[i + 1:i + 4]):
+                    out.append(int(body[i + 1:i + 4], 8)); i += 4
+                    continue
+                out.append(_C_ESC.get(n, ord(n))); i += 2
+                continue
+            out += c.encode(); i += 1
+        s = out.decode("utf-8", "replace")
+    return s[len(prefix):] if prefix and s.startswith(prefix) else s
+
+
 def parse(diff):
     """-> list of files: {path, old_path, deleted, added, hunks:[{old_start,old_len,new_start,new_len,lines:[(kind,text,old_no,new_no)]}], text}"""
     files, cur, hunk = [], None, None
@@ -22,17 +45,17 @@ def parse(diff):
             continue
         cur["text"].append(raw)
         if hunk is None and raw.startswith("--- "):
-            cur["old_path"] = None if raw[4:] == "/dev/null" else re.sub(r"^a/", "", raw[4:])
+            cur["old_path"] = None if raw[4:] == "/dev/null" else _git_path(raw[4:], "a/")
             cur["added"] = raw[4:] == "/dev/null"
         elif hunk is None and raw.startswith("+++ "):
             if raw[4:] == "/dev/null":
                 cur["deleted"], cur["path"] = True, cur["old_path"]
             else:
-                cur["path"] = re.sub(r"^b/", "", raw[4:])
+                cur["path"] = _git_path(raw[4:], "b/")
         elif raw.startswith("Binary files "):
             cur["binary"] = True
-            m = re.search(r" and (?:b/)?(.+?) differ$", raw)
-            cur["path"] = cur["path"] or (m.group(1) if m else None)
+            m = re.search(r" and (\"(?:[^\"\\\\]|\\\\.)*\"|\S.*?) differ$", raw)
+            cur["path"] = cur["path"] or (_git_path(m.group(1), "b/") if m else None)
         elif HUNK_RX.match(raw):
             m = HUNK_RX.match(raw)
             hunk = {"old_start": int(m.group(1)), "old_len": int(m.group(2) or 1),
@@ -54,8 +77,9 @@ def parse(diff):
     for f in files:
         f["text"] = "\n".join(f["text"])
         if not f["path"]:
-            m = re.match(r"diff --git a/(.+?) b/(.+)$", f["text"].split("\n", 1)[0])
-            f["path"] = m.group(2) if m else "?"
+            head = f["text"].split("\n", 1)[0]
+            m = re.match(r'diff --git (?:a/.+?|"a/(?:[^"\\]|\\.)*") (b/.+|"b/(?:[^"\\]|\\.)*")$', head)
+            f["path"] = _git_path(m.group(1), "b/") if m else "?"
         for h in f["hunks"]:
             h.pop("_o", None); h.pop("_n", None)
     return files

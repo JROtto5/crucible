@@ -375,6 +375,20 @@ REQUIRED_LINE_RX = re.compile(r"^\s*(?:[-*]\s*)?(?:\*\*)?" + ISSUE_KW + r"\b(?:\
                               r"|github\.com/[^/\s]+/[^/\s]+/issues/\d+", re.I)
 
 
+LINKED_REF_RX = re.compile(r"(?<![\w/])#(\d+)\b|github\.com/[^/\s]+/[^/\s]+/(?:issues|pull)/(\d+)", re.I)
+
+
+def _issue_refs(line):
+    return {a or b for a, b in LINKED_REF_RX.findall(line)}
+
+
+def _is_link_line(line):
+    """'Fix #947', '**Resolves:** #947.', '- Part of https://github.com/o/r/issues/8': at most three words besides the links."""
+    t = re.sub(r"\[[^\]]*\]\([^)]*\)|<?https?://\S+|#\d+", " ", line)
+    words = re.findall(r"[A-Za-z]+", t)
+    return len(words) <= 3 and not re.search(r"[^\sA-Za-z*_:.,;()\-&]", t)
+
+
 def keep_required_lines(original, rewritten):
     """Issue-link lines ("Closes #12", "Related issue: #34697") are required by many PR templates and must survive a
     rewrite verbatim. Returns (body, restored lines). A line that was first in the original goes back on top, else at the end."""
@@ -387,10 +401,21 @@ def keep_required_lines(original, rewritten):
     missing = [l for l in req if re.sub(r"\s+", " ", l).lower() not in have]
     if not missing:
         return rewritten, []
+    # The rewrite usually doesn't drop the line, it rewords it ("Fixes #947" -> "Fix #947", "Resolves: #947.").
+    # Appending the original then leaves both, so put it back in the reworded line's place. Only a line that is
+    # just a short lead-in plus the link counts; a sentence that merely mentions the issue keeps its text.
+    lines, placed = rewritten.strip("\n").split("\n"), []
+    for m in missing:
+        refs = _issue_refs(m)
+        i = next((i for i, l in enumerate(lines) if refs & _issue_refs(l) and _is_link_line(l)
+                  and l.strip() not in req), None)
+        if i is not None:
+            lines[i] = re.match(r"\s*", lines[i]).group(0) + m
+            placed.append(m)
     first = next((l.strip() for l in original.split("\n") if l.strip()), "")
-    top = [l for l in missing if l == first]
-    rest = [l for l in missing if l != first]
-    body = rewritten.strip("\n")
+    top = [l for l in missing if l == first and l not in placed]
+    rest = [l for l in missing if l != first and l not in placed]
+    body = "\n".join(lines)
     if top:
         body = "\n".join(top) + "\n\n" + body
     if rest:

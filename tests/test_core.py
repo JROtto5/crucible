@@ -1841,6 +1841,59 @@ class TestResolveIssue(unittest.TestCase):
         self.assertNotEqual(V.verify_prompt(f, "code"), V.verify_prompt(f, "code", "files changed since: b.js"))
 
 
+class TestQuotedDiffPaths(unittest.TestCase):
+    """git C-quotes non-ASCII names and tab-terminates names with spaces; parse must return the real path."""
+    def test_real_git_diff_paths(self):
+        d = make_repo({"café.py": "a\n", "a b.py": "a\n", 'q"t.py': "a\n", "keep.png": "x"},
+                      {"café.py": "b\n", "a b.py": "b\n", 'q"t.py': "b\n", "新.py": "n\n", "keep.png": None,
+                       "d e.png": "\x00\x01"})
+        out = subprocess.run(["git", "-c", "core.quotepath=true", "diff", "main", "fix"], cwd=d,
+                             capture_output=True, text=True).stdout
+        files = {f["path"]: f for f in D.parse(out)}
+        self.assertEqual(set(files), {"café.py", "a b.py", 'q"t.py', "新.py", "keep.png", "d e.png"})
+        self.assertEqual(files["café.py"]["old_path"], "café.py")
+        self.assertEqual(files["a b.py"]["old_path"], "a b.py")
+        self.assertTrue(files["新.py"]["added"])
+        self.assertTrue(files["keep.png"]["deleted"])
+        self.assertEqual(files["café.py"]["hunks"][0]["lines"][-1][:2], ("+", "b"))
+
+    def test_quoted_header_fallback_and_binary_line(self):
+        self.assertEqual(D.parse('diff --git "a/caf\\303\\251 x" "b/caf\\303\\251 x"\nold mode 100644\nnew mode 100755')[0]["path"],
+                         "café x")
+        self.assertEqual(D.parse('diff --git "a/x\\303\\251.png" "b/x\\303\\251.png"\n'
+                                 'Binary files /dev/null and "b/x\\303\\251.png" differ')[0]["path"], "xé.png")
+        self.assertEqual(D._git_path('"b/t\\tab\\\\x"', "b/"), "t\tab\\x")
+
+
+class TestRequiredLineReworded(unittest.TestCase):
+    """DRG-79 (bvh-947, 2026-11-10): the rewrite turned "Fixes #947" into "Fix #947" and the restore added a second line."""
+    def test_reworded_link_line_is_replaced_not_duplicated(self):
+        body, restored = S.keep_required_lines("Fixes #947\n\nWorker errors now reject.",
+                                               "Worker errors now reject the promise.\n\nFix #947")
+        self.assertEqual(restored, ["Fixes #947"])
+        self.assertEqual(body, "Worker errors now reject the promise.\n\nFixes #947")
+
+    def test_reworded_bold_and_url_forms(self):
+        body, _ = S.keep_required_lines("Text.\n\nCloses #5", "Better text.\n\n**Resolves:** #5.")
+        self.assertEqual(body.count("#5"), 1)
+        self.assertTrue(body.endswith("Closes #5"))
+        body, _ = S.keep_required_lines("Text.\n\nhttps://github.com/o/r/issues/8",
+                                        "Better.\n\n- Part of [#8](https://github.com/o/r/issues/8)")
+        self.assertEqual(body, "Better.\n\nhttps://github.com/o/r/issues/8")
+
+    def test_sentence_mentioning_the_issue_keeps_its_text(self):
+        body, restored = S.keep_required_lines("Fixes #947\n\nx", "This fixes #947 by rejecting worker errors.")
+        self.assertEqual(restored, ["Fixes #947"])
+        self.assertIn("by rejecting worker errors", body)
+        self.assertTrue(body.startswith("Fixes #947\n\n"))
+
+    def test_other_issue_and_verbatim_lines_untouched(self):
+        body, _ = S.keep_required_lines("Closes #1\nFixes #2\n\nx", "Closes #1\n\nFix #3\n\ny")
+        self.assertIn("Fix #3", body)
+        self.assertEqual(body.count("Closes #1"), 1)
+        self.assertTrue(body.endswith("Fixes #2"))
+
+
 class TestRequiredLinesNegative(unittest.TestCase):
     def test_prose_mentioning_an_issue_is_not_required(self):
         self.assertEqual(S.keep_required_lines("As discussed in https://github.com/o/r/issues/8 we fix x.", "We fix x.")[1], [])
