@@ -4680,7 +4680,8 @@ class TestModelReplay(unittest.TestCase):
         d = os.path.join(root, repo, sha)
         os.makedirs(d)
         U.write_json(os.path.join(d, "review.json"), dict({"repo": repo, "sha": sha, "base": "b" + sha, "status": "done",
-                                                           "review_model": "claude-opus-5-5", "findings": []}, **rev))
+                                                           "review_model": "claude-opus-5-5", "findings": [],
+                                                           "coverage": {"complete": True}}, **rev))
         if answers is not None:
             p = os.path.join(d, "answers.json")
             U.write_json(p, answers)
@@ -4716,8 +4717,10 @@ class TestModelReplay(unittest.TestCase):
                         {"CR-a": {"disposition": "refuted"}})
             self._store(root, "JROtto5__crucible", "c1", {"started": "2026-11-08", "findings": [self.L]},
                         {"CR-a": {"disposition": "refuted"}})
+            self._store(root, "o__p", "s0", {"started": "2026-11-04", "findings": [self.L], "coverage": {"complete": False}})
             got = M.rounds(root, "claude-opus-5-5")
-            self.assertEqual([(r["repo"], r["sha"]) for r in got], [("o__p", "s1")])   # incremental, sonnet, self out
+            # incremental, sonnet-reviewed, incomplete and self rounds are left out
+            self.assertEqual([(r["repo"], r["sha"]) for r in got], [("o__p", "s1")])
             self.assertEqual([(f["id"], f["disposition"]) for f in got[0]["labelled"]], [("CR-a", "fixed")])  # draft out
             self.assertEqual([r["sha"] for r in M.rounds(root, "claude-opus-5-5", include_self=True)], ["c1", "s1"])
             # a later answer to the same id wins
@@ -4780,7 +4783,9 @@ class TestModelReplay(unittest.TestCase):
                 seen["rules"] = os.path.exists(os.path.join(env["CRUCIBLE_HOME"], "projects", "o__p", "rules.md"))
                 d = os.path.join(env["CRUCIBLE_HOME"], "reviews", "o__p", sha)
                 os.makedirs(d)
-                U.write_json(os.path.join(d, "review.json"), {"status": seen.get("status", "done"), "findings": []})
+                U.write_json(os.path.join(d, "review.json"), {"status": seen.get("status", "done"), "findings": [],
+                                                              "coverage": {"complete": True},
+                                                              "review_model": seen.get("ran", env["CRUCIBLE_REVIEW_MODEL"])})
                 return subprocess.CompletedProcess(cmd, 1, "", "")
 
             r = {"repo": "o__p", "sha": sha, "base": sha, "inputs": {"draft": "/gone/PR_DRAFT.md", "draft_sha": "x"}}
@@ -4788,6 +4793,7 @@ class TestModelReplay(unittest.TestCase):
             M.subprocess.run = fake_run
             try:
                 os.environ["CRUCIBLE_VERIFY_MODEL"] = "pinned"
+                os.environ["CRUCIBLE_ROUTE"] = "1"
                 rev = M.run_arm(clone, r, "claude-sonnet-5-5", os.path.join(tmp, "w"))
                 self.assertEqual(rev["status"], "done")
                 for flag in ("--no-exec", "--offline", "--full", "--fresh", "--force"):
@@ -4795,15 +4801,29 @@ class TestModelReplay(unittest.TestCase):
                 self.assertNotIn("--draft", seen["cmd"])                # the stored draft is gone
                 self.assertEqual(seen["env"]["CRUCIBLE_REVIEW_MODEL"], "claude-sonnet-5-5")
                 self.assertNotIn("CRUCIBLE_VERIFY_MODEL", seen["env"])  # the arm's own verifier pick
+                self.assertNotIn("CRUCIBLE_ROUTE", seen["env"])         # routing could swap the reviewer
                 self.assertNotEqual(seen["env"]["CRUCIBLE_HOME"], U.HOME)
                 self.assertEqual(seen["key"], "o__p")                   # so the learned rules apply
                 self.assertTrue(seen["rules"])
+                seen["ran"] = "claude-sonnet-5-5"                        # e.g. routed to another reviewer
+                with self.assertRaises(U.Failed):
+                    M.run_arm(clone, r, "claude-opus-5-5", os.path.join(tmp, "w3"))
+                seen.pop("ran")
                 seen["status"] = "running"
                 with self.assertRaises(U.Failed):
                     M.run_arm(clone, r, "claude-opus-5-5", os.path.join(tmp, "w2"))
+                # a partial clone whose origin is a fork: checkout() copies that origin, upstream must still win
+                U.git(clone, "remote", "add", "origin", "https://github.com/me/p.git")
+                U.git(clone, "config", "remote.origin.promisor", "true")
+                tree, home = M._prepare(clone, r, os.path.join(tmp, "w4"), "a/b")
+                self.assertEqual(U.project_key(tree), "o__p")
+                self.assertEqual(os.path.dirname(tree), os.path.join(tmp, "w4"))   # "a/b" didn't nest a directory
+                with self.assertRaises(U.Failed):                                 # wrong project: fail before paying
+                    M._prepare(clone, dict(r, repo="x__y"), os.path.join(tmp, "w5"), "opus")
             finally:
                 M.subprocess.run = real
                 os.environ.pop("CRUCIBLE_VERIFY_MODEL", None)
+                os.environ.pop("CRUCIBLE_ROUTE", None)
                 shutil.rmtree(proj, ignore_errors=True)
             self.assertFalse(os.path.exists(os.path.join(U.HOME, "reviews", "o__p")))
 
@@ -4860,9 +4880,13 @@ class TestModelReplay(unittest.TestCase):
         saved = (M._prepare, M.subprocess.run, M.read_json)
         M._prepare = lambda clone, r, tmp, label: ("/tree", "/home")
         M.subprocess.run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "")
-        M.read_json = lambda p, d=None: {"status": "done", "findings": [], "coverage": {"complete": False}}
+        M.read_json = lambda p, d=None: {"status": "done", "findings": [], "coverage": {"complete": False},
+                                         "review_model": "nodash"}
         try:
             with self.assertRaises(U.Failed):
+                M.run_arm("/c", {"repo": "o__p", "sha": "s" * 12, "base": "b", "inputs": {}}, "nodash", "/t")
+            M.read_json = lambda p, d=None: {"status": "done", "findings": [], "review_model": "nodash"}
+            with self.assertRaises(U.Failed):                   # no coverage record: not known to be complete
                 M.run_arm("/c", {"repo": "o__p", "sha": "s" * 12, "base": "b", "inputs": {}}, "nodash", "/t")
         finally:
             M._prepare, M.subprocess.run, M.read_json = saved

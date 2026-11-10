@@ -20,12 +20,16 @@ otherwise.
 Every arm runs with --no-exec (nothing from the checkout runs, on this machine), --offline, --full and --fresh, in a
 throwaway CRUCIBLE_HOME that holds a copy of the project's learned rules and style, so stored reviews, the cache and
 `stats` are never touched. Model calls: this costs money (--budget caps each arm's run)."""
-import glob, os, shutil, subprocess, sys, tempfile
+import glob, os, re, shutil, subprocess, sys, tempfile
 
 from . import anchoring
-from .util import HOME, MODELS, Failed, git, norm_words, read_json
+from .util import HOME, MODELS, Failed, git, norm_words, project_key, read_json
 
 HELD = ("fixed", "deferred")
+# settings that would change an arm's pipeline away from the default for its reviewer: the verifier pick, cost
+# routing (which can swap the reviewer on a docs-only round), the cheap tier, and cache/prompt switches
+ARM_UNSET = ("CRUCIBLE_VERIFY_MODEL", "CRUCIBLE_ROUTE", "CRUCIBLE_ROUTE_DOCS_MODEL", "CRUCIBLE_VERIFY_CHEAP",
+             "CRUCIBLE_CATALOG_DIGEST", "CRUCIBLE_CACHE_VERIFY", "CRUCIBLE_NO_TOOLS_CACHE", "CRUCIBLE_NO_EXEC")
 DISPOSITIONS = HELD + ("refuted",)
 LINE_NEAR, LINE_FAR, WORDS_MIN = 3, 15, 0.25
 
@@ -89,6 +93,8 @@ def rounds(root, model, include_self=False):
         rev = read_json(p) or {}
         if rev.get("status") != "done" or rev.get("incremental") or rev.get("review_model") != model:
             continue
+        if not (rev.get("coverage") or {}).get("complete"):     # a replay of it would be incomplete too
+            continue
         ans = repo_answers(os.path.dirname(d))
         draft = (rev.get("inputs") or {}).get("draft")
         labelled = [dict(f, disposition=ans[f["id"]]["disposition"]) for f in rev.get("findings", [])
@@ -137,12 +143,17 @@ def score_arm(r, review):
 
 
 def _prepare(clone, r, tmp, label):
+    label = re.sub(r"[^A-Za-z0-9._-]", "_", label)          # a model id like "a/b" stays one path component
     tree = anchoring.checkout(clone, r["sha"], os.path.join(tmp, f"{r['sha'][:10]}-{label}"))
-    # the project key (and so the learned rules and style) comes from the remote's slug
-    url = git(clone, "remote", "get-url", "upstream", check=False).strip() or \
-        git(clone, "remote", "get-url", "origin", check=False).strip()
-    if url and "origin" not in git(tree, "remote", check=False).split():
-        git(tree, "remote", "add", "origin", url)
+    # the project key (and so the learned rules and style) comes from the remotes' slugs, upstream first; checkout()
+    # may already have added the clone's origin (a fork) for a partial clone, so upstream is added on its own
+    have = git(tree, "remote", check=False).split()
+    for name in ("upstream", "origin"):
+        url = git(clone, "remote", "get-url", name, check=False).strip()
+        if url and name not in have:
+            git(tree, "remote", "add", name, url)
+    if project_key(tree) != r["repo"]:
+        raise Failed(f"{r['repo']} {r['sha'][:10]}: the checkout resolves to {project_key(tree)}, not {r['repo']}")
     home = os.path.join(tmp, f"home-{r['sha'][:10]}-{label}")
     src = os.path.join(HOME, "projects", r["repo"])
     if os.path.isdir(src):
@@ -173,7 +184,8 @@ def run_arm(clone, r, model, tmp, budget=None, log=print):
     if budget:
         cmd += ["--budget", str(budget)]
     env = dict(os.environ, CRUCIBLE_HOME=home, CRUCIBLE_CACHE=os.path.join(home, "cache"), CRUCIBLE_REVIEW_MODEL=model)
-    env.pop("CRUCIBLE_VERIFY_MODEL", None)          # each arm gets the verifier review would pick for its reviewer
+    for k in ARM_UNSET:                             # every arm runs crucible's defaults for its reviewer
+        env.pop(k, None)
     # an empty PYTHONPATH entry would add the cwd to the child's import path
     env["PYTHONPATH"] = os.pathsep.join(p for p in (os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                                     env.get("PYTHONPATH")) if p)
@@ -183,8 +195,10 @@ def run_arm(clone, r, model, tmp, budget=None, log=print):
         raise Failed(f"{r['repo']} {r['sha'][:10]} {label}: review did not finish ({(p.stderr or p.stdout)[-300:]})")
     # a round whose review chunks failed (an unknown model id, a usage limit) is "done" with no findings: it would
     # score as a clean zero instead of being left out
-    if not (review.get("coverage") or {}).get("complete", True):
+    if not (review.get("coverage") or {}).get("complete"):
         raise Failed(f"{r['repo']} {r['sha'][:10]} {label}: review incomplete (a review chunk failed)")
+    if review.get("review_model") != model:
+        raise Failed(f"{r['repo']} {r['sha'][:10]} {label}: reviewed by {review.get('review_model')}, not {model}")
     review["_draft_passed"] = bool(draft)
     return review
 
