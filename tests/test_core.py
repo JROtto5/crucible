@@ -4943,6 +4943,18 @@ class TestModelReplay(unittest.TestCase):
             go(1)
             self.assertEqual(len(calls), 2)
             M.pipeline_version = saved[4]
+            # nor do new learned rules for the project (they go into the review prompt)
+            go(3)                                        # c1 was re-run under "other": settle it on the real version
+            proj = os.path.join(U.HOME, "projects", "o__a")
+            os.makedirs(proj, exist_ok=True)
+            with open(os.path.join(proj, "rules.md"), "w") as fh:
+                fh.write("new rule")
+            calls.clear()
+            try:
+                rows, _, _ = go(3)
+            finally:
+                shutil.rmtree(proj, ignore_errors=True)
+            self.assertEqual(sorted(calls), [("a1", "claude-opus-5-5"), ("a1", "claude-sonnet-5-5")])
             # --fresh re-runs; --exclude leaves a round out and counts it
             calls.clear()
             rows, skipped, _ = go(3, fresh=True, exclude=("a1",))
@@ -4998,6 +5010,10 @@ class TestModelReplay(unittest.TestCase):
             v4 = edited("review.py", "\ndef _late():\n    from . import learn\n")
             self.assertIn("learn.py", M.pipeline_files(pkg))
             self.assertNotEqual(edited("learn.py"), v4)
+            # a parenthesised name list over several lines, with a comment
+            self.assertNotIn("assist.py", M.pipeline_files(pkg))
+            edited("review.py", "\nfrom . import (\n    diff,  # x\n    assist as a,\n)\n")
+            self.assertIn("assist.py", M.pipeline_files(pkg))
 
     def test_a_billed_arm_that_is_rejected_still_counts_in_spend(self):
         from crucible import modelreplay as M

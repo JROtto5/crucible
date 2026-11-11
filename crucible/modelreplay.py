@@ -259,7 +259,8 @@ def short(model):
 
 # where `crucible review` starts: its command handler and the pipeline; pipeline_version follows their imports
 PIPELINE_ROOTS = ("cli.py", "review.py")
-_IMPORT_RX = re.compile(r"^[ \t]*from \.(\w*) import \(?([\w, ]+)", re.M)    # lazy (indented) imports too
+# lazy (indented) imports too, and a parenthesised name list over several lines
+_IMPORT_RX = re.compile(r"^[ \t]*from \.(\w*) import (?:\(([^)]*)\)|([\w, ]+))", re.M)
 
 
 def pipeline_files(pkg):
@@ -268,8 +269,9 @@ def pipeline_files(pkg):
     seen, todo = set(PIPELINE_ROOTS), ["review.py"]
     while todo:
         src = open(os.path.join(pkg, todo.pop()), errors="replace").read()
-        for mod, names in _IMPORT_RX.findall(src):
-            cands = [mod] if mod else [n.split(" as ")[0].strip() for n in names.split(",")]
+        for mod, paren, names in _IMPORT_RX.findall(src):
+            cands = [mod] if mod else [re.sub(r"#.*", "", n).split(" as ")[0].strip()
+                                       for n in (paren or names).split(",")]
             for c in cands:
                 f = c + ".py"
                 if c and f not in seen and os.path.isfile(os.path.join(pkg, f)):
@@ -294,6 +296,19 @@ def pipeline_version(pkg=None):
     return h.hexdigest()[:16]
 
 
+def project_inputs(repo):
+    """A hash of what `review` reads from the project's learned data (rules.md, STYLE.md, memory.md, style.json...),
+    the same directory _prepare copies into each arm's home: a `learn` run or a new memory changes the prompt."""
+    import hashlib
+    src = os.path.join(HOME, "projects", repo)
+    h = hashlib.sha256()
+    for f in sorted(glob.glob(os.path.join(src, "**", "*"), recursive=True)):
+        if os.path.isfile(f):
+            with open(f, "rb") as fh:
+                h.update(os.path.relpath(f, src).encode() + b"\0" + fh.read() + b"\0")
+    return h.hexdigest()[:16]
+
+
 def _arm_path(r, model, budget):
     """Where one arm's review of one round is kept. The budget is part of the key: a capped arm is a different run."""
     b = f"{budget:g}" if budget else "nobudget"
@@ -301,8 +316,10 @@ def _arm_path(r, model, budget):
 
 
 def load_arm(r, model, budget, version):
+    """The kept review, when the same model ran it with the same code (`version`) and the same project inputs."""
     got = read_json(_arm_path(r, model, budget))
-    ok = isinstance(got, dict) and got.get("model") == model and got.get("pipeline") == version
+    ok = (isinstance(got, dict) and got.get("model") == model and got.get("pipeline") == version
+          and got.get("project") == project_inputs(r["repo"]))
     return got.get("review") if ok else None
 
 
@@ -310,7 +327,7 @@ def save_arm(r, model, budget, review, version):
     path = _arm_path(r, model, budget)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     write_json(path, {"model": model, "repo": r["repo"], "sha": r["sha"], "base": r["base"], "budget": budget,
-                      "pipeline": version, "review": review})
+                      "pipeline": version, "project": project_inputs(r["repo"]), "review": review})
 
 
 def run(root, clones, models, n=5, budget=None, include_self=False, log=print, fresh=False, exclude=()):
@@ -318,7 +335,7 @@ def run(root, clones, models, n=5, budget=None, include_self=False, log=print, f
 
     Each finished arm's review is kept under ARMS and scored again from there (answers given since re-label it), so
     a larger sample only pays for the rounds it adds: pick() prefers rounds already replayed with every arm by this
-    same pipeline (pipeline_version), keeping its one-project-at-a-time balance. `fresh` re-runs every arm.
+    same pipeline (pipeline_version) on the same learned project data (project_inputs), keeping its one-project-at-a-time balance. `fresh` re-runs every arm.
     `exclude` (commit prefixes) leaves rounds out, e.g. the ones a run from before the cache already paid for.
     Returns rows, skipped counts, and the $ this run spent on arms it ran (left-out rounds included)."""
     models = list(dict.fromkeys(models))      # an arm named twice would be run twice and counted twice
