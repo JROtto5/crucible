@@ -296,16 +296,21 @@ def pipeline_version(pkg=None):
     return h.hexdigest()[:16]
 
 
+# what `review` reads from ~/.crucible/projects/<repo> into the prompt and its findings (review.py: learned rules,
+# STYLE.md, memory.md; style.json for the house-style findings). branches.json, waivers.json and meta.json only feed
+# incremental history and readiness, and review rewrites branches.json on every run, so they're left out.
+PROJECT_INPUTS = ("rules.md", "STYLE.md", "memory.md", "style.json")
+
+
 def project_inputs(repo):
-    """A hash of what `review` reads from the project's learned data (rules.md, STYLE.md, memory.md, style.json...),
-    the same directory _prepare copies into each arm's home: a `learn` run or a new memory changes the prompt."""
+    """A hash of the learned project data `review` puts into the prompt: a `learn` run or a new memory changes it."""
     import hashlib
-    src = os.path.join(HOME, "projects", repo)
     h = hashlib.sha256()
-    for f in sorted(glob.glob(os.path.join(src, "**", "*"), recursive=True)):
-        if os.path.isfile(f):
-            with open(f, "rb") as fh:
-                h.update(os.path.relpath(f, src).encode() + b"\0" + fh.read() + b"\0")
+    for f in PROJECT_INPUTS:
+        p = os.path.join(HOME, "projects", repo, f)
+        if os.path.isfile(p):
+            with open(p, "rb") as fh:
+                h.update(f.encode() + b"\0" + fh.read() + b"\0")
     return h.hexdigest()[:16]
 
 
