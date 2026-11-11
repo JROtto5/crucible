@@ -32,6 +32,22 @@
 
   Misses: current missed py-race (r1) and js-refcount (r2, the known medium-severity case); Opus missed py-race once (r2). Every arm found every bug at some severity. The recall intervals all overlap, so n=28 can't separate the arms. Cost can: Fable 5.2 costs 2.8× Opus and 5.5× the current pick per set, and it's slowest. Every bug case cost $0.94–$3.67 on Fable 5.2 vs $0.28–$0.94 on Opus, so this isn't one outlier. Decision: no reviewer change on this evidence. Fable 5.2 would only be worth it if a larger set showed a recall gain big enough to pay ~$1.05 more per caught bug than Opus.
 
+## 2026-11-11 · base-moved split, first slice: 13 three-mesh-bvh rounds (stored readiness data, $0)
+
+Each round's `base branch hasn't moved under the change` item, as recorded in its review.json at review time
+(~/.crucible/reviews/gkjohnson__three-mesh-bvh/<sha>/review.json). No re-run and no fetch.
+
+| bucket | rounds | round ids (head sha) |
+|---|---|---|
+| moved + overlap (warn) | **0** | none |
+| moved elsewhere (10 commits on master since 72ad37c590, tip a01c8c2c66, none in touched files) | 5 | f057e83f87 b2d7ed6a54 cb686bdfc1 a237596a79 0e27014694 |
+| unchanged (master still at merge-base 402c66449f) | 4 | 29e83f4dd4 52c9dd3bff ddd6a40995 19f40902b0 |
+| unreachable / na (base is a local SHA 52c9dd3bff: incremental re-review, not a remote-tracking ref) | 4 | 7a144c3e95 31301d8a3e 6773c8faf5 8269eaf240 |
+
+So 0 of 13 rounds were judged against a base that had moved in their own files, and no finding could have changed
+after a rebase. The "na" bucket is a blind spot: a re-review against the previous round's head never checks
+upstream. The 11-13 week-wide split still needs the other projects' rounds.
+
 ## 2026-11-11 · incremental re-review prompt (DRG-63): one amended round replayed before/after
 
 `crucible eval` only builds full reviews and `model-replay` skips incremental rounds, so neither can measure the
