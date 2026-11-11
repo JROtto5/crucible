@@ -1,4 +1,4 @@
-import atexit, json, os, re, shutil, subprocess, sys, tempfile, unittest
+import atexit, json, os, re, shutil, subprocess, sys, tempfile, time, unittest
 
 # Every temp dir the suite makes (fixture repos, clones, homes, and those of crucible subprocesses through TMPDIR)
 # goes under one root that is removed at exit. Each run used to leave ~80 git repos in /tmp, and the pytest check of
@@ -5422,6 +5422,196 @@ class TestSinceNote(unittest.TestCase):
         args = ("o__r", "a" * 40, "b" * 40, ch, "rules", "mem", "facts", "log", ["a.py"])
         self.assertNotIn("RE-REVIEW", V.review_prompt(*args))
         self.assertIn("This pass covers: a.py\n\n        Diff for this pass:", V.review_prompt(*args))
+
+
+class TestSymbolCollisions(unittest.TestCase):
+    """BLAZE escape #1 (idea only): two changes each GREEN on their own redefined the same SQL function."""
+
+    FN = "CREATE OR REPLACE FUNCTION public.add_user(n text) RETURNS void AS $$ select 1 $$ LANGUAGE sql;\n"
+
+    def setUp(self):
+        home = tempfile.mkdtemp()
+        orig = (U.HOME, R.gh_json, R.upstream_slug)
+        U.HOME, R.upstream_slug = home, (lambda repo: None)
+        R.gh_json = lambda *a: self.fail(f"unexpected gh call {a}")
+        self.addCleanup(lambda: (setattr(U, "HOME", orig[0]), setattr(R, "gh_json", orig[1]),
+                                 setattr(R, "upstream_slug", orig[2])))
+
+    @staticmethod
+    def _files(repo, rng="main...HEAD"):
+        return D.parse(sh(repo, "git", "diff", rng))
+
+    def test_same_sql_function_on_the_tracking_ref_fails_and_names_the_commit(self):
+        repo = make_repo({"db/migrations/001_init.sql": "select 1;\n"},
+                         {"db/migrations/002_mine.sql": self.FN})
+        base = sh(repo, "git", "rev-parse", "main")
+        sh(repo, "git", "checkout", "-q", "main")
+        open(os.path.join(repo, "db/migrations/002_theirs.sql"), "w").write(
+            'create function "add_user"(n text) returns void as $$ select 2 $$ language sql;\n')
+        sh(repo, "git", "add", "-A"); sh(repo, "git", "commit", "-qm", "theirs: add_user v2")
+        sh(repo, "git", "checkout", "-q", "fix")
+        files = self._files(repo, f"{base}..HEAD")
+        self.assertEqual(R.symbol_collisions(repo, base, files, offline=True)["status"], "pass")
+        r = R.symbol_collisions(repo, base, files, offline=True, base_ref="main")
+        self.assertEqual(r["status"], "fail", r)
+        self.assertIn("SQL function add_user", r["evidence"]); self.assertIn("theirs: add_user v2", r["evidence"])
+
+    def test_other_open_pr_defining_the_same_symbol_warns_from_the_cache(self):
+        repo = make_repo({"app/util.py": "x = 1\n"}, {"app/util.py": "x = 1\n\n\ndef load_config(path):\n    return path\n"})
+        R.upstream_slug = lambda repo: "o/r"
+        page = {"data": {"repository": {"pullRequests": {"totalCount": 2, "pageInfo": {"hasNextPage": False},
+                "nodes": [{"number": n, "url": f"https://github.com/o/r/pull/{n}", "isDraft": False, "headRefOid": h,
+                           "author": {"login": who, "__typename": "User"}, "files": {"nodes": [{"path": p}]}}
+                          for n, h, who, p in ((41, "abc", "ann", "app/util.py"), (42, "def", "me", "app/util.py"))]}}}}
+        R.gh_json = lambda *a: page if a[0] == "graphql" else self.fail(f"cache miss {a}")
+        os.makedirs(os.path.dirname(R._defs_cache_path("o/r", 41)))
+        U.write_json(R._defs_cache_path("o/r", 41), {"head": "abc", "at": time.time(), "got": {
+            "defs": [["file", "app/util.py", "load_config", None]], "unread": [], "cut": False}})
+        r = R.symbol_collisions(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo), me="me")
+        self.assertEqual(r["status"], "warn", r)
+        self.assertIn("#41 by ann (https://github.com/o/r/pull/41): load_config in app/util.py", r["evidence"])
+        self.assertNotIn("#42", r["evidence"])                                  # our own PR
+
+    def test_other_pr_patch_is_read_and_cached(self):
+        repo = make_repo({"q.sql": "select 1;\n"}, {"q.sql": "select 1;\n" + self.FN})
+        R.upstream_slug = lambda repo: "o/r"
+        page = {"data": {"repository": {"pullRequests": {"totalCount": 1, "pageInfo": {"hasNextPage": False},
+                "nodes": [{"number": 7, "url": "u/7", "isDraft": False, "headRefOid": "h7",
+                           "author": {"login": "bo", "__typename": "User"}, "files": {"nodes": [{"path": "other.sql"}]}}]}}}}
+        R.gh_json = lambda *a: page if a[0] == "graphql" else [
+            {"filename": "other.sql", "patch": "@@ -0,0 +1 @@\n+CREATE VIEW add_user AS select 1;\n"
+                                               "+  CREATE   FUNCTION ADD_USER(t TEXT) returns int"}]
+        r = R.symbol_collisions(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo), me="me")
+        self.assertEqual(r["status"], "warn", r); self.assertIn("#7 by bo", r["evidence"])
+        self.assertEqual(U.read_json(R._defs_cache_path("o/r", 7))["head"], "h7")
+
+    def test_no_definitions_is_na(self):
+        repo = make_repo({"README.md": "a\n"}, {"README.md": "a\nCREATE FUNCTION foo_bar() is how you do it\n",
+                                                 "docs/x.md": "def load_config(): docs\n"})
+        r = R.symbol_collisions(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo), offline=True)
+        self.assertEqual(r["status"], "na", r)
+
+    def test_falsifiers_call_sites_comments_and_noise_are_not_definitions(self):
+        for path, line in (("a.sql", "-- CREATE OR REPLACE FUNCTION add_user()"),
+                           ("a.sql", "/* CREATE FUNCTION add_user() */"),
+                           ("a.sql", "select add_user('x');"),
+                           ("a.py", "    def load_config(self):"),             # a method, not top level
+                           ("a.py", "load_config(path)"),
+                           ("a.py", "def __init__(self):"),
+                           ("a.py", "def run():"),                             # under 4 characters
+                           ("a.rb", "  def initialize(x)"),
+                           ("a.rb", "  def perform"),                          # a method: its class isn't on the line
+                           ("a.sql", "CREATE TRIGGER set_updated_at"),         # its table is on a later line
+                           ("a.js", "  function inner() {}"),
+                           ("a.js", "const helper = () => 1"),                 # not exported
+                           ("a.txt", "def load_config():"),
+                           ("notes.md", "CREATE OR REPLACE FUNCTION add_user()")):
+            self.assertEqual(R._definitions(path, line), [], (path, line))
+        for path, line, label in (("m/a.go", "func (s *Server) Handle(w int) {", "Server.Handle in package m"),
+                                  ("a.ts", "export default async function loadConfig() {", "loadConfig in a.ts"),
+                                  ("a.rb", "def self.load_config", "load_config in a.rb"),
+                                  ("x.sql", "CREATE MATERIALIZED VIEW IF NOT EXISTS stats.daily AS", "SQL view stats.daily")):
+            self.assertEqual([lb for _, lb in R._definitions(path, line)], [label], (path, line))
+
+    def test_triggers_on_other_tables_and_overloads_are_different_symbols(self):
+        # self-review CR-59ca34df: set_updated_at on every table, and add_user(text) vs add_user(int), are not collisions
+        key = lambda line: R._definitions("m.sql", line)[0][0]
+        self.assertFalse(R._collides(key("CREATE TRIGGER set_updated_at BEFORE UPDATE ON users"),
+                                     key("CREATE TRIGGER set_updated_at BEFORE UPDATE ON orders")))
+        self.assertTrue(R._collides(key("CREATE TRIGGER set_updated_at BEFORE UPDATE ON users"),
+                                    key('create trigger "set_updated_at" before update on public.users')))
+        self.assertFalse(R._collides(key("CREATE FUNCTION add_user(n text) RETURNS void"),
+                                     key("CREATE FUNCTION add_user(n int) RETURNS void")))
+        self.assertTrue(R._collides(key("CREATE FUNCTION add_user(n text, OUT id int) RETURNS"),
+                                    key("CREATE OR REPLACE FUNCTION public.add_user(text) RETURNS")))
+        self.assertTrue(R._collides(key("CREATE FUNCTION add_user("),                   # args on later lines: unknown
+                                    key("CREATE FUNCTION add_user(n int) RETURNS void")))
+        repo = make_repo({"db/migrations/001.sql": "select 1;\n"},
+                         {"db/migrations/002_a.sql": "CREATE TRIGGER set_updated_at BEFORE UPDATE ON users\n"})
+        base = sh(repo, "git", "rev-parse", "main")
+        sh(repo, "git", "checkout", "-q", "main")
+        open(os.path.join(repo, "db/migrations/002_b.sql"), "w").write(
+            "CREATE TRIGGER set_updated_at BEFORE UPDATE ON orders\n")
+        sh(repo, "git", "add", "-A"); sh(repo, "git", "commit", "-qm", "orders trigger")
+        sh(repo, "git", "checkout", "-q", "fix")
+        r = R.symbol_collisions(repo, base, self._files(repo, f"{base}..HEAD"), offline=True, base_ref="main")
+        self.assertEqual(r["status"], "pass", r)
+        # self-review CR-bc8a4140 / CR-d2db059f: a landed trigger on the same table names its commit, and an
+        # upper-case extension on the tracking ref is still read
+        sh(repo, "git", "checkout", "-q", "main")
+        open(os.path.join(repo, "db/migrations/003_C.SQL"), "w").write(
+            "create trigger SET_UPDATED_AT after insert on public.users\n")
+        sh(repo, "git", "add", "-A"); sh(repo, "git", "commit", "-qm", "users trigger upstream")
+        sh(repo, "git", "checkout", "-q", "fix")
+        r = R.symbol_collisions(repo, base, self._files(repo, f"{base}..HEAD"), offline=True, base_ref="main")
+        self.assertEqual(r["status"], "fail", r)
+        self.assertIn("SQL trigger set_updated_at on users (in ", r["evidence"])
+        self.assertIn("users trigger upstream", r["evidence"])
+
+    def test_go_collides_per_package_not_across_packages(self):
+        repo = make_repo({"svc/a.go": "package svc\n", "web/a.go": "package web\n"},
+                         {"svc/b.go": "package svc\n\nfunc LoadConfig() {}\n"})
+        base = sh(repo, "git", "rev-parse", "main")
+        sh(repo, "git", "checkout", "-q", "main")
+        open(os.path.join(repo, "web/c.go"), "w").write("package web\n\nfunc LoadConfig() {}\n")
+        sh(repo, "git", "add", "-A"); sh(repo, "git", "commit", "-qm", "web config")
+        files = self._files(repo, f"{base}..fix")
+        self.assertEqual(R.symbol_collisions(repo, base, files, offline=True, base_ref="main")["status"], "pass")
+        open(os.path.join(repo, "svc/c.go"), "w").write("package svc\n\nfunc LoadConfig() {}\n")
+        sh(repo, "git", "add", "-A"); sh(repo, "git", "commit", "-qm", "svc config")
+        r = R.symbol_collisions(repo, base, files, offline=True, base_ref="main")
+        self.assertEqual(r["status"], "fail", r); self.assertIn("LoadConfig in package svc", r["evidence"])
+
+    def _one_pr(self, files_payload, head="h9", path="other.sql"):
+        R.upstream_slug = lambda repo: "o/r"
+        page = {"data": {"repository": {"pullRequests": {"totalCount": 1, "pageInfo": {"hasNextPage": False},
+                "nodes": [{"number": 9, "url": "u/9", "isDraft": False, "headRefOid": head,
+                           "author": {"login": "cy", "__typename": "User"}, "files": {"nodes": [{"path": path}]}}]}}}}
+        calls = []
+        R.gh_json = lambda *a: page if a[0] == "graphql" else (calls.append(a) or files_payload)
+        return calls
+
+    def test_patchless_or_truncated_pr_warns_instead_of_passing(self):
+        # self-review CR-281932b9: a file sent without a patch, or a PR past one page of files, isn't "no definitions"
+        repo = make_repo({"q.sql": "select 1;\n"}, {"q.sql": "select 1;\n" + self.FN})
+        base, files = sh(repo, "git", "rev-parse", "main"), self._files(repo)
+        self._one_pr([{"filename": "other.sql", "changes": 9000}])
+        r = R.symbol_collisions(repo, base, files, me="me")
+        self.assertEqual(r["status"], "warn", r); self.assertIn("couldn't be read in full", r["evidence"])
+        self._one_pr([{"filename": f"f{i}.txt", "patch": "@@ -1 +1 @@\n+x", "changes": 1} for i in range(100)],
+                     head="h10")
+        self.assertEqual(R.symbol_collisions(repo, base, files, me="me")["status"], "warn")
+        self._one_pr([{"filename": "other.sql", "patch": "@@ -0,0 +1 @@\n+select 2;", "changes": 1}], head="h11")
+        self.assertEqual(R.symbol_collisions(repo, base, files, me="me")["status"], "pass")
+
+    def test_stale_or_corrupt_cache_is_refetched(self):
+        repo = make_repo({"q.sql": "select 1;\n"}, {"q.sql": "select 1;\n" + self.FN})
+        base, files = sh(repo, "git", "rev-parse", "main"), self._files(repo)
+        path = R._defs_cache_path("o/r", 9)
+        os.makedirs(os.path.dirname(path))
+        hit = {"defs": [["sql", "function", "add_user", None]], "unread": [], "cut": False}
+        for cached in ({"head": "old", "at": time.time(), "got": hit},                    # the PR moved
+                       {"head": "h9", "at": time.time() - R.HUNK_CACHE_TTL - 1, "got": hit},
+                       {"head": "h9", "at": time.time(), "got": {"defs": [["sql", "x"]], "unread": [], "cut": False}}):
+            U.write_json(path, cached)
+            calls = self._one_pr([{"filename": "other.sql", "patch": "@@ -0,0 +1 @@\n+select 2;", "changes": 1}])
+            self.assertEqual(R.symbol_collisions(repo, base, files, me="me")["status"], "pass", cached)
+            self.assertEqual(len(calls), 1, cached)
+
+    def test_evaluate_wires_the_base_ref_and_offline(self):
+        repo = make_repo({"db/migrations/001_init.sql": "select 1;\n"}, {"db/migrations/002_mine.sql": self.FN})
+        base = sh(repo, "git", "rev-parse", "main")
+        sh(repo, "git", "checkout", "-q", "main")
+        open(os.path.join(repo, "db/migrations/002_theirs.sql"), "w").write(self.FN)
+        sh(repo, "git", "add", "-A"); sh(repo, "git", "commit", "-qm", "theirs")
+        sh(repo, "git", "checkout", "-q", "fix")
+        item = lambda res: next(i for i in res["items"] if i["item"] == "no other change redefines the same symbols")
+        files = self._files(repo, f"{base}..HEAD")
+        res = R.evaluate(repo, "o__r", base, files, offline=True, base_ref="main")
+        self.assertEqual(item(res)["status"], "fail"); self.assertFalse(res["ready"])
+        self.assertIn("open PRs not checked (offline)", item(res)["evidence"])
+        self.assertEqual(item(R.evaluate(repo, "o__r", base, files, offline=True))["status"], "pass")
+
 
 if __name__ == "__main__":
     unittest.main()

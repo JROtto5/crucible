@@ -1,7 +1,7 @@
 """Deterministic 'ready to submit?' checklist. Each item: {item, status: pass|fail|warn|na, evidence}."""
 import glob, os, re, subprocess, time
 from . import util
-from .diff import formatting_only_hunks
+from .diff import formatting_only_hunks, parse as parse_diff
 from .util import CODE_EXT_RX, ISSUE_KW, TEST_PATH_RX, gh_json, git, project_dir, read_json, upstream_slug, write_json
 
 # Where GitHub looks for a PR template, in this order; the file name is matched case-insensitively, as GitHub does.
@@ -934,6 +934,264 @@ def migration_order(repo, base, files, base_ref=None):
     return _item(name, "pass", f"{len(ok)} new migration(s), each after the newest one on the base")
 
 
+
+# Definitions a change adds, by language. Only the line that defines the name counts: a call site, a comment or a
+# string that mentions CREATE FUNCTION does not. SQL functions, procedures and views live in one namespace per
+# database schema, so two definitions collide wherever the files are; a trigger is named per table (Postgres), and a
+# function or procedure by its name and argument types, so overloads don't collide. Go collides per package
+# (directory); Python, JS/TS and Ruby per file, top-level definitions only (a method name is per class, and the class
+# isn't on the line).
+SQL_DEF_RX = re.compile(r"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:TEMP|TEMPORARY|RECURSIVE|CONSTRAINT|MATERIALIZED)\s+)*"
+                        r"(FUNCTION|PROCEDURE|VIEW|TRIGGER)\s+(?:IF\s+NOT\s+EXISTS\s+)?((?:\"[^\"]+\"|[\w$]+)"
+                        r"(?:\.(?:\"[^\"]+\"|[\w$]+))?)", re.I)
+CODE_DEF_RX = {
+    ".py": re.compile(r"^(?:async\s+def|def|class)\s+(\w+)"),                      # top level only (column 0)
+    ".rb": re.compile(r"^def\s+(?:self\.)?([\w?!=]+)"),                              # top level only (column 0)
+    ".go": re.compile(r"^func\s+(?:\(\s*\w*\s*\*?\s*(\w+)(?:\[[^\]]*\])?\s*\)\s*)?(\w+)"),
+    ".js": re.compile(r"^(?:export\s+(?:default\s+)?)?(?:(?:async\s+)?function\s*\*?\s*|(?:abstract\s+)?class\s+)(\w+)"
+                      r"|^export\s+(?:const|let|var)\s+(\w+)"),
+}
+for _e in (".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".mts", ".cts"):
+    CODE_DEF_RX[_e] = CODE_DEF_RX[".js"]
+# files whose added lines can hold executable DDL: .sql itself, and the languages migrations are written in
+SQL_HOST_EXT = MIGRATION_EXT + (".psql", ".pgsql", ".plpgsql", ".ddl")
+# constructors and test fixtures are defined everywhere under the same name; dunder names are protocol, not symbols
+GENERIC_DEFS = {"initialize", "constructor", "setup", "teardown", "setUp", "tearDown", "init", "main", "default"}
+
+
+SQL_ON_RX = re.compile(r"\bON\s+((?:\"[^\"]+\"|[\w$]+)(?:\.(?:\"[^\"]+\"|[\w$]+))?)", re.I)
+
+
+def _sql_name(raw):
+    name = raw.replace('"', "").lower()
+    return name[len("public."):] if name.startswith("public.") else name           # Postgres' default schema
+
+
+def _sql_signature(rest):
+    """'(n text, OUT x int, y varchar(10) DEFAULT 1) RETURNS ...' -> 'text,varchar'. The type of each IN argument is
+    taken as its last word (so a parameter name or none gives the same type; a multi-word type compares by its last
+    word). None when the argument list doesn't close on this line: then the signature is unknown and matches any."""
+    rest = rest.lstrip()
+    if not rest.startswith("("):
+        return None
+    depth, args, cur = 0, [], ""
+    for ch in rest:
+        if ch == "(":
+            depth += 1
+            if depth == 1:
+                continue
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                args.append(cur)
+                break
+        if ch == "," and depth == 1:
+            args.append(cur); cur = ""
+        elif depth >= 1:
+            cur += ch
+    else:
+        return None
+    out = []
+    for a in args:
+        a = re.split(r"\s+default\s+|\s*=", a.strip().lower(), maxsplit=1)[0]
+        a = re.sub(r"\([^)]*\)", "", a).split()
+        if not a or a[0] in ("out",):
+            continue
+        out.append(a[-1])
+    return ",".join(out)
+
+
+def _definitions(path, text):
+    """[(key, label)] for the symbols one added line defines. key = (lang, scope, name, signature), signature None
+    unless it is a SQL function or procedure whose argument list closes on the line; see _collides."""
+    out = []
+    ext = os.path.splitext(path)[1].lower()
+    m = SQL_DEF_RX.match(text) if ext in SQL_HOST_EXT else None    # docs and READMEs quote DDL; they define nothing
+    if m:
+        kind, name, sig = m.group(1).lower(), _sql_name(m.group(2)), None
+        if len(name.rsplit(".", 1)[-1]) < 4:
+            return out
+        if kind == "trigger":
+            on = SQL_ON_RX.search(text, m.end())
+            if not on:
+                return out                                  # the table is on a later line: can't tell which trigger
+            name = f"{name} on {_sql_name(on.group(1))}"
+        elif kind in ("function", "procedure"):
+            sig = _sql_signature(text[m.end():])
+        shown = f"SQL {kind} {name}" + (f"({sig})" if sig is not None else "")
+        out.append((("sql", kind, name, sig), shown))
+        return out
+    rx = CODE_DEF_RX.get(ext)
+    m = rx.match(text) if rx else None
+    if not m:
+        return out
+    if ext == ".go":
+        recv, name = m.group(1), m.group(2)
+        scope, shown = os.path.dirname(path) or ".", (f"{recv}.{name}" if recv else name)
+    else:
+        recv, name = None, next(g for g in m.groups() if g)
+        scope, shown = path, name
+    if len(name) < 4 or name in GENERIC_DEFS or (name.startswith("__") and name.endswith("__")):
+        return out
+    where = f"package {scope}" if ext == ".go" else scope
+    out.append(((ext if ext == ".go" else "file", scope, shown, None), f"{shown} in {where}"))
+    return out
+
+
+def _collides(a, b):
+    """Same symbol: same language, scope and name, and for SQL functions the same argument types when both are
+    known (an overload is a different function)."""
+    return tuple(a[:3]) == tuple(b[:3]) and (a[3] is None or b[3] is None or a[3] == b[3])
+
+
+def _added_defs(files):
+    """{key: label} for every definition on an added line of a parsed diff (crucible.diff.parse)."""
+    out = {}
+    for f in files:
+        if not f.get("path") or f.get("deleted"):
+            continue
+        for h in f.get("hunks") or []:
+            for kind, text, *_ in h["lines"]:
+                if kind == "+":
+                    for k, label in _definitions(f["path"], text):
+                        out.setdefault(k, label)
+    return out
+
+
+def _patch_defs(path, patch):
+    """Definitions on the added lines of one GitHub file patch."""
+    return [k for ln in (patch or "").splitlines() if ln.startswith("+") and not ln.startswith("+++")
+            for k, _ in _definitions(path, ln[1:])]
+
+
+PR_FILES_PAGE = 100   # one REST page; a full page means the PR may have more files than were read
+
+
+def _defs_cache_path(slug, number):
+    return os.path.join(util.HOME, "cache", "pr-defs", slug.replace("/", "__"), f"{int(number)}.json")
+
+
+def _valid_defs(got):
+    return isinstance(got, dict) and isinstance(got.get("defs"), list) and isinstance(got.get("unread"), list) \
+        and isinstance(got.get("cut"), bool) and all(isinstance(p, str) for p in got["unread"]) \
+        and all(isinstance(k, list) and len(k) == 4 and all(isinstance(x, str) for x in k[:3])
+                and (k[3] is None or isinstance(k[3], str)) for k in got["defs"])
+
+
+def _pr_defs(slug, number, head=None):
+    """{"defs": [key], "unread": [paths sent without a patch], "cut": the file list may go on past one page} for a
+    PR, or FETCH_FAILED. Cached per head SHA like _pr_hunks."""
+    path = _defs_cache_path(slug, number) if head else None
+    if path:
+        hit = read_json(path)
+        hit = hit if isinstance(hit, dict) else {}
+        at, got = hit.get("at"), hit.get("got")
+        if hit.get("head") == head and isinstance(at, (int, float)) and time.time() - at < HUNK_CACHE_TTL \
+                and _valid_defs(got):
+            return {**got, "defs": [tuple(k) for k in got["defs"]]}
+    data = gh_json(f"repos/{slug}/pulls/{number}/files?per_page={PR_FILES_PAGE}")
+    if not isinstance(data, list):
+        return FETCH_FAILED
+    got = {"defs": [k for f in data for k in _patch_defs(f.get("filename") or "", f.get("patch"))],
+           "unread": [f.get("filename") or "" for f in data if not f.get("patch") and f.get("changes")],
+           "cut": len(data) >= PR_FILES_PAGE}
+    if path:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            write_json(path, {"head": head, "at": time.time(), "got": {**got, "defs": [list(k) for k in got["defs"]]}})
+        except OSError:
+            pass
+    return got
+
+
+def _could_define(pr_paths, key):
+    """Can a PR touching these paths define this key? SQL: a PR touching a .sql file or a migrations folder (SQL in
+    other files elsewhere isn't looked for). Code: the same file, or for Go a .go file in the same package directory."""
+    lang, scope = key[0], key[1]
+    if lang == "sql":
+        return any(p.lower().endswith(".sql") or MIGRATION_DIR_RX.search(p) for p in pr_paths)
+    if lang == ".go":
+        return any(p.endswith(".go") and (os.path.dirname(p) or ".") == scope for p in pr_paths)
+    return scope in pr_paths
+
+
+def symbol_collisions(repo, base, files, me=None, offline=False, base_ref=None):
+    """Does anything else define the same function, view, trigger or class as this change? Two changes that each
+    look fine can still collide: two migrations that CREATE OR REPLACE one SQL function (the last one applied wins,
+    silently), or two PRs adding the same top-level def to one module (BLAZE escape #1: each PR GREEN on its own).
+
+    Reads the definitions on this change's added lines (SQL CREATE [OR REPLACE] FUNCTION/PROCEDURE/VIEW/TRIGGER;
+    top-level Python def/class; JS/TS function/class/export const; Go func per package; Ruby def), then looks for
+    the same definition (a) added on the tracking ref since the merge-base, which fails, since the merge will
+    redefine it; and (b) added by another open PR that could define it, which warns. Names under 4 characters,
+    dunder names and constructors are skipped. No model call, no execution."""
+    name = "no other change redefines the same symbols"
+    ours = _added_defs(files)
+    if not ours:
+        return _item(name, "na", "the change defines no function, view, trigger or class")
+    notes, landed = [], []
+    if base_ref and base_ref != base and util.ref_exists(repo, base_ref):
+        exts = sorted(set(SQL_HOST_EXT) | set(CODE_DEF_RX))      # only files that can hold a definition, any case
+        theirs = _added_defs(parse_diff(git(repo, "diff", "--no-renames", "--unified=0", base, base_ref, "--",
+                                            *[f":(icase)*{e}" for e in exts], check=False)))
+        for k in ours:
+            if any(_collides(k, t) for t in theirs):
+                bare = k[2].split(" on ", 1)[0].rsplit(".", 1)[-1]   # a trigger key is "<name> on <table>"
+                sha = git(repo, "log", "-n1", "-i", "--format=%h %s", f"{base}..{base_ref}", "-S", bare,
+                          check=False) or "?"
+                landed.append(f"{ours[k]} (in {sha.strip()[:80]})")
+        notes.append(f"{base_ref} since the merge-base: {len(theirs)} definition(s) added, "
+                     f"{len(landed)} the same as ours")
+    else:
+        notes.append(f"no tracking ref ahead of the merge-base to compare ({base_ref or 'none given'})")
+    hits, failed, unread, unlisted = [], [], [], False
+    slug = None if offline else upstream_slug(repo)
+    if offline:
+        notes.append("open PRs not checked (offline)")
+    elif not slug:
+        notes.append("open PRs not checked (no GitHub remote)")
+    else:
+        prs, total = open_prs(slug)
+        if prs is None:
+            unlisted = True
+            notes.append(f"could not list open PRs on {slug}")
+        else:
+            cands = [pr for pr in prs if not pr["bot"] and not is_me(pr["author"], me)
+                     and any(_could_define(pr["paths"], k) for k in ours)]
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(8) as ex:
+                got = list(ex.map(lambda pr: _pr_defs(slug, pr["number"], pr.get("head")), cands[:OVERLAP_CANDIDATES]))
+            for pr, res in zip(cands, got):
+                if res is FETCH_FAILED:
+                    failed.append(pr["number"])
+                    continue
+                same = [ours[k] for k in ours if any(_collides(k, t) for t in res["defs"])]
+                if same:
+                    hits.append(f"#{pr['number']} by {pr['author']} ({pr['url']}): {', '.join(same[:3])}")
+                elif res["cut"] or any(_could_define([p], k) for p in res["unread"] for k in ours):
+                    unread.append(pr["number"])
+            notes.append(f"checked {min(len(cands), OVERLAP_CANDIDATES)} open PR(s) that could define them, "
+                         f"of {total}")
+            if len(cands) > OVERLAP_CANDIDATES:
+                notes.append(f"{len(cands) - OVERLAP_CANDIDATES} more not read")
+            if failed:
+                notes.append(f"{len(failed)} couldn't be fetched (rate limit or network; re-run later)")
+            if unread:
+                notes.append(f"{len(unread)} couldn't be read in full, a file without a patch or more than "
+                             f"{PR_FILES_PAGE} files (" + ", ".join(f"#{n}" for n in unread[:5]) + ")")
+    defs = f"{len(ours)} definition(s): " + ", ".join(list(ours.values())[:4]) + (" …" if len(ours) > 4 else "")
+    if landed:
+        return _item(name, "fail", f"already redefined on {base_ref} since the merge-base: " + "; ".join(landed[:3])
+                     + ". The merge will silently keep one of the two; rebase and reconcile them"
+                     + (f". Open PRs too: {'; '.join(hits[:3])}" if hits else "") + f" ({'; '.join(notes)})")
+    if hits:
+        return _item(name, "warn", "another open PR defines the same: " + "; ".join(hits[:5]) + ". Whichever merges "
+                     f"second replaces the first; read it before submitting ({defs}; {'; '.join(notes)})"
+                     + ("" if me else UNKNOWN_ME))
+    status = "warn" if failed or unread or unlisted else "pass"
+    return _item(name, status, f"{defs}; {'; '.join(notes)}")
+
+
 def current_login():
     """The GitHub login of whoever runs crucible: CRUCIBLE_GH_USER, else the account `gh` is logged in as, else None.
     The claim checks skip this person's own assignment and PRs; the default used to be the maintainer's own handle,
@@ -979,6 +1237,7 @@ def evaluate(repo, project, base, files, draft=None, me=None, offline=False, bas
         _item("base branch hasn't moved under the change", "na", "offline") if offline else
         base_moved(repo, base_ref, base),
         migration_order(repo, base, files, base_ref),
+        symbol_collisions(repo, base, files, me, offline, base_ref),
     ]
     return {"draft": draft_path, "issue": issue, "items": items,
             "ready": not any(i["status"] == "fail" for i in items)}
