@@ -5375,6 +5375,23 @@ class TestSinceNote(unittest.TestCase):
         self.assertIn("big.py: whole-change diff truncated", note)
         self.assertLessEqual(note.count("z"), V.SINCE_CONTEXT_CHARS)
 
+    def test_small_file_whole_and_big_file_gets_the_rest(self):
+        ch = {"files": ["big.py", "small.py"], "text": "x"}
+        texts = {"big.py": "z" * (V.SINCE_CONTEXT_CHARS * 2), "small.py": "s" * 3000}
+        note = V.since_note("1" * 40, False, ch, texts, "2" * 40)
+        self.assertEqual(note.count("s" * 3000), 1)
+        self.assertEqual(note.count("z"), V.SINCE_CONTEXT_CHARS - 3000)     # not an even 10k split
+
+    def test_many_file_pass_names_files_instead_of_stubs(self):
+        # 300 files: an even split would give 66 chars each, plus 300 truncation markers past the cap
+        files = [f"pkg/m{i:03d}.py" for i in range(300)]
+        texts = {p: "q" * 900 for p in files}
+        note = V.since_note("1" * 40, False, {"files": files, "text": "x"}, texts, "2" * 40)
+        self.assertLess(len(note), V.SINCE_CONTEXT_CHARS + V.SINCE_NAMES_CHARS + 1500)
+        self.assertNotIn("truncated", note)
+        self.assertEqual(note.count("q" * 900), V.SINCE_CONTEXT_CHARS // 900)  # whole files while they fit
+        self.assertIn(f"whole change not shown for {300 - V.SINCE_CONTEXT_CHARS // 900} file(s)", note)
+
     def test_split_file_context_goes_with_every_pass(self):
         # every pass is its own model call, so a later pass can't see context sent with an earlier one
         texts = {"big.py": "BIG-WHOLE"}

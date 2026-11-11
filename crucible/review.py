@@ -250,9 +250,11 @@ def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, hou
 # An incremental round shows the reviewer only what changed since the last reviewed commit. Unlabelled, that
 # inter-diff reads as the PR: after an amend it isn't any commit in the log, and after a rebase it carries upstream's
 # changes too (colyseus #1000 round 2: "the diff given for this pass doesn't match the commit"). So the pass is
-# labelled, and the whole change to its files goes along, the cap split evenly between them. Every pass is its own
-# model call, so a file split over several passes carries its context in each of them.
-SINCE_CONTEXT_CHARS = 20000
+# labelled, and the whole change to its files goes along. Every pass is its own model call, so a file split over
+# several passes carries its context in each of them. 20,000 chars (~5k tokens) is under half a 45k-char pass;
+# small files go in whole and the rest share what's left, and a file whose share would fall under 2,000 chars is
+# named instead (the reviewer can read it), so a pass of 300 small files doesn't become 300 truncation stubs.
+SINCE_CONTEXT_CHARS, SINCE_MIN_PART, SINCE_NAMES_CHARS = 20000, 2000, 1500
 
 
 def since_texts(files, digested):
@@ -266,9 +268,22 @@ def since_texts(files, digested):
 def since_note(prev_sha, amended, ch, full_texts, base):
     """The label and context for an incremental pass: what its diff is, and the whole change to the same files."""
     files = [p for p in ch["files"] if p in full_texts]
-    share = SINCE_CONTEXT_CHARS // max(1, len(files))
-    parts = [full_texts[p] if len(full_texts[p]) <= share
-             else full_texts[p][:share] + f"\n[... {p}: whole-change diff truncated; read the file ...]" for p in files]
+    room, shown, unnamed = SINCE_CONTEXT_CHARS, {}, []
+    for k, p in enumerate(sorted(files, key=lambda p: len(full_texts[p]))):   # smallest first: water-filling
+        fair, t = room // (len(files) - k), full_texts[p]
+        if len(t) <= fair:
+            shown[p] = t
+        elif fair >= SINCE_MIN_PART:
+            shown[p] = t[:fair] + f"\n[... {p}: whole-change diff truncated; read the file ...]"
+        else:
+            unnamed.append(p)
+            continue
+        room -= min(len(t), fair)
+    parts = [shown[p] for p in files if p in shown]
+    if unnamed:
+        names = ", ".join(p for p in files if p in unnamed)
+        parts.append(f"(whole change not shown for {len(unnamed)} file(s); read them: "
+                     f"{names if len(names) <= SINCE_NAMES_CHARS else names[:SINCE_NAMES_CHARS] + ' ...'})")
     prev = prev_sha[:10]
     how = (f"The reviewed commit was amended or rebased, so {prev} is not in this branch's log, and if the base "
            f"moved, some hunks below may be upstream changes the author only rebased onto. " if amended else "")
