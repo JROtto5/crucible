@@ -64,6 +64,29 @@ for the rest. Labels: 4 held up, 2 refuted, all raised by Opus in the stored rou
     the bvh write-back throwing inside onmessage, the normalized copy vs transfer paths in BufferUtils, supavisor's
     redundant struct guards, and the get_secrets-only test. Both arms raised the MangoHud percentage label and the
     bvh write-back (as two framings).
+- **2026-11-11, 4 more judged by code read at each PR head ($0; `git show <head>:<file>` in the lane clones),
+  covering 5 of the 9:**
+  - held up, both arms: the bvh index write-back (Sonnet :132 "can throw inside onmessage", Opus :131 "assumes the
+    geometry wasn't changed during the build"). At ce21827c59, `geometry.index.array.set( serialized.index )` runs
+    inside `worker.onmessage`, which is set inside the Promise executor, so a throw there is not a rejection: the
+    promise never settles and `WorkerBase.running` stays true. Reachable only if the caller resizes or replaces the
+    index mid-build, which copy-by-default newly allows. Real, but an edge case (low is right).
+  - held up, Sonnet: the schema comment split (Encoder.ts:266). At 95303fd7f8 `assertAccessorsNotShadowed(state)`
+    sits between the "Use .cache() here ..." comment and the `TypeContext.cache(...)` line it explains.
+  - held up, Sonnet: supavisor's redundant guards (secret_checker.ex:170). At 30e50d14b0 `fetch_user_secret/3` is
+    specced and implemented to return only `{:ok, %SASLSecrets{}}` on success, so the `%SASLSecrets{}` match on
+    `fresh` and in `scram_key/1` can't fail, and the trailing `:ok` is discarded at the only call site (:132). The
+    finding's "maintainers have asked to drop such guards" is unsourced; the code claim holds. A style nit.
+  - held up as stated, Opus: MangoHud's second bare percentage (hud_elements.cpp:464). At 56f729da0b the max-core
+    value is drawn as `%d` + `%` with no marker, unlike the MHz/°C/W columns. Whether a marker is wanted is the
+    maintainer's call; no answer exists.
+  - Still not judged (4): the SWC/Babel error wording and the indirect-branch test gap (Opus), the BufferUtils
+    normalized copy-vs-transfer paths and the get_secrets-only test (Sonnet).
+  - Effect on the tally: 11 of the 15 unlabelled kept findings are now judged (cpu_win32 counted as the labelled
+    one it matches). Opus: 3 held (root-only check, write-back, MangoHud %), 2 false alarms (CHANGELOG, API.md),
+    2 unjudged. Sonnet: 4 held (root-only check, write-back, comment split, guards), 1 false alarm (CHANGELOG),
+    2 unjudged. Sonnet's extra catches are two low style nits, against Opus's lead of 4 on labelled held-up
+    findings (10/11 vs 6/11), so the decision (Opus stays) doesn't change.
 - Among the judged unlabelled findings each arm has exactly one extra held-up finding, and it's the same one (the
   root-only check), so in this slice the label bias toward Opus doesn't hide a Sonnet-only catch.
 - Over 10 pairs, Opus keeps more held-up findings, 10/11 vs 6/11 by hand. The intervals still overlap at n=11, but
