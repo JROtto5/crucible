@@ -1202,32 +1202,37 @@ SQL_TABLE = r"((?:\"[^\"]+\"|[\w$]+)(?:\.(?:\"[^\"]+\"|[\w$]+))?)"
 COUNT_RX = re.compile(r"\bcount\s*\(\s*(?:\*|1)\s*\)\s+from\s+" + SQL_TABLE, re.I)
 COUNT_FILTER_RX = re.compile(r"\b(?:where|join|group\s+by|having|limit|tablesample|offset)\b|^\s*(?:\w+\s*)?,", re.I)
 COUNT_END_RX = re.compile(r"[;\"'`)]|\$\$")
-COUNT_ASSERT_RX = re.compile(r"\bassert\w*|\bexpect\b|\.to(?:Be|Equal|StrictEqual|HaveLength)\b|\bassert_?equals?\b|"
-                             r"(?:^|\s)-(?:eq|ne)\s|[!=]=|\bshould\b|\bmust\b|\bfail\b|\bdie\b|\bexit\s+1\b|"
-                             r"\braise\b|\berror\b|\bunless\b", re.I)
-COUNT_NUM_RX = re.compile(r"(?<![\w.$-])\d+(?![\w.])")
+# the number has to be compared for EQUALITY with the count (a lower bound like `-gt 0` survives added rows), and the
+# literal has to sit in that comparison, so `exit 1` or an unrelated number nearby doesn't count
+COUNT_EQ_RX = re.compile(r"(?:-eq|-ne|===?|!==?)\s*[\"']?\d+(?:/\d+)*\b|\b\d+(?:/\d+)*[\"']?\s*(?:-eq|-ne|===?|!==?)|"
+                         r"\[\[?\s*\"?\$\{?\w+\}?\"?\s*!?=\s*[\"']?\d+\b|"
+                         r"\b(?:toBe|toEqual|toStrictEqual|toHaveLength|equals?|assertEquals?|assert_equal|assertEqual|"
+                         r"assert_eq|is|eq)\s*\((?:[^()]|\([^()]*\))*?(?<![\w.$-])\d+(?![\w.])", re.I)
 COUNT_LOCAL_RX = re.compile(r"\bcreate\s+(?:(?:temp|temporary|unlogged)\s+)*table\s+(?:if\s+not\s+exists\s+)?"
                             + SQL_TABLE + r"|\bwith\s+(?:recursive\s+)?" + SQL_TABLE + r"\s+as\s*\(|"
                             r",\s*" + SQL_TABLE + r"\s+as\s*\(", re.I)
 WRITE_RX = re.compile(r"\b(?:insert\s+into|delete\s+from|truncate(?:\s+table)?(?:\s+only)?)\s+" + SQL_TABLE + r"|"
                       r"\bcopy\s+" + SQL_TABLE + r"(?:\s*\([^)]*\))?\s+from\b", re.I)
-COUNT_TEST_RX = re.compile(r"(?:^|/)[^/]*(?:test|check|gate|verify|assert)[^/]*$|(?:^|/)(?:ci|checks?|gates?)/", re.I)
+COUNT_TEST_RX = re.compile(r"(?:^|/)(?:[^/]*[_.-])?(?:tests?|checks?|gates?|verify|asserts?)(?:[_.-][^/]*)?$|"
+                           r"(?:^|/)(?:ci|checks?|gates?)/", re.I)
 COUNT_TEST_EXT = (".sh", ".bash", ".sql", ".py", ".js", ".mjs", ".cjs", ".ts", ".mts", ".rb", ".go", ".exs", ".ex")
-SEED_RX = re.compile(r"(?:^|/)(?:seeds?|seeders|fixtures/db|data/seed)(?:/|\.|_|$)")
+SEED_RX = re.compile(r"(?:^|/)(?:seeds?|seeders|data/seed)(?:/|\.|_|$)")
 SYSTEM_TABLE_RX = re.compile(r"(?:pg_catalog\.|information_schema\.|pg_|sqlite_|mysql\.|sys\.)")
 COUNT_WINDOW = 4    # added lines after the count where the asserted number may sit (and 2 before)
 
 
 def _count_test_file(path):
     low = path.lower()
-    return low.endswith(COUNT_TEST_EXT) and (bool(TEST_PATH_RX.search(path)) or bool(COUNT_TEST_RX.search(path)))
+    if not low.endswith(COUNT_TEST_EXT) or (MIGRATION_DIR_RX.search(path) and not TEST_PATH_RX.search(path)):
+        return False
+    return bool(TEST_PATH_RX.search(path)) or bool(COUNT_TEST_RX.search(path))
 
 
 def _sql_writer_file(path):
     """Files whose added SQL changes a database's rows for everyone: SQL/migration hosts, migrations and seeds,
     but not tests (a test's own fixture inserts run in its own database or transaction)."""
     low = path.lower()
-    if TEST_PATH_RX.search(path) or _count_test_file(path):
+    if TEST_PATH_RX.search(path):
         return False
     if low.endswith((".sql", ".psql", ".pgsql", ".plpgsql", ".ddl")):
         return True
@@ -1249,7 +1254,7 @@ def _same_table(a, b):
 
 def _fixed_counts(files, repo=None):
     """{table: [(path, line_no, snippet)]} for unfiltered count(*) of a named table in an added test line, with a
-    numeric literal asserted within a few added lines of it. Skipped: counts with WHERE/JOIN/GROUP BY/LIMIT (scoped to
+    numeric literal compared for equality within a few added lines of it. Skipped: counts with WHERE/JOIN/GROUP BY/LIMIT (scoped to
     known keys), counts of a table the same test creates or names as a CTE (local), and lines with no number to
     compare against."""
     out = {}
@@ -1265,15 +1270,17 @@ def _fixed_counts(files, repo=None):
         for i, (text, line_no) in enumerate(added):
             for m in COUNT_RX.finditer(text):
                 table = _table_key(m.group(1))
-                if any(_same_table(table, x) for x in local) or SYSTEM_TABLE_RX.match(table):
+                # a table the test makes itself: the same name, or an unqualified count of a name it creates (a
+                # schema-qualified count of a shared table is not hidden by a same-named temp table)
+                if any(x == table or ("." not in table and x.rsplit(".", 1)[-1] == table) for x in local) \
+                        or SYSTEM_TABLE_RX.match(table):
                     continue
                 tail = text[m.end():] + "\n" + "\n".join(t for t, _ in added[i + 1:i + 3])
                 end = COUNT_END_RX.search(tail)
                 if COUNT_FILTER_RX.search(tail[:end.start()] if end else tail):
                     continue
                 window = [t for t, _ in added[max(0, i - 2):i + 1 + COUNT_WINDOW]]
-                joined = "\n".join(window).replace(m.group(0), " ")
-                if not COUNT_ASSERT_RX.search(joined) or not COUNT_NUM_RX.search(joined):
+                if not COUNT_EQ_RX.search("\n".join(window).replace(m.group(0), " ")):
                     continue
                 out.setdefault(table, []).append((path, line_no, text.strip()[:80]))
     return out

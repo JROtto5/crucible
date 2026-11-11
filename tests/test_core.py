@@ -5878,6 +5878,8 @@ class TestCountCollisions(unittest.TestCase):
             "other table": "n=$(psql -tAc \"select count(*) from app.colors\")\n[ \"$n\" -eq 2 ] || exit 1\n",
             "local temp table": "psql -c \"create temp table kinds (id int)\"\nn=$(psql -tAc \"select count(*) from kinds\")\n[ \"$n\" -eq 0 ] || exit 1\n",
             "no asserted number": "psql -tAc \"select count(*) from app.kinds\" > counts.txt\n",
+            "lower bound": "n=$(psql -tAc \"select count(*) from app.kinds\")\n[ \"$n\" -gt 0 ] || exit 1\n",
+            "empty check": "n=$(psql -tAc \"select count(*) from app.kinds\")\n[ -z \"$n\" ] && exit 1\n",
         }
         for label, gate in cases.items():
             with self.subTest(label):
@@ -5898,6 +5900,44 @@ class TestCountCollisions(unittest.TestCase):
                          'def test_conns(db):\n    assert db.one("select count(*) from pg_stat_activity") == 1\n'})
         r = R.count_collisions(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo), offline=True)
         self.assertEqual(r["status"], "na", r)
+
+    def test_writer_named_like_a_test_word_still_counts(self):
+        repo, base = self._landed({"ci/gate_kinds.sh": self.GATE}, "db/migrations/002_latest_kinds.sql",
+                                  "insert into app.kinds values (3, 'c');\n")
+        r = R.count_collisions(repo, base, self._files(repo, f"{base}..HEAD"), offline=True, base_ref="main")
+        self.assertEqual(r["status"], "fail", r)
+
+    def test_same_named_temp_table_does_not_hide_a_qualified_count(self):
+        gate = "psql -c \"create temp table kinds (id int)\"\n" + self.GATE
+        repo, base = self._landed({"ci/gate_kinds.sh": gate}, "db/migrations/002_more.sql",
+                                  "insert into app.kinds values (3, 'c');\n")
+        r = R.count_collisions(repo, base, self._files(repo, f"{base}..HEAD"), offline=True, base_ref="main")
+        self.assertEqual(r["status"], "fail", r)
+
+    def _pr_page(self, n=61, head="h61", path="db/migrations/004_y.sql"):
+        return {"data": {"repository": {"pullRequests": {"totalCount": 1, "pageInfo": {"hasNextPage": False},
+                "nodes": [{"number": n, "url": f"u/{n}", "isDraft": False, "headRefOid": head,
+                           "author": {"login": "cy", "__typename": "User"}, "files": {"nodes": [{"path": path}]}}]}}}}
+
+    def test_open_pr_paths_cache_hit_fetch_failure_and_patchless(self):
+        repo = make_repo({"db/migrations/001_seed.sql": self.SEED}, {"ci/gate_kinds.sh": self.GATE})
+        base = sh(repo, "git", "rev-parse", "main")
+        R.upstream_slug = lambda repo: "o/r"
+        page = self._pr_page()
+        os.makedirs(os.path.join(U.HOME, "cache", "pr-writes", "o__r"))
+        U.write_json(os.path.join(U.HOME, "cache", "pr-writes", "o__r", "61.json"),
+                     {"head": "h61", "at": time.time(), "got": {"tables": ["app.kinds"], "unread": [], "cut": False}})
+        R.gh_json = lambda *a: page if a[0] == "graphql" else self.fail(f"cache miss {a}")
+        r = R.count_collisions(repo, base, self._files(repo), me="me")
+        self.assertEqual(r["status"], "warn", r); self.assertIn("#61 by cy", r["evidence"])
+        page = self._pr_page(head="h62")                                          # new head: re-fetch, which fails
+        R.gh_json = lambda *a: page if a[0] == "graphql" else None
+        r = R.count_collisions(repo, base, self._files(repo), me="me")
+        self.assertEqual(r["status"], "warn", r); self.assertIn("1 couldn't be fetched", r["evidence"])
+        page = self._pr_page(head="h63")                                          # a SQL file sent without a patch
+        R.gh_json = lambda *a: page if a[0] == "graphql" else [{"filename": "db/migrations/004_y.sql", "changes": 900}]
+        r = R.count_collisions(repo, base, self._files(repo), me="me")
+        self.assertEqual(r["status"], "warn", r); self.assertIn("couldn't be read in full (#61)", r["evidence"])
 
     def test_same_name_in_another_schema_does_not_count(self):
         repo, base = self._landed({"ci/gate_kinds.sh": self.GATE}, "db/migrations/002_more.sql",
