@@ -1202,10 +1202,11 @@ SQL_TABLE = r"((?:\"[^\"]+\"|[\w$]+)(?:\.(?:\"[^\"]+\"|[\w$]+))?)"
 COUNT_RX = re.compile(r"\bcount\s*\(\s*(?:\*|1)\s*\)\s+from\s+" + SQL_TABLE, re.I)
 COUNT_FILTER_RX = re.compile(r"\b(?:where|join|group\s+by|having|limit|tablesample|offset)\b|^\s*(?:\w+\s*)?,", re.I)
 COUNT_END_RX = re.compile(r"[;\"'`)]|\$\$")
-# the number has to be compared for EQUALITY with the count (a lower bound like `-gt 0` or a non-empty check like
-# `-ne 0` survives added rows), and the literal has to sit in that comparison, so `exit 1` or an unrelated number
+# the number has to be compared for EQUALITY with the count, or for inequality with a nonzero number ("fail unless
+# it is 36"); a lower bound like `-gt 0` or a non-empty check like `-ne 0` survives added rows, and the literal has to sit in that comparison, so `exit 1` or an unrelated number
 # nearby doesn't count
 COUNT_EQ_RX = re.compile(r"(?:-eq|===?)\s*[\"']?\d+(?:/\d+)*\b|\b\d+(?:/\d+)*[\"']?\s*(?:-eq|===?)|"
+                         r"(?:-ne|!==?)\s*[\"']?(?!0\b)\d+(?:/\d+)*\b|"
                          r"\[\[?\s*\"?\$\{?\w+\}?\"?\s*==?\s*[\"']?\d+\b|"
                          r"\.to\s+(?:eq|eql|equal|be)\s+\d+\b|"
                          r"\b(?:toBe|toEqual|toStrictEqual|toHaveLength|equals?|assertEquals?|assert_equal|assertEqual|"
@@ -1217,6 +1218,7 @@ WRITE_RX = re.compile(r"\b(?:insert\s+into|delete\s+from|truncate(?:\s+table)?(?
                       r"\bcopy\s+" + SQL_TABLE + r"(?:\s*\([^)]*\))?\s+from\b", re.I)
 COUNT_TEST_RX = re.compile(r"(?:^|/)(?:[^/]*[_.-])?(?:tests?|checks?|gates?|verify|asserts?)(?:[_.-][^/]*)?$|"
                            r"(?:^|/)(?:ci|checks?|gates?)/", re.I)
+GATE_DIR_RX = re.compile(r"(?:^|/)(?:ci|checks?|gates?)/", re.I)
 COUNT_TEST_EXT = (".sh", ".bash", ".sql", ".py", ".js", ".mjs", ".cjs", ".ts", ".mts", ".rb", ".go", ".exs", ".ex")
 SEED_RX = re.compile(r"(?:^|/)(?:seeds?|seeders|data/seed)(?:/|\.|_|$)")
 SYSTEM_TABLE_RX = re.compile(r"(?:pg_catalog\.|information_schema\.|pg_|sqlite_|mysql\.|sys\.)")
@@ -1235,7 +1237,7 @@ def _sql_writer_file(path):
     but not tests (a test's own fixture inserts run in its own database or transaction)."""
     low = path.lower()
     shared = bool(MIGRATION_DIR_RX.search(path)) or bool(SEED_RX.search(low))
-    if TEST_PATH_RX.search(path) or (COUNT_TEST_RX.search(path) and not shared):   # a gate seeding its own database
+    if TEST_PATH_RX.search(path) or (GATE_DIR_RX.search(path) and not shared):   # a gate seeding its own database
         return False
     if low.endswith((".sql", ".psql", ".pgsql", ".plpgsql", ".ddl")):
         return True

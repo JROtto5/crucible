@@ -5902,6 +5902,21 @@ class TestCountCollisions(unittest.TestCase):
         r = R.count_collisions(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo), offline=True)
         self.assertEqual(r["status"], "na", r)
 
+    def test_fail_unless_exactly_n_counts(self):
+        for gate in ("n=$(psql -tAc \"select count(*) from app.kinds\")\n[ \"$n\" -ne 2 ] && exit 1\n",
+                     'def test_k(db):\n    got = db.one("select count(*) from app.kinds")\n    if got != 2:\n        raise AssertionError(got)\n'):
+            with self.subTest(gate[:20]):
+                path = "ci/gate_kinds.sh" if gate.startswith("n=") else "tests/test_kinds.py"
+                repo, base = self._landed({path: gate}, "db/migrations/002_more.sql", "insert into app.kinds values (3, 'c');\n")
+                r = R.count_collisions(repo, base, self._files(repo, f"{base}..HEAD"), offline=True, base_ref="main")
+                self.assertEqual(r["status"], "fail", r)
+
+    def test_sql_named_with_a_gate_word_outside_gate_dirs_is_a_writer(self):
+        repo, base = self._landed({"ci/gate_kinds.sh": self.GATE}, "db/add_gate_kinds.sql",
+                                  "insert into app.kinds values (3, 'c');\n")
+        r = R.count_collisions(repo, base, self._files(repo, f"{base}..HEAD"), offline=True, base_ref="main")
+        self.assertEqual(r["status"], "fail", r)
+
     def test_rspec_eq_without_parentheses_counts(self):
         spec = 'it "seeds" do\n  n = conn.select_value("select count(*) from app.kinds")\n  expect(n).to eq 2\nend\n'
         repo, base = self._landed({"spec/kinds_spec.rb": spec}, "db/migrations/002_more.sql",
