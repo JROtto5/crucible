@@ -5886,6 +5886,8 @@ class TestCountCollisions(unittest.TestCase):
         files["python != 0"] = ("tests/test_kinds.py", 'def test_k(db):\n    got = db.one("select count(*) from app.kinds")\n'
                                 '    if got != 0:\n        return\n    raise AssertionError("empty")\n')
         files["shell != \"0\""] = ("ci/gate_kinds.sh", 'n=$(psql -tAc "select count(*) from app.kinds")\n[ "$n" != "0" ] || exit 1\n')
+        files["python != 0.0"] = ("tests/test_kinds.py", 'def test_k(db):\n    got = db.one("select count(*) from app.kinds")\n'
+                                  '    if got != 0.0:\n        return\n    raise AssertionError("empty")\n')
         files["js !== 0"] = ("tests/kinds.test.js", 'test("k", async () => {\n  const got = await one("select count(*) from app.kinds");\n'
                              '  expect(got !== 0).toBe(true);\n});\n')
         for label, (path, gate) in files.items():
@@ -5909,11 +5911,13 @@ class TestCountCollisions(unittest.TestCase):
         self.assertEqual(r["status"], "na", r)
 
     def test_fail_unless_exactly_n_counts(self):
-        for gate in ("n=$(psql -tAc \"select count(*) from app.kinds\")\n[ \"$n\" -ne 2 ] && exit 1\n",
-                     'def test_k(db):\n    got = db.one("select count(*) from app.kinds")\n    if got != 2:\n        raise AssertionError(got)\n',
-                     'n=$(psql -tAc "select count(*) from app.kinds")\n[ "0/0/$n" != "0/0/2" ] && exit 1\n'):
-            with self.subTest(gate[:20]):
-                path = "ci/gate_kinds.sh" if gate.startswith("n=") else "tests/test_kinds.py"
+        cases = (("-ne 2", "ci/gate_kinds.sh", 'n=$(psql -tAc "select count(*) from app.kinds")\n[ "$n" -ne 2 ] && exit 1\n'),
+                 ("python != 2", "tests/test_kinds.py", 'def test_k(db):\n    got = db.one("select count(*) from app.kinds")\n'
+                  '    if got != 2:\n        raise AssertionError(got)\n'),
+                 ("combined 0/0/$n", "ci/gate_kinds.sh",
+                  'n=$(psql -tAc "select count(*) from app.kinds")\n[ "0/0/$n" != "0/0/2" ] && exit 1\n'))
+        for label, path, gate in cases:
+            with self.subTest(label):
                 repo, base = self._landed({path: gate}, "db/migrations/002_more.sql", "insert into app.kinds values (3, 'c');\n")
                 r = R.count_collisions(repo, base, self._files(repo, f"{base}..HEAD"), offline=True, base_ref="main")
                 self.assertEqual(r["status"], "fail", r)
