@@ -1193,15 +1193,18 @@ def symbol_collisions(repo, base, files, me=None, offline=False, base_ref=None):
 
 
 
-# Generated files. A file is generated when .gitattributes marks it linguist-generated, when its first lines carry a
-# generator's marker (Go's "Code generated ... DO NOT EDIT.", "@generated", or "generated" next to "do not edit"), or
-# when its name is a code generator's (protobuf/gRPC stubs, *.generated.*, a generated/ directory). Lockfiles are
-# written by package managers, not hand-edited by mistake in a way this check can judge, and vendored code is someone
-# else's source, so both are left out. An input is what a generated file is built from: the "source:" its header
-# names (protoc, sqlc), or a schema file with the same stem (.proto, .graphql, OpenAPI .yaml/.json, ...).
+# Generated files. A file is generated when .gitattributes marks it linguist-generated, when a comment in its first
+# lines carries a generator's marker (Go's "Code generated ... DO NOT EDIT.", "@generated", or "generated" next to
+# "do not edit"), or when its name is a code generator's (protobuf/gRPC stubs, *.generated.*, a generated/ directory).
+# Lockfiles are written by package managers and vendored code is someone else's source, so both are left out.
+# An input is what a generated file is built from: the "source:" its header names (protoc, sqlc), the OpenAPI/Swagger
+# spec for a client whose header says so, or a schema file with the same stem (.proto, .graphql, ...). This is a
+# heuristic: transitive inputs (an imported .proto, the schema behind sqlc queries) are not traced, so the hand-edit
+# warning is skipped whenever any other generator input or generator config changed too.
 GEN_HEADER_RX = re.compile(r"^\W*Code generated\b.*\bDO NOT EDIT\b|@generated\b|"
                            r"\b(?:auto-?generated|generated\s+(?:by|from|with|automatically))\b.*\b(?:do not|don'?t)\s+edit\b|"
                            r"\b(?:do not|don'?t)\s+edit\b.*\b(?:auto-?generated|generated\s+(?:by|from|with))\b", re.I)
+COMMENT_LINE_RX = re.compile(r"""^\s*(?://|#|/\*|\*|--|<!--|;|%|\(\*|\{-|"{3}|'{3})""")  # a marker counts only in a comment
 GEN_NAME_RX = re.compile(r"(?:\.pb\.(?:go|gw\.go|cc|h|swift|dart)|_pb2(?:_grpc)?\.pyi?|_grpc\.pb\.go|_pb\.(?:js|d\.ts|ts)|"
                          r"_grpc_pb\.(?:js|d\.ts)|\.g\.dart|\.freezed\.dart|\.generated\.\w+|_generated\.\w+|\.gen\.\w+)$")
 GEN_DIR_RX = re.compile(r"(?:^|/)(?:__generated__|generated|gen-src|autogen)/")
@@ -1209,14 +1212,16 @@ LOCKFILES = {"package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "pnpm-lock
              "Cargo.lock", "poetry.lock", "uv.lock", "Pipfile.lock", "go.sum", "Gemfile.lock", "composer.lock",
              "mix.lock", "pubspec.lock", "Podfile.lock", "flake.lock"}
 VENDOR_RX = re.compile(r"(?:^|/)(?:vendor|third_party|third-party|node_modules|external)/")
-SCHEMA_EXT = (".proto", ".thrift", ".fbs", ".graphql", ".gql", ".avsc", ".capnp", ".xsd", ".wsdl", ".prisma",
-              ".yaml", ".yml", ".json")
-GEN_SOURCE_RX = re.compile(r"\bsource(?:s)?:\s*([\w./@+-]+\.\w+)", re.I)
-GEN_STEM_RX = re.compile(r"(?:_pb2_grpc|_pb2|_grpc_pb|_grpc|_pb|_generated)$")
+SCHEMA_EXT = (".proto", ".thrift", ".fbs", ".graphql", ".gql", ".avsc", ".capnp", ".xsd", ".wsdl", ".prisma")
 OPENAPI_RX = re.compile(r"(?:^|[/._-])(?:openapi|swagger)[^/]*\.(?:ya?ml|json)$", re.I)
 OPENAPI_HEAD_RX = re.compile(r"\b(?:openapi|swagger)\b", re.I)
+# generator configs and version pins: when one changes, regenerated output legitimately changes with no input change
+GEN_CONFIG_RX = re.compile(r"(?:^|/)(?:buf(?:\.gen)?\.ya?ml|sqlc\.(?:ya?ml|json)|codegen\.(?:ya?ml|ts|js|json)|"
+                           r"openapitools\.json|\.graphqlrc(?:\.\w+)?|orval\.config\.\w+|package\.json|go\.mod|"
+                           r"pyproject\.toml|Makefile|tools\.go)$")
+GEN_SOURCE_RX = re.compile(r"\bsources?:\s*([\w./@+-]+\.\w+)", re.I)
+GEN_STEM_RX = re.compile(r"(?:_pb2_grpc|_pb2|_grpc_pb|_grpc|_pb|_generated)$")
 GEN_HEAD_LINES = 12
-COMMENT_LINE_RX = re.compile(r"^\s*(?://|#|/\*|\*|--|<!--|;|%|\(\*|\{-|\"\"\"|''')")  # a marker counts only in a comment
 GEN_SCAN_MAX = 400      # repo files whose header is read when looking for the outputs of a changed input
 
 
@@ -1224,17 +1229,13 @@ def _skip_gen(path):
     return os.path.basename(path) in LOCKFILES or bool(VENDOR_RX.search(path))
 
 
-def _head(repo, path, ref=None):
-    """The first lines of a file: from ref when given, else the working tree (what is being reviewed)."""
-    if ref:
-        text = git(repo, "show", f"{ref}:{path}", check=False) or ""
-    else:
-        try:
-            with open(os.path.join(repo, path), errors="replace") as fh:
-                text = "".join(fh.readline() for _ in range(GEN_HEAD_LINES))
-        except OSError:
-            return ""
-    return "\n".join(text.split("\n")[:GEN_HEAD_LINES])
+def _head(repo, path):
+    """The first lines of a file in the working tree (what is being reviewed)."""
+    try:
+        with open(os.path.join(repo, path), errors="replace") as fh:
+            return "".join(fh.readline() for _ in range(GEN_HEAD_LINES))
+    except OSError:
+        return ""
 
 
 def _linguist_generated(repo, paths):
@@ -1245,8 +1246,8 @@ def _linguist_generated(repo, paths):
     return {f[i] for i in range(0, len(f) - 2, 3) if f[i + 2] in ("set", "true")}
 
 
-def _generated(repo, paths, ref=None):
-    """{path: why} for the paths that look generated."""
+def _generated(repo, paths, heads):
+    """{path: why} for the paths that look generated. heads: {path: first lines}, filled as files are read."""
     attr = _linguist_generated(repo, paths)
     out = {}
     for p in paths:
@@ -1256,7 +1257,8 @@ def _generated(repo, paths, ref=None):
             out[p] = "linguist-generated in .gitattributes"
         elif GEN_NAME_RX.search(p):
             out[p] = "a code generator's file name"
-        elif any(COMMENT_LINE_RX.match(ln) and GEN_HEADER_RX.search(ln) for ln in _head(repo, p, ref).split("\n")):
+        elif any(COMMENT_LINE_RX.match(ln) and GEN_HEADER_RX.search(ln)
+                 for ln in heads.setdefault(p, _head(repo, p)).split("\n")):
             out[p] = "a generated-file header"
         elif GEN_DIR_RX.search(p):
             out[p] = "a generated/ directory"
@@ -1268,49 +1270,45 @@ def _gen_stem(path):
     return GEN_STEM_RX.sub("", os.path.basename(path).split(".")[0])
 
 
-def _gen_inputs(repo, path, tracked):
-    """Files the generated `path` is likely built from: the "source:" its header names, else schema files with the
-    same stem. Conservative: an OpenAPI/JSON/YAML stem match only counts in the same directory tree."""
-    head = _head(repo, path)
+class _Tracked:
+    """The repo's tracked files, indexed by base name, stem and directory, so lookups don't rescan the whole list."""
+
+    def __init__(self, paths):
+        self.paths, self.by_base, self.by_stem, self.by_dir = paths, {}, {}, {}
+        for t in paths:
+            b = os.path.basename(t)
+            self.by_base.setdefault(b, []).append(t)
+            for k in {os.path.splitext(b)[0], _gen_stem(t)}:
+                self.by_stem.setdefault(k, []).append(t)
+            self.by_dir.setdefault(os.path.dirname(t), []).append(t)
+        self.specs = [t for t in paths if OPENAPI_RX.search(t) and not _skip_gen(t)]
+
+
+def _gen_inputs(path, head, tracked):
+    """Files the generated `path` is likely built from: the "source:" its header names, else the OpenAPI spec for a
+    client whose header names OpenAPI/Swagger, else schema files with the same stem."""
     named = []
     for m in GEN_SOURCE_RX.finditer(head):
         src = m.group(1)
-        hits = [t for t in tracked if t == src or t.endswith("/" + src)]
-        named += hits
+        named += [t for t in tracked.by_base.get(os.path.basename(src), []) if t == src or t.endswith("/" + src)]
     if named:
         return sorted(set(named))
-    if OPENAPI_HEAD_RX.search(head):                      # an OpenAPI/Swagger client: built from the spec
-        specs = [t for t in tracked if OPENAPI_RX.search(t) and not _skip_gen(t)]
-        if specs:
-            return sorted(specs)
-    stem, d = _gen_stem(path), os.path.dirname(path)
+    if OPENAPI_HEAD_RX.search(head) and tracked.specs:
+        return sorted(tracked.specs)
+    stem = _gen_stem(path)
     if len(stem) < 3:
         return []
-    out = []
-    for t in tracked:
-        if t == path or not t.endswith(SCHEMA_EXT) or _skip_gen(t):
-            continue
-        if os.path.splitext(os.path.basename(t))[0] != stem:
-            continue
-        if t.endswith((".yaml", ".yml", ".json")):
-            td = os.path.dirname(t)        # a config.json somewhere else isn't the input of config.generated.ts
-            if not (td == d or d.startswith(td + "/") or td.startswith(d + "/") if d else td == d):
-                continue
-        out.append(t)
-    return sorted(out)
+    return sorted({t for t in tracked.by_stem.get(stem, []) if t != path and t.endswith(SCHEMA_EXT)
+                   and os.path.splitext(os.path.basename(t))[0] == stem and not _skip_gen(t)})
 
 
 def _codegen_command(repo):
     """The project's own way to regenerate, if it declares one: an npm script, a Makefile target, go:generate."""
-    try:
-        with open(os.path.join(repo, "package.json")) as fh:
-            import json
-            scripts = (json.load(fh).get("scripts") or {})
-        for k in scripts:
-            if re.fullmatch(r"(?:gen|generate|codegen|proto|protos|build:types|generate:\w+|gen:\w+|types)", k):
-                return f"npm run {k}"
-    except (OSError, ValueError, AttributeError):
-        pass
+    pkg = util.read_json(os.path.join(repo, "package.json"), {})
+    scripts = pkg.get("scripts") if isinstance(pkg, dict) else None
+    for k in (scripts if isinstance(scripts, dict) else {}):
+        if re.fullmatch(r"(?:gen|generate|codegen|proto|protos|build:types|generate:\w+|gen:\w+|types)", k):
+            return f"npm run {k}"
     for mk in ("Makefile", "makefile", "GNUmakefile"):
         try:
             with open(os.path.join(repo, mk), errors="replace") as fh:
@@ -1326,7 +1324,8 @@ def _codegen_command(repo):
 
 
 def _ci_writers(repo, gen_paths):
-    """{generated path: [workflow:job, ...]} for paths that more than one CI job writes or uploads."""
+    """{generated path: [workflow:job, ...]} for paths that more than one CI job writes with a shell redirect or an
+    -o/--output flag. Artifact uploads and downloads move a file between jobs; they are not competing writers."""
     writers = {}
     for wf in sorted(glob.glob(os.path.join(repo, ".github", "workflows", "*.y*ml"))):
         try:
@@ -1337,18 +1336,20 @@ def _ci_writers(repo, gen_paths):
         job, in_jobs = None, False
         for line in lines:
             if re.match(r"^jobs:\s*$", line):
-                in_jobs = True; continue
+                in_jobs = True
+                continue
             if in_jobs and re.match(r"^\S", line):
                 in_jobs = False
             m = re.match(r"^  ([\w-]+):\s*$", line) if in_jobs else None
             if m:
-                job = m.group(1); continue
+                job = m.group(1)
+                continue
             if not job:
                 continue
             for p in gen_paths:
                 pat = re.escape(p)
-                if re.search(r"(?:^|\s|['\"])(?:path:\s*['\"]?" + pat + r"|>{1,2}\s*['\"]?" + pat +
-                             r"|(?:-o|--output|--out)[ =]['\"]?" + pat + r")(?:['\"\s]|$)", line):
+                if re.search(r"(?:>{1,2}\s*['\"]?" + pat + r"|(?:-o|--output|--out)[ =]['\"]?" + pat + r")(?:['\"\s]|$)",
+                             line):
                     key = f"{os.path.basename(wf)}:{job}"
                     if key not in writers.setdefault(p, []):
                         writers[p].append(key)
@@ -1358,57 +1359,75 @@ def _ci_writers(repo, gen_paths):
 def generated_outputs(repo, base, files):
     """Generated files must be regenerated, not hand-edited, and must move with their inputs (BLAZE escape #3, idea
     only: a hand edit to a generated file passed review and was overwritten by the next codegen run; an input change
-    shipped without its output). Warns when (a) a generated file changed but none of the inputs it is built from did,
-    (b) an input changed but the generated files built from it didn't, (c) two CI jobs write the same generated
-    file. Names the project's own regenerate command when it declares one. No model call, no execution."""
+    shipped without its output). Warns when (a) a generated file changed while none of its inputs, and no other
+    generator input or config, did; (b) an input changed but a generated file built from it didn't; (c) two CI jobs
+    write the same generated file. Names the project's own regenerate command when it declares one. `base` is unused
+    (the item reads HEAD only) and kept for the same signature as the other diff items. No model call, no execution."""
     name = "generated files regenerated with their inputs"
     live = [f["path"] for f in files if f.get("path") and not f.get("deleted")]
-    changed = set(live) | {f["path"] for f in files if f.get("path")}
-    gen = _generated(repo, live)
-    tracked = [t for t in (git(repo, "ls-files", "-z", check=False) or "").split("\0") if t]
-    hand, stale, notes = [], [], []
+    changed = {f["path"] for f in files if f.get("path")}
+    heads = {}
+    gen = _generated(repo, live, heads)
+    tracked = _Tracked([t for t in (git(repo, "ls-files", "-z", check=False) or "").split("\0") if t])
+    # (b) a changed file is an input when a tracked generated file is built from it: its "source:" header names it
+    # (sqlc's queries.sql, protoc), or it is the schema with the same stem, or the OpenAPI spec of a client. Candidate
+    # outputs are read from the input's directory, its stem, and (for a spec) generated/api/client/sdk directories.
+    cand_inputs = [p for p in live if p not in gen and not _skip_gen(p)]
+    near = set()
+    for i in cand_inputs:
+        near.update(tracked.by_dir.get(os.path.dirname(i), []))
+        near.update(tracked.by_stem.get(os.path.splitext(os.path.basename(i))[0], []))
+    if any(OPENAPI_RX.search(i) for i in cand_inputs):
+        near.update(t for t in tracked.paths
+                    if GEN_DIR_RX.search(t) or re.search(r"(?:^|/)(?:api|client|clients|sdk)/", t))
+    scan = sorted(t for t in near if t not in changed and not _skip_gen(t) and CODE_EXT_RX.search(t))[:GEN_SCAN_MAX]
+    outs = _generated(repo, scan, heads)
+    built = {o: _gen_inputs(o, heads.setdefault(o, _head(repo, o)), tracked) for o in outs}
+    stale = []
+    for i in cand_inputs:
+        mine = sorted(o for o, ins in built.items() if i in ins)
+        if mine:
+            stale.append(f"{i} changed but {', '.join(mine[:3])} did not")
+    # (a) generated files changed without their inputs; skipped (noted) when another generator input or config
+    # changed, since that can legitimately change the output (an imported .proto, the schema behind sqlc queries)
+    other = sorted(p for p in changed if p not in gen and (p.endswith(SCHEMA_EXT + (".sql",)) or OPENAPI_RX.search(p)
+                                                           or GEN_CONFIG_RX.search(p) or MIGRATION_DIR_RX.search(p)))
+    hand, notes = [], []
     for p in sorted(gen):
         if any(f["path"] == p and f.get("added") for f in files):
             continue                                           # a new generated file arrives with its generator run
-        ins = _gen_inputs(repo, p, tracked)
-        if ins and not any(i in changed for i in ins):
-            hand.append(f"{p} ({gen[p]}; built from {', '.join(ins[:2])}, unchanged)")
-        elif not ins:
+        ins = _gen_inputs(p, heads.setdefault(p, _head(repo, p)), tracked)
+        if not ins:
             notes.append(f"{p}: generated ({gen[p]}), input not identified")
-    # inputs: schema files, but a YAML/JSON file only when it is an OpenAPI/Swagger spec (most are plain config)
-    inputs = [p for p in live if p.endswith(SCHEMA_EXT) and p not in gen and not _skip_gen(p)
-              and (not p.endswith((".yaml", ".yml", ".json")) or OPENAPI_RX.search(p))]
-    if inputs:
-        stems = {os.path.splitext(os.path.basename(i))[0] for i in inputs}
-        spec = any(OPENAPI_RX.search(i) for i in inputs)
-        scan = [t for t in tracked if t not in changed and not _skip_gen(t) and CODE_EXT_RX.search(t)
-                and (_gen_stem(t) in stems or (spec and (GEN_DIR_RX.search(t) or re.search(r"(?:^|/)(?:api|client|"
-                                                                                            r"clients|sdk)/", t))))]
-        outs = _generated(repo, scan[:GEN_SCAN_MAX])
-        for i in inputs:
-            mine = [o for o in outs if i in _gen_inputs(repo, o, tracked)]
-            if mine:
-                stale.append(f"{i} changed but {', '.join(sorted(mine)[:3])} did not")
-    dup = _ci_writers(repo, sorted(gen)) if gen else {}
-    ci = [f"{p} is written by {', '.join(w[:3])}" for p, w in dup.items()]
+        elif not any(i in changed for i in ins):
+            if other:
+                notes.append(f"{p}: its input is unchanged, but {other[0]} changed, which may be why")
+            else:
+                hand.append(f"{p} ({gen[p]}; built from {', '.join(ins[:2])}, unchanged)")
+    ci = [f"{p} is written by {', '.join(w[:3])}" for p, w in (_ci_writers(repo, sorted(gen)) if gen else {}).items()]
     if not gen and not stale:
         return _item(name, "na", "no generated file or generator input in the change")
+    probs, fixes = [], []
     cmd = _codegen_command(repo)
-    run = (f"Run `{cmd}` and commit what it writes" if cmd else
-           "Regenerate with the project's generator and commit its output")
-    probs = []
+    run = (f"run `{cmd}` and commit what it writes" if cmd else
+           "regenerate with the project's generator and commit its output")
     if hand:
-        probs.append("generated file(s) changed without their inputs, so the next codegen run undoes the edit: "
-                     + "; ".join(hand[:3]) + (" …" if len(hand) > 3 else ""))
+        probs.append("generated file(s) changed while their inputs did not, so they may be hand edits the next "
+                     "codegen run undoes: " + "; ".join(hand[:3]) + (" …" if len(hand) > 3 else ""))
+        fixes.append(f"if so, change the input and {run}")
     if stale:
         probs.append("input(s) changed without their generated output: " + "; ".join(stale[:3]))
+        fixes.append(run)
     if ci:
         probs.append("two CI jobs write the same generated file, so the last one wins: " + "; ".join(ci[:3]))
+        fixes.append("keep one job writing it")
     if probs:
-        fix = run + ("; change the input instead of the output" if hand else "")
-        return _item(name, "warn", ". ".join(probs) + f". {fix}" + (f" ({'; '.join(notes[:2])})" if notes else ""))
+        fix = "; ".join(dict.fromkeys(fixes))
+        return _item(name, "warn", ". ".join(probs) + f". {fix[0].upper() + fix[1:]}"
+                     + (f" ({'; '.join(notes[:2])})" if notes else ""))
     ok = f"{len(gen)} generated file(s) changed along with their inputs or with no identifiable input"
     return _item(name, "pass", ok + (f" ({'; '.join(notes[:3])})" if notes else ""))
+
 
 def current_login():
     """The GitHub login of whoever runs crucible: CRUCIBLE_GH_USER, else the account `gh` is logged in as, else None.
