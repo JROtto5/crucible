@@ -32,6 +32,48 @@
 
   Misses: current missed py-race (r1) and js-refcount (r2, the known medium-severity case); Opus missed py-race once (r2). Every arm found every bug at some severity. The recall intervals all overlap, so n=28 can't separate the arms. Cost can: Fable 5.2 costs 2.8× Opus and 5.5× the current pick per set, and it's slowest. Every bug case cost $0.94–$3.67 on Fable 5.2 vs $0.28–$0.94 on Opus, so this isn't one outlier. Decision: no reviewer change on this evidence. Fable 5.2 would only be worth it if a larger set showed a recall gain big enough to pay ~$1.05 more per caught bug than Opus.
 
+## 2026-11-10 · reviewer A/B, second slice: 10 paired upstream rounds (`crucible model-replay`)
+
+Run: `crucible model-replay --clones ~/dev/oss-grind/work --rounds 6 --budget 0.8 --exclude e72b878703 7b25a717ea
+63e3b63c44 2d6a660a8b 8e51962df9` at 938029a's code (raw output ~/.crucible/replays/model-2026-11-10c.txt). The
+first slice's 5 rounds are excluded, and the next newest round of each project is taken: colyseus/schema 95303fd7f8,
+three-mesh-bvh ce21827c59, supavisor 30e50d14b0, umu 0f4b8eeb4d, MangoHud 56f729da0b. Lutris 5f4d6fa0af was left
+out twice: Opus's review came back incomplete (a chunk failed) both times. Same setup as the first slice (read-only,
+--no-exec, tiers on, Opus → Sonnet verify, Sonnet → Opus verify). The first try was stopped at a 10-minute
+background limit after 2 rounds. Those 4 arms were kept (a913f38's arm cache) and reused, so the restart paid only
+for the rest. Labels: 4 held up, 2 refuted, all raised by Opus in the stored rounds.
+
+| arm | slice 2 held kept | slice 2 false alarms kept | 10 pairs held kept (matcher) | by hand | false alarms kept | $ (10 pairs) | $ / held kept |
+|---|---|---|---|---|---|---|---|
+| Opus review | 3/4 (4/4 by hand) | 0/2 | 9/11 (Wilson 52–95%) | 10/11 (62–98%) | 1/5 | $5.66 | $0.63 |
+| Sonnet review | 2/4 | 0/2 | 5/11 (21–72%) | 6/11 (28–79%) | 2/5 | $4.95 | $0.99 |
+
+- By hand, slice 2: Opus's `cpu_win32.cpp:17` "Windows UpdateCPUData never sets max_core_load, so the option always
+  shows 0%" is the labelled held-up "Option shows a constant 0% on Windows" (cited in `hud_elements.cpp`, so the
+  matcher can't pair a finding across files). Sonnet's two misses (colyseus/schema's faked-emit test, MangoHud's
+  duplicated LOAD_DATA block) are real misses.
+- **Unlabelled kept findings, judged by evidence where any exists (6 of 15):**
+  - held up, both arms (2): "only the root state is checked; nested children can still shadow accessors"
+    (schema Encoder.ts:263/265). The same class was deferred with a measured answer in the later round (assert.ts:68).
+  - false alarm, both arms (2 Opus, 1 Sonnet): "default changed with no CHANGELOG entry" (bvh :173 / :72) and
+    "API.md not regenerated" (bvh :10, Opus). The author refuted this class twice with evidence: gkjohnson writes the
+    CHANGELOG and regenerates API.md himself after merging (f0b97634, aef5a71b).
+  - **not judged (9)**: no later answer covers them, and judging them needs a repro on each PR. Opus: the
+    SWC/Babel wording of the schema error, the bvh index write-back when the geometry changed mid-build, the bvh
+    indirect-branch test gap, MangoHud's unlabelled second percentage. Sonnet: the schema comment split from its line,
+    the bvh write-back throwing inside onmessage, the normalized copy vs transfer paths in BufferUtils, supavisor's
+    redundant struct guards, and the get_secrets-only test. Both arms raised the MangoHud percentage label and the
+    bvh write-back (as two framings).
+- Among the judged unlabelled findings each arm has exactly one extra held-up finding, and it's the same one (the
+  root-only check), so in this slice the label bias toward Opus doesn't hide a Sonnet-only catch.
+- Over 10 pairs, Opus keeps more held-up findings, 10/11 vs 6/11 by hand. The intervals still overlap at n=11, but
+  every slice points the same way, and Opus's $ per held-up finding is lower ($0.63 vs $0.99) even though Sonnet's
+  rounds cost less ($0.50 vs $0.57 per round).
+- Decision: no change. Opus stays the upstream reviewer. Revisit at ≥20 pairs (the cache makes that +10 rounds, not 20).
+- Spend: $3.32 for the restart (6 new arms plus the failed Lutris one) + $2.48 for the 4 kept arms of the stopped
+  first try. The stopped try's Lutris arm and its unfinished supavisor arm are not metered (killed before review.json
+  was read), at most $1.60 at the $0.80 cap. Total ≤ $7.40, within the ≤$8 commitment.
+
 ## 2026-11-10 · the 5 reviewer-replay pairs by change shape (ARMOR routing ask, $0)
 
 The 5 pairs above, re-bucketed with `model-replay`'s new by-shape breakdown (`modelreplay.shape`: kind by production
