@@ -1202,10 +1202,10 @@ SQL_TABLE = r"((?:\"[^\"]+\"|[\w$]+)(?:\.(?:\"[^\"]+\"|[\w$]+))?)"
 COUNT_RX = re.compile(r"\bcount\s*\(\s*(?:\*|1)\s*\)\s+from\s+" + SQL_TABLE, re.I)
 COUNT_FILTER_RX = re.compile(r"\b(?:where|join|group\s+by|having|limit|tablesample|offset)\b|^\s*(?:\w+\s*)?,", re.I)
 COUNT_END_RX = re.compile(r"[;\"'`)]|\$\$")
-# the number has to be compared for EQUALITY with the count, or for inequality with a nonzero number ("fail unless
-# it is 36"); a lower bound like `-gt 0` or a non-empty check like `-ne 0` survives added rows, and the literal has to sit in that comparison, so `exit 1` or an unrelated number
-# nearby doesn't count
-COUNT_EQ_RX = re.compile(r"(?:-eq|===?)\s*[\"']?\d+(?:/\d+)*\b|\b\d+(?:/\d+)*[\"']?\s*(?:-eq|===?)|"
+# The number has to be compared for EQUALITY with the count, or for inequality with a nonzero number ("fail unless
+# it is 36"); a lower bound like `-gt 0` or a non-empty check like `-ne 0` / `!= 0` survives added rows. The literal
+# has to sit in that comparison, so `exit 1` or an unrelated number nearby doesn't count.
+COUNT_EQ_RX = re.compile(r"(?:-eq|(?<![!=<>])===?)\s*[\"']?\d+(?:/\d+)*\b|\b\d+(?:/\d+)*[\"']?\s*(?:-eq|===?)|"
                          r"(?:-ne|!==?)\s*[\"']?(?!0\b)\d+(?:/\d+)*\b|"
                          r"\[\[?\s*\"?\$\{?\w+\}?\"?\s*==?\s*[\"']?\d+\b|"
                          r"\.to\s+(?:eq|eql|equal|be)\s+\d+\b|"
@@ -1236,6 +1236,9 @@ def _sql_writer_file(path):
     """Files whose added SQL changes a database's rows for everyone: SQL/migration hosts, migrations and seeds,
     but not tests (a test's own fixture inserts run in its own database or transaction)."""
     low = path.lower()
+    # Deliberate: a .sql file outside tests and ci/, checks/, gates/ is a writer even when its name says check or
+    # verify, since a schema or data change named like that (db/check_constraint.sql) is common and a missed writer is
+    # the costlier mistake; a gate that seeds its own database belongs under those directories.
     shared = bool(MIGRATION_DIR_RX.search(path)) or bool(SEED_RX.search(low))
     if TEST_PATH_RX.search(path) or (GATE_DIR_RX.search(path) and not shared):   # a gate seeding its own database
         return False

@@ -5882,9 +5882,15 @@ class TestCountCollisions(unittest.TestCase):
             "non-empty check": "n=$(psql -tAc \"select count(*) from app.kinds\")\n[ \"$n\" -ne 0 ] || exit 1\n",
             "empty check": "n=$(psql -tAc \"select count(*) from app.kinds\")\n[ -z \"$n\" ] && exit 1\n",
         }
-        for label, gate in cases.items():
+        files = {label: ("ci/gate_kinds.sh", g) for label, g in cases.items()}
+        files["python != 0"] = ("tests/test_kinds.py", 'def test_k(db):\n    got = db.one("select count(*) from app.kinds")\n'
+                                '    if got != 0:\n        return\n    raise AssertionError("empty")\n')
+        files["shell != \"0\""] = ("ci/gate_kinds.sh", 'n=$(psql -tAc "select count(*) from app.kinds")\n[ "$n" != "0" ] || exit 1\n')
+        files["js !== 0"] = ("tests/kinds.test.js", 'test("k", async () => {\n  const got = await one("select count(*) from app.kinds");\n'
+                             '  expect(got !== 0).toBe(true);\n});\n')
+        for label, (path, gate) in files.items():
             with self.subTest(label):
-                repo, base = self._landed({"ci/gate_kinds.sh": gate}, "db/migrations/002_more.sql",
+                repo, base = self._landed({path: gate}, "db/migrations/002_more.sql",
                                           "insert into app.kinds values (3, 'c');\n")
                 r = R.count_collisions(repo, base, self._files(repo, f"{base}..HEAD"), offline=True, base_ref="main")
                 self.assertIn(r["status"], ("na", "pass"), r)
@@ -5912,7 +5918,8 @@ class TestCountCollisions(unittest.TestCase):
                 self.assertEqual(r["status"], "fail", r)
 
     def test_sql_named_with_a_gate_word_outside_gate_dirs_is_a_writer(self):
-        repo, base = self._landed({"ci/gate_kinds.sh": self.GATE}, "db/add_gate_kinds.sql",
+        # deliberate (see _sql_writer_file): db/check_kinds.sql inserting rows counts as a writer
+        repo, base = self._landed({"ci/gate_kinds.sh": self.GATE}, "db/check_kinds.sql",
                                   "insert into app.kinds values (3, 'c');\n")
         r = R.count_collisions(repo, base, self._files(repo, f"{base}..HEAD"), offline=True, base_ref="main")
         self.assertEqual(r["status"], "fail", r)
