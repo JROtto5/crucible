@@ -18,7 +18,7 @@
   crucible stats   [--project P] [--since T] [--include-self] [--json]  real-PR precision, held up with its 95% interval
 
 crucible never pushes, comments, approves or posts. A human submits."""
-import argparse, datetime as dt, os, sys
+import argparse, datetime as dt, os, re, sys
 from . import __version__
 from .util import Failed, HOME, MODELS, project_dir, project_key, read_json, write_json
 
@@ -165,8 +165,14 @@ def cmd_model_replay(a):
     from . import modelreplay
     models = [MODELS.get(m, m) for m in a.models]
     rows, skipped = modelreplay.run(os.path.join(HOME, "reviews"), a.clones, models, a.rounds, a.budget, a.include_self,
-                                    log=lambda m: print(m, file=sys.stderr))
+                                    log=lambda m: print(m, file=sys.stderr), fresh=a.fresh, exclude=a.exclude)
     print(modelreplay.report(rows, skipped, models))
+
+
+def _sha_prefix(v):
+    if not re.fullmatch(r"[0-9a-fA-F]{7,40}", v):
+        raise argparse.ArgumentTypeError(f"not a commit prefix of 7 or more hex characters: {v!r}")
+    return v.lower()
 
 
 def _positive_int(v):
@@ -266,6 +272,10 @@ def main(argv=None):
     mr.add_argument("--rounds", type=_positive_int, default=5, help="stored rounds to replay (default 5)")
     mr.add_argument("--budget", type=float, help="USD cap for each arm's review of one round")
     mr.add_argument("--include-self", action="store_true", help="include crucible's reviews of itself")
+    mr.add_argument("--fresh", action="store_true", help="re-run every arm instead of reusing arms an earlier run "
+                    "kept (~/.crucible/replays/model-arms)")
+    mr.add_argument("--exclude", nargs="+", default=[], metavar="SHA", type=_sha_prefix,
+                    help="leave out stored rounds whose commit starts with one of these (at least 7 characters)")
     sa = s.add_parser("stats", help="real-PR precision log from stored reviews: unique kept/dropped/fixed/deferred/refuted")
     sa.add_argument("--project", help="owner/name (default: every project)")
     sa.add_argument("--include-self", action="store_true", help="include crucible's reviews of itself")

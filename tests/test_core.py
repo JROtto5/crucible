@@ -4873,16 +4873,79 @@ class TestModelReplay(unittest.TestCase):
         M.anchoring.find_clones = lambda dirs: ["/clone"]
         M.anchoring.has_commit = lambda c, sha: sha != "c1"
         M.run_arm = fake_arm
+        shutil.rmtree(M.ARMS, ignore_errors=True)
         try:
             rows, skipped = M.run("/r", ["/c"], ["claude-opus-5-5", "claude-sonnet-5-5", "claude-opus-5-5"], n=5,
                                   log=lambda m: None)
         finally:
             M.rounds, M.anchoring.find_clones, M.anchoring.has_commit, M.run_arm = saved
+            shutil.rmtree(M.ARMS, ignore_errors=True)
         self.assertEqual([r["sha"] for r in rows], ["a1"])
         self.assertEqual(sorted(rows[0]["arms"]), ["claude-opus-5-5", "claude-sonnet-5-5"])
-        self.assertEqual(skipped, {"no local clone has the commit and its base": 1, "an arm failed": 1, M.INCOMPLETE: 2})
+        self.assertEqual(skipped, {"no local clone has the commit and its base": 1, "an arm failed": 1,
+                                   "excluded (--exclude)": 0, M.INCOMPLETE: 2})
         self.assertIn("skipped 2: stored round's coverage incomplete", M.report(rows, skipped, ["claude-opus-5-5"]))
         self.assertEqual(sum(1 for sha, m in calls if sha == "a1"), 2)      # the repeated opus arm ran once
+
+    def test_run_reuses_kept_arms_so_a_bigger_sample_pays_only_for_new_rounds(self):
+        from crucible import modelreplay as M
+        mk = lambda repo, sha, t: {"repo": repo, "sha": sha, "base": "b" + sha, "started": t, "inputs": {},
+                                   "labelled": [dict(self.L, disposition="fixed")]}
+        stored = [mk("o__a", "a1", "3"), mk("o__b", "b1", "2")]
+        calls = []
+
+        def fake_arm(clone, r, model, tmp, budget=None, log=None):
+            calls.append((r["sha"], model))
+            if r["sha"] == "c1" and model == "claude-sonnet-5-5":
+                raise U.Failed("usage limit")
+            return {"findings": [dict(self.L)], "cost_usd": 0.25, "review_model": model}
+
+        saved = (M.rounds, M.anchoring.find_clones, M.anchoring.has_commit, M.run_arm)
+        M.rounds = lambda root, model, inc=False, skipped=None: list(stored)
+        M.anchoring.find_clones = lambda dirs: ["/clone"]
+        M.anchoring.has_commit = lambda c, sha: True
+        M.run_arm = fake_arm
+        models = ["claude-opus-5-5", "claude-sonnet-5-5"]
+        go = lambda n, **kw: M.run("/r", ["/c"], models, n=n, budget=0.8, log=lambda m: None, **kw)
+        shutil.rmtree(M.ARMS, ignore_errors=True)
+        try:
+            rows, _ = go(1)
+            self.assertEqual([r["sha"] for r in rows], ["a1"])
+            self.assertEqual(len(calls), 2)
+            # a newer round lands; the next, bigger run keeps a1 (both arms kept), runs only what it adds
+            stored.insert(0, mk("o__c", "c1", "4"))
+            calls.clear()
+            rows, skipped = go(3)
+            self.assertEqual([r["sha"] for r in rows], ["a1", "b1"])            # c1's sonnet arm failed
+            self.assertNotIn(("a1", "claude-opus-5-5"), calls)
+            self.assertEqual(sorted(calls), sorted([("c1", "claude-opus-5-5"), ("c1", "claude-sonnet-5-5"),
+                                                    ("b1", "claude-opus-5-5"), ("b1", "claude-sonnet-5-5")]))
+            self.assertTrue(all(a["reused"] for a in rows[0]["arms"].values()))
+            self.assertFalse(any(a["reused"] for a in rows[1]["arms"].values()))
+            out = M.report(rows, skipped, models)
+            self.assertIn("2 of 4 arms reused from an earlier run", out)
+            self.assertIn("this run spent $0.50", out)
+            # c1's opus arm was paid for, so it was kept; the retry runs only sonnet
+            calls.clear()
+            M.run_arm = lambda clone, r, model, tmp, budget=None, log=None: (
+                calls.append((r["sha"], model)) or {"findings": [], "cost_usd": 0.1, "review_model": model})
+            rows, _ = go(3)
+            self.assertEqual(calls, [("c1", "claude-sonnet-5-5")])
+            self.assertEqual(len(rows), 3)
+            # another budget is another run: nothing reused
+            calls.clear()
+            M.run("/r", ["/c"], models, n=1, budget=2.0, log=lambda m: None)
+            self.assertEqual(len(calls), 2)
+            # --fresh re-runs; --exclude leaves a round out and counts it
+            calls.clear()
+            rows, skipped = go(3, fresh=True, exclude=("a1",))
+            self.assertEqual(sorted({s for s, _ in calls}), ["b1", "c1"])
+            self.assertEqual(skipped["excluded (--exclude)"], 1)
+            self.assertNotIn("reused", M.report(rows, skipped, models))
+        finally:
+            M.rounds, M.anchoring.find_clones, M.anchoring.has_commit, M.run_arm = saved
+            shutil.rmtree(M.ARMS, ignore_errors=True)
+        self.assertTrue(M.ARMS.startswith(U.HOME))                          # never the real ~/.crucible in tests
 
     def test_shape_counts_production_lines_outside_tests_and_docs(self):
         from crucible import modelreplay as M

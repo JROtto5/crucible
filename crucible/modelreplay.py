@@ -19,11 +19,13 @@ otherwise.
 
 Every arm runs with --no-exec (nothing from the checkout runs, on this machine), --offline, --full and --fresh, in a
 throwaway CRUCIBLE_HOME that holds a copy of the project's learned rules and style, so stored reviews, the cache and
-`stats` are never touched. Model calls: this costs money (--budget caps each arm's run)."""
+`stats` are never touched. Each finished arm's review.json is kept under ~/.crucible/replays/model-arms and scored
+again by later runs, so growing the sample pays only for the new rounds (--fresh re-runs them all). Model calls: this
+costs money (--budget caps each arm's run)."""
 import glob, os, re, shutil, subprocess, sys, tempfile
 
 from . import anchoring, routing
-from .util import HOME, MODELS, TEST_PATH_RX, Failed, git, norm_words, project_key, read_json
+from .util import HOME, MODELS, TEST_PATH_RX, Failed, git, norm_words, project_key, read_json, write_json
 
 HELD = ("fixed", "deferred")
 INCOMPLETE = "stored round's coverage incomplete"
@@ -35,6 +37,7 @@ DISPOSITIONS = HELD + ("refuted",)
 LINE_NEAR, LINE_FAR, WORDS_MIN = 3, 15, 0.25
 # the by-shape breakdown: production lines changed (outside tests and docs), upper bounds of each size bucket
 SIZE_BUCKETS = ((50, "<=50"), (200, "51-200"), (None, ">200"))
+ARMS = os.path.join(HOME, "replays", "model-arms")   # one finished arm per file, reused by later runs
 TOO_FEW = 60                   # labelled findings a bucket needs before its rates are worth quoting
 
 
@@ -244,19 +247,48 @@ def short(model):
     return next((k for k, v in MODELS.items() if v == model), model)
 
 
-def run(root, clones, models, n=5, budget=None, include_self=False, log=print):
-    """Pairs: every arm on the same n rounds. A round where any arm fails is left out of all of them."""
+def _arm_path(r, model, budget):
+    """Where one arm's review of one round is kept. The budget is part of the key: a capped arm is a different run."""
+    b = f"{budget:g}" if budget else "nobudget"
+    return os.path.join(ARMS, r["repo"], r["sha"], f"{r['base'][:12]}-{re.sub(r'[^A-Za-z0-9._-]', '_', model)}-{b}.json")
+
+
+def load_arm(r, model, budget):
+    got = read_json(_arm_path(r, model, budget))
+    return got.get("review") if isinstance(got, dict) and got.get("model") == model else None
+
+
+def save_arm(r, model, budget, review):
+    here, path = os.path.dirname(os.path.dirname(os.path.abspath(__file__))), _arm_path(r, model, budget)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    write_json(path, {"model": model, "repo": r["repo"], "sha": r["sha"], "base": r["base"],
+                                             "budget": budget, "crucible": git(here, "rev-parse", "--short=10", "HEAD",
+                                                                               check=False).strip() or None,
+                                             "review": review})
+
+
+def run(root, clones, models, n=5, budget=None, include_self=False, log=print, fresh=False, exclude=()):
+    """Pairs: every arm on the same n rounds. A round where any arm fails is left out of all of them.
+
+    Each finished arm's review is kept under ARMS and scored again from there (answers given since re-label it), so
+    a larger sample only pays for the rounds it adds: rounds already replayed with every arm come first (newest
+    first), then pick() fills the rest. `fresh` re-runs every arm. `exclude` (commit prefixes) leaves rounds out,
+    e.g. the ones a run from before the cache already paid for."""
     models = list(dict.fromkeys(models))      # an arm named twice would be run twice and counted twice
     incomplete = {}
     cands = rounds(root, models[0], include_self, incomplete)
+    excluded = [r for r in cands if any(r["sha"].startswith(x) for x in exclude)]
+    cands = [r for r in cands if r not in excluded]
     repos = anchoring.find_clones(clones)
     have = []
     for r in cands:
         c = next((c for c in repos if anchoring.has_commit(c, r["sha"]) and anchoring.has_commit(c, r["base"])), None)
         if c:
             have.append(dict(r, clone=c))
-    sample = pick(have, n)
-    skipped = {"no local clone has the commit and its base": len(cands) - len(have), "an arm failed": 0, **incomplete}
+    done = [] if fresh else [r for r in have if all(load_arm(r, m, budget) for m in models)][:n]
+    sample = done + pick([r for r in have if r not in done], n - len(done))
+    skipped = {"no local clone has the commit and its base": len(cands) - len(have), "an arm failed": 0,
+               "excluded (--exclude)": len(excluded), **incomplete}
     tmp = tempfile.mkdtemp(prefix="crucible-modelreplay-")
     rows = []
     try:
@@ -264,8 +296,13 @@ def run(root, clones, models, n=5, budget=None, include_self=False, log=print):
             arms = {}
             try:
                 for m in models:
-                    log(f"  {r['repo']} {r['sha'][:10]}: {m}")
-                    arms[m] = score_arm(r, run_arm(r["clone"], r, m, tmp, budget, log))
+                    review = None if fresh else load_arm(r, m, budget)
+                    reused = review is not None
+                    log(f"  {r['repo']} {r['sha'][:10]}: {m}" + (" (kept from an earlier run)" if reused else ""))
+                    if not reused:
+                        review = run_arm(r["clone"], r, m, tmp, budget, log)
+                        save_arm(r, m, budget, review)      # kept even if a later arm fails: it was paid for
+                    arms[m] = dict(score_arm(r, review), reused=reused)
             except (Failed, subprocess.SubprocessError, OSError) as ex:
                 log(f"    left out: {ex}")
                 skipped["an arm failed"] += 1
@@ -325,6 +362,11 @@ def report(rows, skipped, models):
            f"Labels come only from what {short(models[0])} raised in the stored round, so held-up recall favours it; "
            "the other arms' own real findings are among the unlabelled ones below."]
     out += [f"  skipped {v}: {k}" for k, v in skipped.items() if v]
+    arms = [a for r in rows for a in r["arms"].values()]
+    reused = [a for a in arms if a.get("reused")]
+    if reused:
+        out.append(f"  {len(reused)} of {len(arms)} arms reused from an earlier run ({ARMS}); the $ below include "
+                   f"their original cost, this run spent ${sum(a['cost'] for a in arms if not a.get('reused')):.2f}")
     for m in models:
         s = t[m]
         per = f"${s['cost'] / s['kept_held']:.2f}" if s["kept_held"] else "n/a (none kept)"
