@@ -1217,11 +1217,11 @@ OPENAPI_RX = re.compile(r"(?:^|[/._-])(?:openapi|swagger)[^/]*\.(?:ya?ml|json)$"
 OPENAPI_HEAD_RX = re.compile(r"\b(?:openapi|swagger)\b", re.I)
 # generator configs and version pins: when one changes, regenerated output legitimately changes with no input change
 GEN_CONFIG_RX = re.compile(r"(?:^|/)(?:buf(?:\.gen)?\.ya?ml|sqlc\.(?:ya?ml|json)|codegen\.(?:ya?ml|ts|js|json)|"
-                           r"openapitools\.json|\.graphqlrc(?:\.\w+)?|orval\.config\.\w+|package\.json|go\.mod|"
-                           r"pyproject\.toml|Makefile|tools\.go)$")
+                           r"openapitools\.json|\.graphqlrc(?:\.\w+)?|orval\.config\.\w+|gqlgen\.ya?ml)$")
 GEN_SOURCE_RX = re.compile(r"\bsources?:\s*([\w./@+-]+\.\w+)", re.I)
 GEN_STEM_RX = re.compile(r"(?:_pb2_grpc|_pb2|_grpc_pb|_grpc|_pb|_generated)$")
 GEN_HEAD_LINES = 12
+GEN_HEAD_BYTES = 8192
 GEN_SCAN_MAX = 400      # repo files whose header is read when looking for the outputs of a changed input
 
 
@@ -1229,13 +1229,17 @@ def _skip_gen(path):
     return os.path.basename(path) in LOCKFILES or bool(VENDOR_RX.search(path))
 
 
-def _head(repo, path):
-    """The first lines of a file in the working tree (what is being reviewed)."""
-    try:
-        with open(os.path.join(repo, path), errors="replace") as fh:
-            return "".join(fh.readline() for _ in range(GEN_HEAD_LINES))
-    except OSError:
-        return ""
+def _head(repo, path, heads):
+    """The first lines of a file in the working tree (what is being reviewed), read once per path into `heads` and
+    bounded in bytes, so a minified bundle or a binary isn't read whole."""
+    if path not in heads:
+        try:
+            with open(os.path.join(repo, path), "rb") as fh:
+                raw = fh.read(GEN_HEAD_BYTES)
+            heads[path] = "\n".join(raw.decode("utf-8", "replace").split("\n")[:GEN_HEAD_LINES])
+        except OSError:
+            heads[path] = ""
+    return heads[path]
 
 
 def _linguist_generated(repo, paths):
@@ -1258,7 +1262,7 @@ def _generated(repo, paths, heads):
         elif GEN_NAME_RX.search(p):
             out[p] = "a code generator's file name"
         elif any(COMMENT_LINE_RX.match(ln) and GEN_HEADER_RX.search(ln)
-                 for ln in heads.setdefault(p, _head(repo, p)).split("\n")):
+                 for ln in _head(repo, p, heads).split("\n")):
             out[p] = "a generated-file header"
         elif GEN_DIR_RX.search(p):
             out[p] = "a generated/ directory"
@@ -1268,6 +1272,20 @@ def _generated(repo, paths, heads):
 def _gen_stem(path):
     """foo.pb.go, foo_pb2.py, foo_pb2_grpc.py, foo.generated.ts, queries.sql.go -> foo / queries."""
     return GEN_STEM_RX.sub("", os.path.basename(path).split(".")[0])
+
+
+def _near(a, b):
+    """Same directory, one directory inside the other, or sibling directories under a common non-root parent. A file at
+    the repo root is near only other root files (the root contains everything, so it would excuse anything)."""
+    da, db = os.path.dirname(a), os.path.dirname(b)
+    if da == db:
+        return True
+    if not da or not db:
+        return False
+    if da.startswith(db + "/") or db.startswith(da + "/"):
+        return True
+    pa, pb = os.path.dirname(da), os.path.dirname(db)
+    return bool(pa) and pa == pb
 
 
 class _Tracked:
@@ -1356,6 +1374,14 @@ def _ci_writers(repo, gen_paths):
     return {p: w for p, w in writers.items() if len(w) > 1}
 
 
+# Falsifiers (tests/test_core.py TestGeneratedOutputs). Must flag: a .pb.go edited with its .proto unchanged; a .proto,
+# sqlc query or OpenAPI spec changed without its output; an output named by its "source:" header under another stem;
+# two CI jobs redirecting into one generated file. Must let through: an output regenerated with its input, or after a
+# nearby imported schema / sibling sqlc schema / generator config changed; a new generated file; prose that says
+# "generated"; lockfiles, vendor/, plain config YAML/JSON; artifact upload + download; a package.json, Makefile or
+# far-away .sql change (these don't excuse a hand edit). Hand check, 2026-11-11, last 60 non-merge commits of 7 real
+# repos (three-mesh-bvh, supabase-js, freeswitch, gamescope, heroic, janus-gateway, dragon-front): 0 warns; 13 passes,
+# each a real generated file (bvh's API.md/WEBGPU_API.md docs, supabase-js types.generated.ts and generated types).
 def generated_outputs(repo, base, files):
     """Generated files must be regenerated, not hand-edited, and must move with their inputs (BLAZE escape #3, idea
     only: a hand edit to a generated file passed review and was overwritten by the next codegen run; an input change
@@ -1382,7 +1408,7 @@ def generated_outputs(repo, base, files):
                     if GEN_DIR_RX.search(t) or re.search(r"(?:^|/)(?:api|client|clients|sdk)/", t))
     scan = sorted(t for t in near if t not in changed and not _skip_gen(t) and CODE_EXT_RX.search(t))[:GEN_SCAN_MAX]
     outs = _generated(repo, scan, heads)
-    built = {o: _gen_inputs(o, heads.setdefault(o, _head(repo, o)), tracked) for o in outs}
+    built = {o: _gen_inputs(o, _head(repo, o, heads), tracked) for o in outs}
     stale = []
     for i in cand_inputs:
         mine = sorted(o for o, ins in built.items() if i in ins)
@@ -1390,18 +1416,23 @@ def generated_outputs(repo, base, files):
             stale.append(f"{i} changed but {', '.join(mine[:3])} did not")
     # (a) generated files changed without their inputs; skipped (noted) when another generator input or config
     # changed, since that can legitimately change the output (an imported .proto, the schema behind sqlc queries)
-    other = sorted(p for p in changed if p not in gen and (p.endswith(SCHEMA_EXT + (".sql",)) or OPENAPI_RX.search(p)
-                                                           or GEN_CONFIG_RX.search(p) or MIGRATION_DIR_RX.search(p)))
+    # A generator config counts wherever it is; another schema/.sql/spec/migration file only when it sits near the
+    # output or its inputs (same directory, parent/child, or sibling directories), so an unrelated change elsewhere
+    # doesn't excuse the edit. Package manifests and Makefiles are not counted: they change in most PRs.
+    deps = sorted(p for p in changed if p not in gen and (p.endswith(SCHEMA_EXT + (".sql",)) or OPENAPI_RX.search(p)
+                                                          or MIGRATION_DIR_RX.search(p)))
+    configs = sorted(p for p in changed if GEN_CONFIG_RX.search(p))
     hand, notes = [], []
     for p in sorted(gen):
         if any(f["path"] == p and f.get("added") for f in files):
             continue                                           # a new generated file arrives with its generator run
-        ins = _gen_inputs(p, heads.setdefault(p, _head(repo, p)), tracked)
+        ins = _gen_inputs(p, _head(repo, p, heads), tracked)
         if not ins:
             notes.append(f"{p}: generated ({gen[p]}), input not identified")
         elif not any(i in changed for i in ins):
-            if other:
-                notes.append(f"{p}: its input is unchanged, but {other[0]} changed, which may be why")
+            why = configs + [d for d in deps if any(_near(d, x) for x in [p] + ins)]
+            if why:
+                notes.append(f"{p}: its input is unchanged, but {why[0]} changed, which may be why")
             else:
                 hand.append(f"{p} ({gen[p]}; built from {', '.join(ins[:2])}, unchanged)")
     ci = [f"{p} is written by {', '.join(w[:3])}" for p, w in (_ci_writers(repo, sorted(gen)) if gen else {}).items()]
@@ -1414,10 +1445,10 @@ def generated_outputs(repo, base, files):
     if hand:
         probs.append("generated file(s) changed while their inputs did not, so they may be hand edits the next "
                      "codegen run undoes: " + "; ".join(hand[:3]) + (" …" if len(hand) > 3 else ""))
-        fixes.append(f"if so, change the input and {run}")
     if stale:
         probs.append("input(s) changed without their generated output: " + "; ".join(stale[:3]))
-        fixes.append(run)
+    if hand or stale:
+        fixes.append(f"move any hand edit into the input, then {run}" if hand else run)
     if ci:
         probs.append("two CI jobs write the same generated file, so the last one wins: " + "; ".join(ci[:3]))
         fixes.append("keep one job writing it")
