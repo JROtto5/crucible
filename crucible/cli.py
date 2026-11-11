@@ -164,9 +164,9 @@ def cmd_anchor_replay(a):
 def cmd_model_replay(a):
     from . import modelreplay
     models = [MODELS.get(m, m) for m in a.models]
-    rows, skipped = modelreplay.run(os.path.join(HOME, "reviews"), a.clones, models, a.rounds, a.budget, a.include_self,
+    rows, skipped, spent = modelreplay.run(os.path.join(HOME, "reviews"), a.clones, models, a.rounds, a.budget, a.include_self,
                                     log=lambda m: print(m, file=sys.stderr), fresh=a.fresh, exclude=a.exclude)
-    print(modelreplay.report(rows, skipped, models))
+    print(modelreplay.report(rows, skipped, models, spent))
 
 
 def _sha_prefix(v):

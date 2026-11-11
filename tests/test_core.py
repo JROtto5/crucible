@@ -4875,8 +4875,8 @@ class TestModelReplay(unittest.TestCase):
         M.run_arm = fake_arm
         shutil.rmtree(M.ARMS, ignore_errors=True)
         try:
-            rows, skipped = M.run("/r", ["/c"], ["claude-opus-5-5", "claude-sonnet-5-5", "claude-opus-5-5"], n=5,
-                                  log=lambda m: None)
+            rows, skipped, _ = M.run("/r", ["/c"], ["claude-opus-5-5", "claude-sonnet-5-5", "claude-opus-5-5"], n=5,
+                                     log=lambda m: None)
         finally:
             M.rounds, M.anchoring.find_clones, M.anchoring.has_commit, M.run_arm = saved
             shutil.rmtree(M.ARMS, ignore_errors=True)
@@ -4900,7 +4900,7 @@ class TestModelReplay(unittest.TestCase):
                 raise U.Failed("usage limit")
             return {"findings": [dict(self.L)], "cost_usd": 0.25, "review_model": model}
 
-        saved = (M.rounds, M.anchoring.find_clones, M.anchoring.has_commit, M.run_arm)
+        saved = (M.rounds, M.anchoring.find_clones, M.anchoring.has_commit, M.run_arm, M.pipeline_version)
         M.rounds = lambda root, model, inc=False, skipped=None: list(stored)
         M.anchoring.find_clones = lambda dirs: ["/clone"]
         M.anchoring.has_commit = lambda c, sha: True
@@ -4909,43 +4909,92 @@ class TestModelReplay(unittest.TestCase):
         go = lambda n, **kw: M.run("/r", ["/c"], models, n=n, budget=0.8, log=lambda m: None, **kw)
         shutil.rmtree(M.ARMS, ignore_errors=True)
         try:
-            rows, _ = go(1)
+            rows, _, spent = go(1)
             self.assertEqual([r["sha"] for r in rows], ["a1"])
-            self.assertEqual(len(calls), 2)
+            self.assertEqual((len(calls), spent), (2, 0.5))
             # a newer round lands; the next, bigger run keeps a1 (both arms kept), runs only what it adds
             stored.insert(0, mk("o__c", "c1", "4"))
             calls.clear()
-            rows, skipped = go(3)
+            rows, skipped, spent = go(3)
             self.assertEqual([r["sha"] for r in rows], ["a1", "b1"])            # c1's sonnet arm failed
             self.assertNotIn(("a1", "claude-opus-5-5"), calls)
             self.assertEqual(sorted(calls), sorted([("c1", "claude-opus-5-5"), ("c1", "claude-sonnet-5-5"),
                                                     ("b1", "claude-opus-5-5"), ("b1", "claude-sonnet-5-5")]))
             self.assertTrue(all(a["reused"] for a in rows[0]["arms"].values()))
             self.assertFalse(any(a["reused"] for a in rows[1]["arms"].values()))
-            out = M.report(rows, skipped, models)
+            out = M.report(rows, skipped, models, spent)
             self.assertIn("2 of 4 arms reused from an earlier run", out)
-            self.assertIn("this run spent $0.50", out)
-            # c1's opus arm was paid for, so it was kept; the retry runs only sonnet
+            # c1's opus arm was paid for though its round was left out: b1 $0.50 + c1 opus $0.25
+            self.assertIn("this run spent $0.75 on the arms it ran", out)
+            # c1's opus arm was kept; the retry runs only sonnet
             calls.clear()
             M.run_arm = lambda clone, r, model, tmp, budget=None, log=None: (
                 calls.append((r["sha"], model)) or {"findings": [], "cost_usd": 0.1, "review_model": model})
-            rows, _ = go(3)
+            rows, _, _ = go(3)
             self.assertEqual(calls, [("c1", "claude-sonnet-5-5")])
             self.assertEqual(len(rows), 3)
             # another budget is another run: nothing reused
             calls.clear()
             M.run("/r", ["/c"], models, n=1, budget=2.0, log=lambda m: None)
             self.assertEqual(len(calls), 2)
+            # a changed review pipeline (a prompt edit) doesn't reuse arms made by the old one
+            calls.clear()
+            M.pipeline_version = lambda: "other"
+            go(1)
+            self.assertEqual(len(calls), 2)
+            M.pipeline_version = saved[4]
             # --fresh re-runs; --exclude leaves a round out and counts it
             calls.clear()
-            rows, skipped = go(3, fresh=True, exclude=("a1",))
+            rows, skipped, _ = go(3, fresh=True, exclude=("a1",))
             self.assertEqual(sorted({s for s, _ in calls}), ["b1", "c1"])
             self.assertEqual(skipped["excluded (--exclude)"], 1)
             self.assertNotIn("reused", M.report(rows, skipped, models))
         finally:
-            M.rounds, M.anchoring.find_clones, M.anchoring.has_commit, M.run_arm = saved
+            M.rounds, M.anchoring.find_clones, M.anchoring.has_commit, M.run_arm, M.pipeline_version = saved
             shutil.rmtree(M.ARMS, ignore_errors=True)
         self.assertTrue(M.ARMS.startswith(U.HOME))                          # never the real ~/.crucible in tests
+
+    def test_pick_prefers_replayed_rounds_but_keeps_one_project_at_a_time(self):
+        from crucible import modelreplay as M
+        c = [{"repo": r, "sha": s, "started": t}
+             for r, s, t in (("A", "a1", "9"), ("A", "a2", "8"), ("B", "b1", "7"), ("C", "c1", "6"), ("A", "a3", "5"),
+                             ("D", "d1", "4"))]
+        got = lambda n, prefer: [r["sha"] for r in M.pick(c, n, prefer)]
+        # all replayed: the same balanced sample as without a cache, not the newest three (a1, a2, b1)
+        every = {(r["repo"], r["sha"]) for r in c}
+        self.assertEqual(got(3, every), ["a1", "b1", "c1"])
+        # an older replayed round wins within its project, and projects with one come first
+        self.assertEqual(got(2, {("A", "a3"), ("D", "d1")}), ["a3", "d1"])
+        self.assertEqual(got(4, {("D", "d1")}), ["d1", "a1", "b1", "c1"])
+        # a code-only change to the replay itself keeps the kept arms usable
+        self.assertIn("modelreplay.py", M.NOT_PIPELINE)
+        v = M.pipeline_version()
+        self.assertEqual(len(v), 16)
+        self.assertEqual(v, M.pipeline_version())
+
+    def test_model_replay_cli_validates_exclude_and_passes_fresh(self):
+        from crucible import cli, modelreplay as M
+        import argparse, contextlib, io
+        self.assertEqual(cli._sha_prefix("ABCDEF0"), "abcdef0")
+        for bad in ("a1", "abc123", "zzzzzzz", "a" * 41):
+            with self.assertRaises(argparse.ArgumentTypeError):
+                cli._sha_prefix(bad)
+        seen = {}
+
+        def fake_run(root, clones, models, n, budget, inc, log=None, fresh=False, exclude=()):
+            seen.update(fresh=fresh, exclude=exclude, models=models)
+            return [], {}, 0.0
+        real = M.run
+        M.run = fake_run
+        try:
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                cli.main(["model-replay", "--clones", "/x", "--fresh", "--exclude", "E72B878703", "--models", "opus"])
+        finally:
+            M.run = real
+        self.assertEqual(seen, {"fresh": True, "exclude": ["e72b878703"], "models": ["claude-opus-5-5"]})
+        self.assertIn("this run spent $0.00", out.getvalue())
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            cli.main(["model-replay", "--clones", "/x", "--exclude", "a1"])
 
     def test_shape_counts_production_lines_outside_tests_and_docs(self):
         from crucible import modelreplay as M
