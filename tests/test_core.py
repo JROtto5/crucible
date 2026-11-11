@@ -4966,11 +4966,69 @@ class TestModelReplay(unittest.TestCase):
         # an older replayed round wins within its project, and projects with one come first
         self.assertEqual(got(2, {("A", "a3"), ("D", "d1")}), ["a3", "d1"])
         self.assertEqual(got(4, {("D", "d1")}), ["d1", "a1", "b1", "c1"])
-        # a code-only change to the replay itself keeps the kept arms usable
-        self.assertIn("modelreplay.py", M.NOT_PIPELINE)
-        v = M.pipeline_version()
-        self.assertEqual(len(v), 16)
-        self.assertEqual(v, M.pipeline_version())
+
+    def test_pipeline_version_follows_what_review_runs(self):
+        from crucible import modelreplay as M
+        real = os.path.dirname(M.__file__)
+        with tempfile.TemporaryDirectory() as tmp:
+            pkg = os.path.join(tmp, "crucible")
+            shutil.copytree(real, pkg, ignore=shutil.ignore_patterns("__pycache__"))
+            files = M.pipeline_files(pkg)
+            for f in ("review.py", "cli.py", "util.py", "readiness.py", "style.py", "catalog.py"):
+                self.assertIn(f, files)
+            for f in ("modelreplay.py", "assist.py", "learn.py", "stats.py", "__init__.py"):
+                self.assertNotIn(f, files)
+            v = M.pipeline_version(pkg)
+            self.assertEqual((len(v), v), (16, M.pipeline_version(pkg)))
+
+            def edited(rel, text="\n# edit\n"):
+                with open(os.path.join(pkg, rel), "a") as fh:
+                    fh.write(text)
+                return M.pipeline_version(pkg)
+            self.assertEqual(edited("modelreplay.py"), v)          # the replay, polish/prep and stats: arms stay
+            self.assertEqual(edited("assist.py"), v)
+            self.assertEqual(edited("stats.py"), v)
+            v2 = edited("review.py")                              # a prompt edit
+            self.assertNotEqual(v2, v)
+            guide = sorted(os.listdir(os.path.join(pkg, "guides")))[0]
+            v3 = edited(os.path.join("guides", guide))
+            self.assertNotEqual(v3, v2)
+            # a module review starts importing (lazily, indented) joins the hash
+            self.assertEqual(edited("learn.py"), v3)
+            v4 = edited("review.py", "\ndef _late():\n    from . import learn\n")
+            self.assertIn("learn.py", M.pipeline_files(pkg))
+            self.assertNotEqual(edited("learn.py"), v4)
+
+    def test_a_billed_arm_that_is_rejected_still_counts_in_spend(self):
+        from crucible import modelreplay as M
+        saved = (M._prepare, M.subprocess.run, M.read_json)
+        M._prepare = lambda clone, r, tmp, label: ("/tree", "/home")
+        M.subprocess.run = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "")
+        M.read_json = lambda p, d=None: {"status": "done", "findings": [], "coverage": {"complete": False},
+                                         "review_model": "nodash", "cost_usd": 0.4}
+        try:
+            with self.assertRaises(U.Failed) as cm:
+                M.run_arm("/c", {"repo": "o__p", "sha": "s" * 12, "base": "b", "inputs": {}}, "nodash", "/t")
+            self.assertEqual(cm.exception.cost, 0.4)
+        finally:
+            M._prepare, M.subprocess.run, M.read_json = saved
+        rnd = {"repo": "o__p", "sha": "s1", "base": "b", "started": "1", "inputs": {},
+               "labelled": [dict(self.L, disposition="fixed")]}
+
+        def billed_then_rejected(clone, r, model, tmp, budget=None, log=None):
+            ex = U.Failed("review incomplete")
+            ex.cost = 0.4
+            raise ex
+        saved = (M.rounds, M.anchoring.find_clones, M.anchoring.has_commit, M.run_arm)
+        M.rounds = lambda root, model, inc=False, skipped=None: [rnd]
+        M.anchoring.find_clones = lambda dirs: ["/clone"]
+        M.anchoring.has_commit = lambda c, sha: True
+        M.run_arm = billed_then_rejected
+        try:
+            rows, skipped, spent = M.run("/r", ["/c"], ["nodash"], n=1, fresh=True, log=lambda m: None)
+        finally:
+            M.rounds, M.anchoring.find_clones, M.anchoring.has_commit, M.run_arm = saved
+        self.assertEqual((rows, skipped["an arm failed"], spent), ([], 1, 0.4))
 
     def test_model_replay_cli_validates_exclude_and_passes_fresh(self):
         from crucible import cli, modelreplay as M

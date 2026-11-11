@@ -202,6 +202,16 @@ def run_arm(clone, r, model, tmp, budget=None, log=print):
                                                     env.get("PYTHONPATH")) if p)
     p = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=3600)
     review = read_json(os.path.join(home, "reviews", r["repo"], r["sha"], "review.json"))
+    try:
+        _check_arm(r, model, label, p, review)
+    except Failed as ex:
+        ex.cost = (review or {}).get("cost_usd") or 0.0     # a rejected arm was still billed
+        raise
+    review["_draft_passed"] = bool(draft)
+    return review
+
+
+def _check_arm(r, model, label, p, review):
     if p.returncode not in (0, 1) or not review or review.get("status") != "done":
         raise Failed(f"{r['repo']} {r['sha'][:10]} {label}: review did not finish ({(p.stderr or p.stdout)[-300:]})")
     # a round whose review chunks failed (an unknown model id, a usage limit) is "done" with no findings: it would
@@ -210,8 +220,6 @@ def run_arm(clone, r, model, tmp, budget=None, log=print):
         raise Failed(f"{r['repo']} {r['sha'][:10]} {label}: review incomplete (a review chunk failed)")
     if review.get("review_model") != model:
         raise Failed(f"{r['repo']} {r['sha'][:10]} {label}: reviewed by {review.get('review_model')}, not {model}")
-    review["_draft_passed"] = bool(draft)
-    return review
 
 
 def shape(clone, base, sha):
@@ -249,20 +257,40 @@ def short(model):
     return next((k for k, v in MODELS.items() if v == model), model)
 
 
-# modules `review` never runs: a change to these doesn't change what an arm would produce
-NOT_PIPELINE = ("modelreplay.py", "anchoring.py", "evalrun.py", "stats.py")
+# where `crucible review` starts: its command handler and the pipeline; pipeline_version follows their imports
+PIPELINE_ROOTS = ("cli.py", "review.py")
+_IMPORT_RX = re.compile(r"^[ \t]*from \.(\w*) import \(?([\w, ]+)", re.M)    # lazy (indented) imports too
 
 
-def pipeline_version():
+def pipeline_files(pkg):
+    """review.py and every crucible module it imports, transitively, plus cli.py (review's flags and defaults).
+    cli.py's own imports aren't followed: it loads every command's module (model-replay, stats...) lazily."""
+    seen, todo = set(PIPELINE_ROOTS), ["review.py"]
+    while todo:
+        src = open(os.path.join(pkg, todo.pop()), errors="replace").read()
+        for mod, names in _IMPORT_RX.findall(src):
+            cands = [mod] if mod else [n.split(" as ")[0].strip() for n in names.split(",")]
+            for c in cands:
+                f = c + ".py"
+                if c and f not in seen and os.path.isfile(os.path.join(pkg, f)):
+                    seen.add(f)
+                    todo.append(f)
+    return sorted(seen)
+
+
+def pipeline_version(pkg=None):
     """A hash of the code and guides `crucible review` runs (uncommitted edits included), so an arm kept by an
     earlier run is reused only by the same pipeline: a prompt or verifier change would otherwise mix two pipelines
-    in one comparison."""
+    in one comparison. Modules review never imports (model-replay itself, stats, polish/prep...) aren't in it, so
+    editing them keeps the kept arms."""
     import hashlib
-    pkg = os.path.dirname(os.path.abspath(__file__))
+    pkg = pkg or os.path.dirname(os.path.abspath(__file__))
+    files = pipeline_files(pkg) + sorted(os.path.relpath(f, pkg) for f in glob.glob(os.path.join(pkg, "guides", "*"))
+                                         if os.path.isfile(f))
     h = hashlib.sha256()
-    for f in sorted(glob.glob(os.path.join(pkg, "*.py")) + glob.glob(os.path.join(pkg, "guides", "*"))):
-        if os.path.basename(f) not in NOT_PIPELINE and os.path.isfile(f):
-            h.update(os.path.relpath(f, pkg).encode() + b"\0" + open(f, "rb").read() + b"\0")
+    for f in files:
+        with open(os.path.join(pkg, f), "rb") as fh:
+            h.update(f.encode() + b"\0" + fh.read() + b"\0")
     return h.hexdigest()[:16]
 
 
@@ -325,6 +353,7 @@ def run(root, clones, models, n=5, budget=None, include_self=False, log=print, f
                         save_arm(r, m, budget, review, version)    # kept even if a later arm fails: it was paid for
                     arms[m] = dict(score_arm(r, review), reused=reused)
             except (Failed, subprocess.SubprocessError, OSError) as ex:
+                spent += getattr(ex, "cost", 0.0)
                 log(f"    left out: {ex}")
                 skipped["an arm failed"] += 1
                 continue
