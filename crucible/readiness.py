@@ -1200,7 +1200,8 @@ def symbol_collisions(repo, base, files, me=None, offline=False, base_ref=None):
 # An input is what a generated file is built from: the "source:" its header names (protoc, sqlc), the OpenAPI/Swagger
 # spec for a client whose header says so, or a schema file with the same stem (.proto, .graphql, ...). This is a
 # heuristic: transitive inputs (an imported .proto, the schema behind sqlc queries) are not traced, so the hand-edit
-# warning is skipped whenever any other generator input or generator config changed too.
+# warning is skipped when a nearby schema, a migration (sqlc outputs), a generator config or a generator version
+# bump changed too.
 GEN_HEADER_RX = re.compile(r"^\W*Code generated\b.*\bDO NOT EDIT\b|@generated\b|"
                            r"\b(?:auto-?generated|generated\s+(?:by|from|with|automatically))\b.*\b(?:do not|don'?t)\s+edit\b|"
                            r"\b(?:do not|don'?t)\s+edit\b.*\b(?:auto-?generated|generated\s+(?:by|from|with))\b", re.I)
@@ -1215,9 +1216,14 @@ VENDOR_RX = re.compile(r"(?:^|/)(?:vendor|third_party|third-party|node_modules|e
 SCHEMA_EXT = (".proto", ".thrift", ".fbs", ".graphql", ".gql", ".avsc", ".capnp", ".xsd", ".wsdl", ".prisma")
 OPENAPI_RX = re.compile(r"(?:^|[/._-])(?:openapi|swagger)[^/]*\.(?:ya?ml|json)$", re.I)
 OPENAPI_HEAD_RX = re.compile(r"\b(?:openapi|swagger)\b", re.I)
-# generator configs and version pins: when one changes, regenerated output legitimately changes with no input change
+# generator configs: when one changes, regenerated output legitimately changes with no input change. A package
+# manifest (package.json, go.mod, tools.go, pyproject.toml) counts only when its changed lines name a generator (a
+# version bump of protoc-gen-go, openapi-generator, ...); most PRs touch manifests for other reasons.
 GEN_CONFIG_RX = re.compile(r"(?:^|/)(?:buf(?:\.gen)?\.ya?ml|sqlc\.(?:ya?ml|json)|codegen\.(?:ya?ml|ts|js|json)|"
                            r"openapitools\.json|\.graphqlrc(?:\.\w+)?|orval\.config\.\w+|gqlgen\.ya?ml)$")
+GEN_MANIFEST_RX = re.compile(r"(?:^|/)(?:package\.json|go\.mod|tools\.go|pyproject\.toml|requirements[\w.-]*\.txt)$")
+GEN_TOOL_RX = re.compile(r"protoc|\bbuf\b|openapi-generator|openapi-typescript|swagger-codegen|graphql-codegen|"
+                         r"\bsqlc\b|\borval\b|gqlgen|grpc-tools|ts-proto|grpcio-tools|betterproto", re.I)
 GEN_SOURCE_RX = re.compile(r"\bsources?:\s*([\w./@+-]+\.\w+)", re.I)
 GEN_STEM_RX = re.compile(r"(?:_pb2_grpc|_pb2|_grpc_pb|_grpc|_pb|_generated)$")
 GEN_HEAD_LINES = 12
@@ -1416,12 +1422,16 @@ def generated_outputs(repo, base, files):
             stale.append(f"{i} changed but {', '.join(mine[:3])} did not")
     # (a) generated files changed without their inputs; skipped (noted) when another generator input or config
     # changed, since that can legitimately change the output (an imported .proto, the schema behind sqlc queries)
-    # A generator config counts wherever it is; another schema/.sql/spec/migration file only when it sits near the
-    # output or its inputs (same directory, parent/child, or sibling directories), so an unrelated change elsewhere
-    # doesn't excuse the edit. Package manifests and Makefiles are not counted: they change in most PRs.
-    deps = sorted(p for p in changed if p not in gen and (p.endswith(SCHEMA_EXT + (".sql",)) or OPENAPI_RX.search(p)
-                                                          or MIGRATION_DIR_RX.search(p)))
-    configs = sorted(p for p in changed if GEN_CONFIG_RX.search(p))
+    # A generator config counts wherever it is (and a manifest whose changed lines name a generator); another schema,
+    # .sql or spec file only when it sits near the output or its inputs (same directory, parent/child, or sibling
+    # directories), so an unrelated change elsewhere doesn't excuse the edit; a migration anywhere, but only for a sqlc
+    # output, whose schema comes from the migrations. Plain manifest and Makefile changes don't count.
+    deps = sorted(p for p in changed if p not in gen and (p.endswith(SCHEMA_EXT + (".sql",)) or OPENAPI_RX.search(p))
+                  and not MIGRATION_DIR_RX.search(p))
+    migrations = sorted(p for p in changed if MIGRATION_DIR_RX.search(p))
+    configs = sorted(p for p in changed if GEN_CONFIG_RX.search(p)) + sorted(
+        f["path"] for f in files if f.get("path") and GEN_MANIFEST_RX.search(f["path"])
+        and any(k in "+-" and GEN_TOOL_RX.search(t) for h in f.get("hunks") or [] for k, t, *_ in h["lines"]))
     hand, notes = [], []
     for p in sorted(gen):
         if any(f["path"] == p and f.get("added") for f in files):
@@ -1430,7 +1440,9 @@ def generated_outputs(repo, base, files):
         if not ins:
             notes.append(f"{p}: generated ({gen[p]}), input not identified")
         elif not any(i in changed for i in ins):
-            why = configs + [d for d in deps if any(_near(d, x) for x in [p] + ins)]
+            # a migration changes the database schema sqlc reads, wherever the migrations directory is
+            sqlc = any(i.endswith(".sql") for i in ins) or "sqlc" in _head(repo, p, heads).lower()
+            why = configs + [d for d in deps if any(_near(d, x) for x in [p] + ins)] + (migrations if sqlc else [])
             if why:
                 notes.append(f"{p}: its input is unchanged, but {why[0]} changed, which may be why")
             else:
