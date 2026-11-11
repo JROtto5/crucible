@@ -1206,7 +1206,7 @@ COUNT_END_RX = re.compile(r"[;\"'`)]|\$\$")
 # it is 36"); a lower bound like `-gt 0` or a non-empty check like `-ne 0` / `!= 0` survives added rows. The literal
 # has to sit in that comparison, so `exit 1` or an unrelated number nearby doesn't count.
 COUNT_EQ_RX = re.compile(r"(?:-eq|(?<![!=<>])===?)\s*[\"']?\d+(?:/\d+)*\b|\b\d+(?:/\d+)*[\"']?\s*(?:-eq|===?)|"
-                         r"(?:-ne|!==?)\s*[\"']?(?!0\b)\d+(?:/\d+)*\b|"
+                         r"(?:-ne|!==?)\s*[\"']?(?!0(?![\w/.]))\d+(?:/\d+)*\b|"
                          r"\[\[?\s*\"?\$\{?\w+\}?\"?\s*==?\s*[\"']?\d+\b|"
                          r"\.to\s+(?:eq|eql|equal|be)\s+\d+\b|"
                          r"\b(?:toBe|toEqual|toStrictEqual|toHaveLength|equals?|assertEquals?|assert_equal|assertEqual|"
