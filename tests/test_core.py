@@ -5879,6 +5879,7 @@ class TestCountCollisions(unittest.TestCase):
             "local temp table": "psql -c \"create temp table kinds (id int)\"\nn=$(psql -tAc \"select count(*) from kinds\")\n[ \"$n\" -eq 0 ] || exit 1\n",
             "no asserted number": "psql -tAc \"select count(*) from app.kinds\" > counts.txt\n",
             "lower bound": "n=$(psql -tAc \"select count(*) from app.kinds\")\n[ \"$n\" -gt 0 ] || exit 1\n",
+            "non-empty check": "n=$(psql -tAc \"select count(*) from app.kinds\")\n[ \"$n\" -ne 0 ] || exit 1\n",
             "empty check": "n=$(psql -tAc \"select count(*) from app.kinds\")\n[ -z \"$n\" ] && exit 1\n",
         }
         for label, gate in cases.items():
@@ -5900,6 +5901,19 @@ class TestCountCollisions(unittest.TestCase):
                          'def test_conns(db):\n    assert db.one("select count(*) from pg_stat_activity") == 1\n'})
         r = R.count_collisions(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo), offline=True)
         self.assertEqual(r["status"], "na", r)
+
+    def test_rspec_eq_without_parentheses_counts(self):
+        spec = 'it "seeds" do\n  n = conn.select_value("select count(*) from app.kinds")\n  expect(n).to eq 2\nend\n'
+        repo, base = self._landed({"spec/kinds_spec.rb": spec}, "db/migrations/002_more.sql",
+                                  "insert into app.kinds values (3, 'c');\n")
+        r = R.count_collisions(repo, base, self._files(repo, f"{base}..HEAD"), offline=True, base_ref="main")
+        self.assertEqual(r["status"], "fail", r)
+
+    def test_gate_sql_seeding_its_own_rows_is_not_a_writer(self):
+        repo, base = self._landed({"ci/gate_kinds.sh": self.GATE}, "ci/check_kinds.sql",
+                                  "insert into app.kinds values (3, 'c');\n")
+        r = R.count_collisions(repo, base, self._files(repo, f"{base}..HEAD"), offline=True, base_ref="main")
+        self.assertEqual(r["status"], "pass", r)
 
     def test_writer_named_like_a_test_word_still_counts(self):
         repo, base = self._landed({"ci/gate_kinds.sh": self.GATE}, "db/migrations/002_latest_kinds.sql",

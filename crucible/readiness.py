@@ -1202,12 +1202,14 @@ SQL_TABLE = r"((?:\"[^\"]+\"|[\w$]+)(?:\.(?:\"[^\"]+\"|[\w$]+))?)"
 COUNT_RX = re.compile(r"\bcount\s*\(\s*(?:\*|1)\s*\)\s+from\s+" + SQL_TABLE, re.I)
 COUNT_FILTER_RX = re.compile(r"\b(?:where|join|group\s+by|having|limit|tablesample|offset)\b|^\s*(?:\w+\s*)?,", re.I)
 COUNT_END_RX = re.compile(r"[;\"'`)]|\$\$")
-# the number has to be compared for EQUALITY with the count (a lower bound like `-gt 0` survives added rows), and the
-# literal has to sit in that comparison, so `exit 1` or an unrelated number nearby doesn't count
-COUNT_EQ_RX = re.compile(r"(?:-eq|-ne|===?|!==?)\s*[\"']?\d+(?:/\d+)*\b|\b\d+(?:/\d+)*[\"']?\s*(?:-eq|-ne|===?|!==?)|"
-                         r"\[\[?\s*\"?\$\{?\w+\}?\"?\s*!?=\s*[\"']?\d+\b|"
+# the number has to be compared for EQUALITY with the count (a lower bound like `-gt 0` or a non-empty check like
+# `-ne 0` survives added rows), and the literal has to sit in that comparison, so `exit 1` or an unrelated number
+# nearby doesn't count
+COUNT_EQ_RX = re.compile(r"(?:-eq|===?)\s*[\"']?\d+(?:/\d+)*\b|\b\d+(?:/\d+)*[\"']?\s*(?:-eq|===?)|"
+                         r"\[\[?\s*\"?\$\{?\w+\}?\"?\s*==?\s*[\"']?\d+\b|"
+                         r"\.to\s+(?:eq|eql|equal|be)\s+\d+\b|"
                          r"\b(?:toBe|toEqual|toStrictEqual|toHaveLength|equals?|assertEquals?|assert_equal|assertEqual|"
-                         r"assert_eq|is|eq)\s*\((?:[^()]|\([^()]*\))*?(?<![\w.$-])\d+(?![\w.])", re.I)
+                         r"assert_eq|is|eq|eql)\s*\((?:[^()]|\([^()]*\))*?(?<![\w.$-])\d+(?![\w.])", re.I)
 COUNT_LOCAL_RX = re.compile(r"\bcreate\s+(?:(?:temp|temporary|unlogged)\s+)*table\s+(?:if\s+not\s+exists\s+)?"
                             + SQL_TABLE + r"|\bwith\s+(?:recursive\s+)?" + SQL_TABLE + r"\s+as\s*\(|"
                             r",\s*" + SQL_TABLE + r"\s+as\s*\(", re.I)
@@ -1232,11 +1234,12 @@ def _sql_writer_file(path):
     """Files whose added SQL changes a database's rows for everyone: SQL/migration hosts, migrations and seeds,
     but not tests (a test's own fixture inserts run in its own database or transaction)."""
     low = path.lower()
-    if TEST_PATH_RX.search(path):
+    shared = bool(MIGRATION_DIR_RX.search(path)) or bool(SEED_RX.search(low))
+    if TEST_PATH_RX.search(path) or (COUNT_TEST_RX.search(path) and not shared):   # a gate seeding its own database
         return False
     if low.endswith((".sql", ".psql", ".pgsql", ".plpgsql", ".ddl")):
         return True
-    return low.endswith(SQL_HOST_EXT) and (bool(MIGRATION_DIR_RX.search(path)) or bool(SEED_RX.search(low)))
+    return low.endswith(SQL_HOST_EXT) and shared
 
 
 def _table_key(raw):
@@ -1254,9 +1257,9 @@ def _same_table(a, b):
 
 def _fixed_counts(files, repo=None):
     """{table: [(path, line_no, snippet)]} for unfiltered count(*) of a named table in an added test line, with a
-    numeric literal compared for equality within a few added lines of it. Skipped: counts with WHERE/JOIN/GROUP BY/LIMIT (scoped to
-    known keys), counts of a table the same test creates or names as a CTE (local), and lines with no number to
-    compare against."""
+    numeric literal compared for equality within a few added lines of it. Skipped: counts with WHERE/JOIN/GROUP BY/LIMIT
+    (scoped to known keys), counts of a table the same test creates or names as a CTE (local), and lines with no number
+    to compare against."""
     out = {}
     for f in files:
         path = f.get("path")
