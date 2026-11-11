@@ -1223,7 +1223,7 @@ OPENAPI_HEAD_RX = re.compile(r"\b(?:openapi|swagger)\b", re.I)
 GEN_CONFIG_RX = re.compile(r"(?:^|/)(?:buf(?:\.gen)?\.ya?ml|sqlc\.(?:ya?ml|json)|codegen\.(?:ya?ml|ts|js|json)|"
                            r"openapitools\.json|\.graphqlrc(?:\.\w+)?|orval\.config\.\w+|gqlgen\.ya?ml)$")
 GEN_MANIFEST_RX = re.compile(r"(?:^|/)(?:package\.json|go\.mod|tools\.go|pyproject\.toml|requirements[\w.-]*\.txt)$")
-GEN_TOOL_RX = re.compile(r"\bprotoc\b|protoc[-_]gen[-_]|google\.golang\.org/protobuf\b|protoc-gen-go-grpc|"
+GEN_TOOL_RX = re.compile(r"\bprotoc\b|protoc[-_]gen[-_]|google\.golang\.org/protobuf\b|"
                          r"@bufbuild/|\bbuf\b|openapi-generator|openapi-typescript|swagger-codegen|graphql-codegen|"
                          r"\bsqlc\b|\borval\b|gqlgen|grpc-tools|ts-proto|grpcio-tools|betterproto", re.I)
 GEN_SOURCE_RX = re.compile(r"\bsources?:\s*([\w./@+-]+\.\w+)", re.I)
