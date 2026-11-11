@@ -4943,31 +4943,25 @@ class TestModelReplay(unittest.TestCase):
             go(1)
             self.assertEqual(len(calls), 2)
             M.pipeline_version = saved[4]
-            # nor do new learned rules for the project (they go into the review prompt)
+            # nor does a changed prompt input of the project (learned rules, STYLE.md, memory, style.json)
             go(3)                                        # c1 was re-run under "other": settle it on the real version
             proj = os.path.join(U.HOME, "projects", "o__a")
             os.makedirs(proj, exist_ok=True)
-            with open(os.path.join(proj, "rules.md"), "w") as fh:
-                fh.write("new rule")
-            calls.clear()
             try:
-                rows, _, _ = go(3)
-            finally:
-                shutil.rmtree(proj, ignore_errors=True)
-            self.assertEqual(sorted(calls), [("a1", "claude-opus-5-5"), ("a1", "claude-sonnet-5-5")])
-            # files every review or waiver rewrites aren't prompt inputs: they don't cost the kept arms
-            os.makedirs(proj, exist_ok=True)
-            with open(os.path.join(proj, "rules.md"), "w") as fh:
-                fh.write("new rule")
-            go(3)
-            for f in ("branches.json", "waivers.json", "meta.json"):
-                U.write_json(os.path.join(proj, f), {"touched": f})
-            calls.clear()
-            try:
+                for f in M.PROJECT_INPUTS:
+                    with open(os.path.join(proj, f), "w") as fh:
+                        fh.write("new " + f)
+                    calls.clear()
+                    go(3)
+                    self.assertEqual(sorted(calls), [("a1", "claude-opus-5-5"), ("a1", "claude-sonnet-5-5")], f)
+                # files every review or waiver rewrites aren't prompt inputs: they don't cost the kept arms
+                for f in ("branches.json", "waivers.json", "meta.json"):
+                    U.write_json(os.path.join(proj, f), {"touched": f})
+                calls.clear()
                 go(3)
+                self.assertEqual(calls, [])
             finally:
                 shutil.rmtree(proj, ignore_errors=True)
-            self.assertEqual(calls, [])
             # --fresh re-runs; --exclude leaves a round out and counts it
             calls.clear()
             rows, skipped, _ = go(3, fresh=True, exclude=("a1",))

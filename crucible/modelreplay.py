@@ -296,9 +296,8 @@ def pipeline_version(pkg=None):
     return h.hexdigest()[:16]
 
 
-# what `review` reads from ~/.crucible/projects/<repo> into the prompt and its findings (review.py: learned rules,
-# STYLE.md, memory.md; style.json for the house-style findings). branches.json, waivers.json and meta.json only feed
-# incremental history and readiness, and review rewrites branches.json on every run, so they're left out.
+# the project files review reads into the prompt and its findings; not branches.json (rewritten by every review, so
+# hashing it would re-bill every kept arm), waivers.json or meta.json (readiness only, which isn't scored here)
 PROJECT_INPUTS = ("rules.md", "STYLE.md", "memory.md", "style.json")
 
 
