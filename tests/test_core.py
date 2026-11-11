@@ -5701,7 +5701,8 @@ class TestGeneratedOutputs(unittest.TestCase):
 
     def test_a_package_json_bump_or_a_far_away_sql_file_does_not_excuse_a_hand_edit(self):
         for extra in ({"package.json": '{"version": "2"}\n'}, {"db/migrations/0002_x.sql": "select 2;\n"},
-                      {"Makefile": "all:\n\ttrue\n"}, {"package.json": '{"description": "a protocol handler"}\n'}):
+                      {"Makefile": "all:\n\ttrue\n"}, {"package.json": '{"description": "a protocol handler"}\n'},
+                      {"go.mod": "module x\nrequire golang.org/x/net v0.30.0\nrequire google.golang.org/grpc v1.70.0\n"}):
             repo = make_repo({"api/user.proto": "message User {}\n", "api/user.pb.go": self.GO_HDR + "a\n",
                               "package.json": '{"version": "1"}\n', "Makefile": "x:\n\ttrue\n"},
                              {"api/user.pb.go": self.GO_HDR + "b\n", **extra})
@@ -5730,6 +5731,13 @@ class TestGeneratedOutputs(unittest.TestCase):
                          {"api/user.pb.go": self.GO_HDR + "b\n", "go.mod": "module x\nrequire google.golang.org/protobuf v1.34.0\n"})
         r = self._run(repo)
         self.assertEqual(r["status"], "pass", r); self.assertIn("go.mod changed, which may be why", r["evidence"])
+
+    def test_grpcio_tools_bump_excuses_a_regenerated_pb2(self):
+        repo = make_repo({"proto/user.proto": "message User {}\n", "proto/user_pb2.py": "# @generated\na = 1\n",
+                          "requirements.txt": "grpcio-tools==1.60.0\n"},
+                         {"proto/user_pb2.py": "# @generated\na = 2\n", "requirements.txt": "grpcio-tools==1.66.0\n"})
+        r = self._run(repo)
+        self.assertEqual(r["status"], "pass", r); self.assertIn("requirements.txt changed, which may be why", r["evidence"])
 
     def test_hand_edit_and_stale_output_together_give_one_fix(self):
         repo = make_repo({"api/user.proto": "message User {}\n", "api/user.pb.go": self.GO_HDR + "a\n",
