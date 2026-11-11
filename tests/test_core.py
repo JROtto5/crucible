@@ -2503,6 +2503,7 @@ class TestRunReviewAmended(unittest.TestCase):
                 d1 = V.run_review(repo, "main", offline=True, skip_checks=True, no_tiers=True, log=lambda *_: None)
                 r1 = U.read_json(os.path.join(d1, "review.json"))
                 self.assertEqual(r1["status"], "done", r1.get("reason"))
+                self.assertNotIn("RE-REVIEW", passes[0])                    # a first round has no inter-diff
                 # round 2: amend a.js only; the round-1 commit leaves HEAD's history
                 w("src/a.js", "export const a = 1;\nexport function f(xs) { return xs[xs.length - 1]; }\n")
                 g("commit", "-q", "--amend", "-am", "add f and g")
@@ -2514,6 +2515,10 @@ class TestRunReviewAmended(unittest.TestCase):
                 self.assertEqual((inc.get("from"), inc.get("files"), inc.get("amended")), (r1["sha"], ["src/a.js"], True))
                 self.assertEqual(len(passes), 1)
                 self.assertNotIn("export function g", passes[0])           # b.js's diff isn't sent again
+                # DRG-63: the pass says its diff is the inter-diff of an amend, and carries a.js's whole change
+                self.assertIn(f"INTER-DIFF {r1['sha'][:10]}..HEAD", passes[0])
+                self.assertIn("amended or rebased", passes[0])
+                self.assertIn("@@ -1 +1,2 @@", passes[0])                  # base..HEAD hunk of a.js, not the inter-diff's
                 self.assertEqual(inc.get("carried"), 1)                     # b.js untouched by the amend
                 self.assertIn("g returns a constant", {f["title"] for f in r2["findings"]})
                 self.assertTrue(r2["coverage"]["complete"])
@@ -5234,6 +5239,33 @@ class TestMigrationOrder(unittest.TestCase):
                          {"docs/migrations/0004-upgrade-guide.md": "y", "scripts/migrate/04_orgs.txt": "y"})
         self.assertEqual(R.migration_order(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo))["status"], "na")
 
+
+
+class TestSinceNote(unittest.TestCase):
+    """DRG-63: an incremental pass labels its diff as the inter-diff and carries the whole change as context."""
+
+    def test_plain_follow_up_commit(self):
+        ch = {"files": ["a.py", "b.py"], "text": "x"}
+        note = V.since_note("1" * 40, False, ch, {"a.py": "WHOLE-A", "c.py": "WHOLE-C"}, "2" * 40)
+        self.assertIn("INTER-DIFF 1111111111..HEAD", note)
+        self.assertIn("(2222222222..HEAD)", note)
+        self.assertIn("WHOLE-A", note)
+        self.assertNotIn("WHOLE-C", note)                   # only this pass's files
+        self.assertNotIn("amended", note)
+
+    def test_context_is_capped_and_missing_is_said(self):
+        ch = {"files": ["a.py"], "text": "x"}
+        note = V.since_note("1" * 40, True, ch, {"a.py": "z" * (V.SINCE_CONTEXT_CHARS + 500)}, "2" * 40)
+        self.assertIn("amended or rebased", note)
+        self.assertIn("context truncated", note)
+        self.assertLess(note.count("z"), V.SINCE_CONTEXT_CHARS + 100)
+        self.assertIn("(not available)", V.since_note("1" * 40, False, ch, {}, "2" * 40))
+
+    def test_full_review_prompt_has_no_since_block(self):
+        ch = {"files": ["a.py"], "text": "diff"}
+        args = ("o__r", "a" * 40, "b" * 40, ch, "rules", "mem", "facts", "log", ["a.py"])
+        self.assertNotIn("RE-REVIEW", V.review_prompt(*args))
+        self.assertIn("This pass covers: a.py\n\n        Diff for this pass:", V.review_prompt(*args))
 
 if __name__ == "__main__":
     unittest.main()

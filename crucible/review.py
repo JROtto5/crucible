@@ -195,7 +195,7 @@ def assign_ids(findings):
 
 # ---------- pipeline ----------
 def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, house="", draft="", draft_file="PR_DRAFT.md",
-                  length_measured=True):
+                  length_measured=True, since=""):
     # with no learned median the length check can't judge, so the reviewer still may (see length_only)
     length = ("Don't report the description's length: crucible measures it against this project's merged\n"
               "        PRs and reports it separately." if length_measured else "Also flag length far from the project norm.")
@@ -241,10 +241,34 @@ def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, hou
 
         All files in the change: {', '.join(all_files)}
         This pass covers: {', '.join(ch['files'])}
-
+        {since}
         Diff for this pass:
         {ch['text']}
         """)
+
+
+# An incremental round shows the reviewer only what changed since the last reviewed commit. Unlabelled, that
+# inter-diff reads as the PR: after an amend it isn't any commit in the log, and after a rebase it carries upstream's
+# changes too. On colyseus #1000 round 2 the reviewer reported "the diff given for this pass doesn't match the
+# commit"; on 83 stored amended rounds the summaries often say the pass "only re-wraps a comment, so I reviewed the
+# whole change against base" by hand. The whole change to the pass's files goes along as context, capped.
+SINCE_CONTEXT_CHARS = 20000
+
+
+def since_note(prev_sha, amended, ch, full_texts, base):
+    """The label and context for an incremental pass: what its diff is, and the whole change to the same files."""
+    ctx = "\n".join(full_texts[p] for p in ch["files"] if p in full_texts)
+    if len(ctx) > SINCE_CONTEXT_CHARS:
+        ctx = ctx[:SINCE_CONTEXT_CHARS] + "\n[... whole-change context truncated; read the files for the rest ...]"
+    prev = prev_sha[:10]
+    how = (f"The reviewed commit was amended or rebased, so {prev} is not in this branch's log, and if the base "
+           f"moved, some hunks below may be upstream changes the author only rebased onto. " if amended else "")
+    return (f"This is a RE-REVIEW. An earlier round reviewed commit {prev}; its findings are carried or re-checked "
+            f"separately, so don't repeat them. The \"Diff for this pass\" below is the INTER-DIFF {prev}..HEAD: only "
+            f"what changed since that round, not the whole PR. {how}Report problems these changes introduce or leave "
+            f"unfixed, judged against the whole change.\n\n"
+            f"The whole change to this pass's files ({base[:10]}..HEAD), for context only:\n"
+            f"{ctx or '(not available)'}\n")
 
 
 # A low model finding whose whole claim is the description's length against the project. style.check owns length
@@ -756,13 +780,17 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         measured = length_measured(style_json)
         fkey, review_cost = facts_key(chk), 0.0
         tok_before = budget.token_snapshot()       # review passes run one after another, before any verification
+        # a digested catalog's raw diff is exactly what the digest exists to keep out of the prompt
+        full_texts = {f["path"]: f["text"] for f in files if not f["binary"] and f["path"] not in digested
+                      and not (catalog.enabled() and catalog.should_digest(f))}
         for i, ch in enumerate(chunks, 1):
+            since = since_note(prev_sha, record["incremental"]["amended"], ch, full_texts, base) if prev_sha else ""
             prompt = review_prompt(project, sha, base, ch, rules, mem, facts, clog, all_files, house,
-                                   draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured)
+                                   draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured, since)
             # keyed on the prompt with check output reduced to outcomes: a template change invalidates the cache, but
             # volatile output (timings) doesn't, so --force on the same commit is stable
             key_prompt = review_prompt(project, sha, base, ch, rules, mem, fkey, clog, all_files, house,
-                                       draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured)
+                                       draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured, since)
             key = hashlib.sha256((review_model + "\0" + key_prompt).encode()).hexdigest()[:32]
             hit = None if fresh else cache_hit(key, budget, "review")
             if hit:
