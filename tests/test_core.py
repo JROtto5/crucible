@@ -5701,7 +5701,7 @@ class TestGeneratedOutputs(unittest.TestCase):
 
     def test_a_package_json_bump_or_a_far_away_sql_file_does_not_excuse_a_hand_edit(self):
         for extra in ({"package.json": '{"version": "2"}\n'}, {"db/migrations/0002_x.sql": "select 2;\n"},
-                      {"Makefile": "all:\n\ttrue\n"}):
+                      {"Makefile": "all:\n\ttrue\n"}, {"package.json": '{"description": "a protocol handler"}\n'}):
             repo = make_repo({"api/user.proto": "message User {}\n", "api/user.pb.go": self.GO_HDR + "a\n",
                               "package.json": '{"version": "1"}\n', "Makefile": "x:\n\ttrue\n"},
                              {"api/user.pb.go": self.GO_HDR + "b\n", **extra})
