@@ -103,13 +103,41 @@ for the rest. Labels: 4 held up, 2 refuted, all raised by Opus in the stored rou
   - held up as stated, Opus: MangoHud's second bare percentage (hud_elements.cpp:464). At 56f729da0b the max-core
     value is drawn as `%d` + `%` with no marker, unlike the MHz/°C/W columns. Whether a marker is wanted is the
     maintainer's call; no answer exists.
-  - Still not judged (4): the SWC/Babel error wording and the indirect-branch test gap (Opus), the BufferUtils
-    normalized copy-vs-transfer paths and the get_secrets-only test (Sonnet).
+  - Still not judged (4) at 02:52: the SWC/Babel error wording and the indirect-branch test gap (Opus), the
+    BufferUtils normalized copy-vs-transfer paths and the get_secrets-only test (Sonnet). Judged 2026-11-11 12:xx
+    below.
   - Effect on the tally: 11 of the 15 unlabelled kept findings are now judged (cpu_win32 counted as the labelled
     one it matches). Opus: 3 held (root-only check, write-back, MangoHud %), 2 false alarms (CHANGELOG, API.md),
     2 unjudged. Sonnet: 4 held (root-only check, write-back, comment split, guards), 1 false alarm (CHANGELOG),
     2 unjudged. Sonnet's extra catches are two low style nits, against Opus's lead of 4 on labelled held-up
     findings (10/11 vs 6/11), so the decision (Opus stays) doesn't change.
+- **2026-11-11 12:xx, the last 4 judged by code read at each PR head ($0), so 15/15 unlabelled kept findings are judged:**
+  - held up, Opus: the SWC/Babel wording (Encoder.ts:30 at 95303fd7f8). The error tells everyone to set
+    `"useDefineForClassFields": false` "in your tsconfig.json"; SWC (`jsc.transform.useDefineForClassFields`) and
+    Babel's class-properties plugin emit the same own data properties and are configured elsewhere, so for those users
+    the fix text points at the wrong file. A low wording issue; the README also only documents the tsconfig route.
+  - held up, Opus: the indirect-branch test gap (GenerateMeshBVHWorker.js:130, test/Workers.test.js:197-203). The
+    copy path's `else if ( ! bvh.indirect )` skips the index write-back for indirect BVHs, and no matrix in
+    Workers.test.js passes `indirect` (copyMatrix is parallel/interleaved/indexed/transferBuffers/strategy), so the
+    indirect + copy combination is never run. The "non-CENTER strategies untested" half is true but weaker: the
+    copy/transfer code doesn't depend on strategy.
+  - held up, Sonnet: copy vs transfer disagree for normalized attributes (BufferUtils.js:44,
+    GenerateMeshBVHWorker.js:163-171). `copyAttributeArray` de-normalizes to Float32, but with
+    `transferBuffers: true` a non-interleaved normalized position is sent as its raw integer array and the worker
+    wraps it as `BufferAttribute( position, 3, false )` (generateMeshBVH.worker.js:36), so the BVH is built at the
+    integer scale. The transfer path behaves as on master (pre-existing), but the PR made the two paths disagree, and
+    the normalized test matrix only runs interleaved, where transfer falls back to copy.
+  - false alarm, Sonnet: "tests cover only the get_secrets call, with a SASLSecrets upstream"
+    (secret_checker_test.exs:167). True as stated, but nothing untested behaves differently: the periodic
+    `handle_info(:check)` path (secret_checker.ex:104) runs the same `check_secrets/2` that calls
+    `drop_stale_upstream_secrets`, and a non-SASLSecrets upstream falls through the `with` (secret_checker.ex:171)
+    to the no-op `:ok`.
+  - Final unlabelled tally (15): Opus 5 held (root-only check, write-back, MangoHud %, SWC wording, indirect test
+    gap) / 2 false alarms (CHANGELOG, API.md); Sonnet 5 held (root-only check, write-back, comment split, guards,
+    normalized paths) / 2 false alarms (CHANGELOG, get_secrets-only test). Even on the unlabelled findings, where the
+    labels can't favour Opus, the arms tie 5–5; with the labelled held-up findings (Opus 10/11, Sonnet 6/11) the
+    10-pair totals are Opus 15 held kept / 3 false alarms kept (1 labelled + 2), Sonnet 11 / 4 (2 + 2). The decision
+    (Opus stays the upstream reviewer) doesn't change. n is still small (26 held-up findings in all).
 - Among the first 6 judged unlabelled findings each arm had exactly one extra held-up finding, the same one (the
   root-only check). With the 11-11 judgements Sonnet has two Sonnet-only held-up findings (the comment split and the
   supavisor guards), both low style nits, so the label bias did hide two small Sonnet catches; Opus's lead on
