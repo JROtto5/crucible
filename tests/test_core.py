@@ -2465,6 +2465,68 @@ class TestRunReviewIncremental(unittest.TestCase):
 
 
 class TestRunReviewAmended(unittest.TestCase):
+    def test_recheck_of_a_carried_finding_is_scoped_to_the_whole_pr(self):
+        """colyseus #1000 replay: the re-check read "caused by this change" as "since the last round" and dropped a
+        true finding on a line round 1's commit added. Both re-check prompts now say the PR is base..HEAD."""
+        with tempfile.TemporaryDirectory() as d:
+            repo, home = os.path.join(d, "r"), os.path.join(d, "home")
+            os.makedirs(os.path.join(repo, "src"))
+            env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",
+                       GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+            g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True, env=env).stdout.decode().strip()
+            w = lambda p, t: open(os.path.join(repo, p), "w").write(t)
+            g("init", "-q", "-b", "main"); w("src/a.js", "export const a = 1;\n"); w("src/b.js", "export const b = 1;\n")
+            g("add", "-A"); g("commit", "-qm", "base"); g("checkout", "-qb", "x")
+            base = g("rev-parse", "main")
+            w("src/a.js", "export const a = 2;\n"); w("src/b.js", "export const b = 1;\nexport function g() { return 2; }\n")
+            g("commit", "-qam", "change")
+            verify = []
+
+            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500, kind="other"):
+                if "findings" in schema["properties"]:
+                    found = [{"severity": "medium", "file": "src/b.js", "line": 2, "title": "g returns a constant",
+                              "problem": "p", "caused_by_this_change": True, "reachable_in_real_use": True,
+                              "wrong_if": "w", "fix": "f"}] if "export function g" in prompt else []
+                    return {"summary": "s", "findings": found}, 0.01
+                verify.append(prompt)
+                return {"keep": True, "severity": "medium", "method": "read", "actions": "read", "evidence": "seen",
+                        "confidence": "high"}, 0.001
+
+            olds = (V.HOME, U.HOME, V.claude, os.environ.get("CRUCIBLE_CACHE"), os.environ.get("CRUCIBLE_VERIFY_CHEAP"))
+            V.HOME = U.HOME = home
+            os.environ["CRUCIBLE_CACHE"] = os.path.join(home, "cache")
+            os.environ["CRUCIBLE_VERIFY_CHEAP"] = "cheap-model"
+            V.claude = fake
+            try:
+                V.run_review(repo, "main", offline=True, skip_checks=True, log=lambda *_: None)
+                w("src/a.js", "export const a = 3;\n")
+                g("commit", "-q", "--amend", "-am", "change")
+                verify.clear()
+                d2 = V.run_review(repo, "main", offline=True, skip_checks=True, log=lambda *_: None)
+                self.assertEqual((U.read_json(os.path.join(d2, "review.json")).get("incremental") or {}).get("carried"), 1)
+                rechecks = [p for p in verify if "its cited lines are unchanged" in p]
+                self.assertEqual(len(rechecks), 1)
+                self.assertIn(f"the whole PR ({base[:10]}..HEAD)", rechecks[0])
+            finally:
+                V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
+                for k, v in (("CRUCIBLE_CACHE", olds[3]), ("CRUCIBLE_VERIFY_CHEAP", olds[4])):
+                    if v is None:
+                        os.environ.pop(k, None)
+                    else:
+                        os.environ[k] = v
+
+    def test_absence_recheck_is_scoped_to_the_whole_pr(self):
+        with tempfile.TemporaryDirectory() as d:
+            env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",
+                       GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+            g = lambda *a: subprocess.run(["git", "-C", d, *a], check=True, capture_output=True, env=env).stdout.decode().strip()
+            g("init", "-q"); open(os.path.join(d, "t.js"), "w").write("1\n"); g("add", "-A"); g("commit", "-qm", "a")
+            prev = g("rev-parse", "HEAD")
+            open(os.path.join(d, "t.js"), "w").write("2\n"); g("commit", "-qam", "b")
+            text = V.anchor_since(d, prev, {"anchor_changed": ["t.js"]}, "f" * 40)
+            self.assertIn("the whole PR (ffffffffff..HEAD)", text)
+            self.assertIn("+2", text)
+
     """Round 2 after `git commit --amend`: the reviewed commit is no ancestor of HEAD any more, but with the same
     merge-base only the files changed between the rounds are reviewed again (38 of 57 upstream reviews were full
     re-reviews of an amend)."""
@@ -5257,9 +5319,44 @@ class TestSinceNote(unittest.TestCase):
         ch = {"files": ["a.py"], "text": "x"}
         note = V.since_note("1" * 40, True, ch, {"a.py": "z" * (V.SINCE_CONTEXT_CHARS + 500)}, "2" * 40)
         self.assertIn("amended or rebased", note)
-        self.assertIn("context truncated", note)
+        self.assertIn("a.py: whole-change diff truncated", note)
         self.assertLess(note.count("z"), V.SINCE_CONTEXT_CHARS + 100)
         self.assertIn("(not available)", V.since_note("1" * 40, False, ch, {}, "2" * 40))
+
+    def test_big_first_file_leaves_room_for_the_next(self):
+        ch = {"files": ["big.py", "small.py"], "text": "x"}
+        texts = {"big.py": "z" * (V.SINCE_CONTEXT_CHARS * 2), "small.py": "SMALL-WHOLE"}
+        note = V.since_note("1" * 40, False, ch, texts, "2" * 40)
+        self.assertIn("SMALL-WHOLE", note)
+        self.assertIn("big.py: whole-change diff truncated", note)
+        self.assertLessEqual(note.count("z"), V.SINCE_CONTEXT_CHARS)
+
+    def test_split_file_context_goes_with_its_first_pass_only(self):
+        texts, sent = {"big.py": "BIG-WHOLE"}, set()
+        first = V.since_note("1" * 40, False, {"files": ["big.py"], "text": "x"}, texts, "2" * 40, sent)
+        second = V.since_note("1" * 40, False, {"files": ["big.py"], "text": "y"}, texts, "2" * 40, sent)
+        self.assertIn("BIG-WHOLE", first)
+        self.assertNotIn("BIG-WHOLE", second)
+        self.assertIn("already shown in an earlier pass: big.py", second)
+
+    def test_big_catalog_stays_out_of_the_context(self):
+        def po(name, n):
+            body = "".join(f'+msgid "s{i}"\n+msgstr "t{i}"\n' for i in range(n))
+            return (f"diff --git a/{name} b/{name}\n--- a/{name}\n+++ b/{name}\n"
+                    f"@@ -0,0 +1,{2 * n} @@\n{body}")
+        files = D.parse(po("fr.po", 150) + po("de.po", 5)
+                        + "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-x\n+y\n")
+        self.assertEqual(sorted(V.since_texts(files, [])), ["a.py", "de.po"])   # 300 lines digest; 10 don't
+        self.assertEqual(sorted(V.since_texts(files, ["de.po"])), ["a.py"])      # digested in the inter-diff
+        old = os.environ.get("CRUCIBLE_CATALOG_DIGEST")
+        os.environ["CRUCIBLE_CATALOG_DIGEST"] = "0"                             # raw diffs everywhere, as asked
+        try:
+            self.assertEqual(sorted(V.since_texts(files, [])), ["a.py", "de.po", "fr.po"])
+        finally:
+            if old is None:
+                os.environ.pop("CRUCIBLE_CATALOG_DIGEST", None)
+            else:
+                os.environ["CRUCIBLE_CATALOG_DIGEST"] = old
 
     def test_full_review_prompt_has_no_since_block(self):
         ch = {"files": ["a.py"], "text": "diff"}

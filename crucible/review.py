@@ -249,17 +249,33 @@ def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, hou
 
 # An incremental round shows the reviewer only what changed since the last reviewed commit. Unlabelled, that
 # inter-diff reads as the PR: after an amend it isn't any commit in the log, and after a rebase it carries upstream's
-# changes too. On colyseus #1000 round 2 the reviewer reported "the diff given for this pass doesn't match the
-# commit"; on 83 stored amended rounds the summaries often say the pass "only re-wraps a comment, so I reviewed the
-# whole change against base" by hand. The whole change to the pass's files goes along as context, capped.
+# changes too (colyseus #1000 round 2: "the diff given for this pass doesn't match the commit"). So the pass is
+# labelled, and the whole change to its files goes along once per file, the cap split evenly between them.
 SINCE_CONTEXT_CHARS = 20000
 
 
-def since_note(prev_sha, amended, ch, full_texts, base):
-    """The label and context for an incremental pass: what its diff is, and the whole change to the same files."""
-    ctx = "\n".join(full_texts[p] for p in ch["files"] if p in full_texts)
-    if len(ctx) > SINCE_CONTEXT_CHARS:
-        ctx = ctx[:SINCE_CONTEXT_CHARS] + "\n[... whole-change context truncated; read the files for the rest ...]"
+def since_texts(files, digested):
+    """{path: base..HEAD diff text} usable as re-review context. A catalog big enough to digest is left out: its raw
+    diff is what the digest keeps out of the prompt, and in an incremental round `digested` only names catalogs
+    that are big in the inter-diff."""
+    return {f["path"]: f["text"] for f in files if not f["binary"] and f["path"] not in digested
+            and not (catalog.enabled() and catalog.should_digest(f))}
+
+
+def since_note(prev_sha, amended, ch, full_texts, base, sent=None):
+    """The label and context for an incremental pass: what its diff is, and the whole change to the same files.
+    `sent` collects files whose context an earlier pass already carried (a big file is split over several passes)."""
+    sent = set() if sent is None else sent
+    new = [p for p in ch["files"] if p in full_texts and p not in sent]
+    share = SINCE_CONTEXT_CHARS // max(1, len(new))
+    parts = []
+    for p in new:
+        t = full_texts[p]
+        parts.append(t if len(t) <= share else t[:share] + f"\n[... {p}: whole-change diff truncated; read the file ...]")
+    sent.update(new)
+    earlier = [p for p in ch["files"] if p in full_texts and p not in new]
+    if earlier:
+        parts.append(f"(whole change already shown in an earlier pass: {', '.join(earlier)})")
     prev = prev_sha[:10]
     how = (f"The reviewed commit was amended or rebased, so {prev} is not in this branch's log, and if the base "
            f"moved, some hunks below may be upstream changes the author only rebased onto. " if amended else "")
@@ -268,7 +284,7 @@ def since_note(prev_sha, amended, ch, full_texts, base):
             f"what changed since that round, not the whole PR. {how}Report problems these changes introduce or leave "
             f"unfixed, judged against the whole change.\n\n"
             f"The whole change to this pass's files ({base[:10]}..HEAD), for context only:\n"
-            f"{ctx or '(not available)'}\n")
+            f"{chr(10).join(parts) or '(not available)'}\n")
 
 
 # A low model finding whose whole claim is the description's length against the project. style.check owns length
@@ -587,14 +603,22 @@ def new_code(f):
     return dict(f, verification=dict(f["verification"], attempts=0))
 
 
-def anchor_since(repo, prev_sha, f):
+# A re-check sees what changed since the earlier round. On the colyseus #1000 round-2 replay (2026-11-11) the
+# verifier read "caused by this change" as "by those later changes" and dropped a true finding whose line the PR
+# added in round 1 ("byte-identical at 63e3b63c44 and HEAD, so not caused by it").
+RECHECK_SCOPE = ("\"Caused by this change\" still means the whole PR ({base}..HEAD), not the changes since "
+                 "{prev}: a cited line the PR added before that commit is still the PR's.")
+
+
+def anchor_since(repo, prev_sha, f, base=None):
     """The re-check context for an absence finding whose anchor changed: which files changed and their diff, so the
     verifier looks where the missing piece would land instead of only at the cited line."""
     files = f["anchor_changed"]
     patch = git(repo, "diff", "--unified=3", "--no-color", f"{prev_sha}..HEAD", "--", *files[:20], check=False)
     return (f"This claim says something is missing. It was verified on an earlier commit ({prev_sha[:10]}); these "
             f"files changed since then: {', '.join(files[:20])}. Check whether those later changes add what it says "
-            f"is missing (e.g. a test that now covers the code); if so it no longer holds.\n"
+            f"is missing (e.g. a test that now covers the code); if so it no longer holds. "
+            f"{RECHECK_SCOPE.format(base=(base or 'base')[:10], prev=prev_sha[:10])}\n"
             f"Changes since {prev_sha[:10]} in those files:\n{patch[:6000]}")
 
 
@@ -780,11 +804,10 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         measured = length_measured(style_json)
         fkey, review_cost = facts_key(chk), 0.0
         tok_before = budget.token_snapshot()       # review passes run one after another, before any verification
-        # a digested catalog's raw diff is exactly what the digest exists to keep out of the prompt
-        full_texts = {f["path"]: f["text"] for f in files if not f["binary"] and f["path"] not in digested
-                      and not (catalog.enabled() and catalog.should_digest(f))}
+        full_texts, since_sent = since_texts(files, digested), set()
         for i, ch in enumerate(chunks, 1):
-            since = since_note(prev_sha, record["incremental"]["amended"], ch, full_texts, base) if prev_sha else ""
+            since = (since_note(prev_sha, record["incremental"]["amended"], ch, full_texts, base, since_sent)
+                     if prev_sha else "")
             prompt = review_prompt(project, sha, base, ch, rules, mem, facts, clog, all_files, house,
                                    draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured, since)
             # keyed on the prompt with check output reduced to outcomes: a template change invalidates the cache, but
@@ -841,7 +864,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         record["verify_tiers"] = tiers
 
         def verify(f):
-            since = anchor_since(repo, prev_sha, f) if f.get("anchor_changed") else ""
+            since = anchor_since(repo, prev_sha, f, base) if f.get("anchor_changed") else ""
             try:
                 return (f,) + verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo, budget, tiers, fresh,
                                             since, dctx and dctx[0], no_exec=no_exec) + (None,)
@@ -874,7 +897,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         if carried and tiered:
             since = (f"This claim was verified on an earlier commit ({prev_sha[:10]}); its cited lines are unchanged, but "
                      f"these files changed since then: {', '.join(record['incremental']['files']) or '(none)'}. Re-check "
-                     f"whether those later changes resolve it (e.g. a test added elsewhere, a caller fixed).\n"
+                     f"whether those later changes resolve it (e.g. a test added elsewhere, a caller fixed). "
+                     f"{RECHECK_SCOPE.format(base=base[:10], prev=prev_sha[:10])}\n"
                      f"Changes since {prev_sha[:10]} (stat):\n{git(repo, 'diff', '--stat', f'{prev_sha}..HEAD', check=False)[:2000]}")
 
             def recheck(f):
