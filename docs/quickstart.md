@@ -1,58 +1,54 @@
 # Quickstart
 
-A real run on a public repo, timed. Measured 2026-11-06 on a fresh install (crucible 0.3.0; 0.4.0 adds only this guide and the version bump); your times and costs will differ with the size of the change.
+A real run on a public repo, timed. Measured 2026-11-11 with crucible from `main` (57f110f). Your times and costs will differ with the size of the change.
 
 You need Python 3.10+, git, `gh` (logged in) and the [Claude Code](https://claude.com/claude-code) CLI.
 
-## 1. Install (4 s)
+## 1. Install
 
 ```sh
-pipx install git+https://github.com/JROtto5/crucible@v0.4.0
+pipx install git+https://github.com/JROtto5/crucible@57f110f   # the build these numbers come from
 ```
 
 ## 2. Make a change to review
 
-The example uses [pallets/itsdangerous](https://github.com/pallets/itsdangerous) and a small "refactor" with a planted bug. It moves the signature age calculation into a helper and flips its sign by mistake:
+The example replays a real bug from [pyinfra-dev/pyinfra](https://github.com/pyinfra-dev/pyinfra), a project whose [AI policy](https://github.com/pyinfra-dev/pyinfra/blob/HEAD/AI_POLICY.md) allows AI-assisted work. Merged PR [#1587](https://github.com/pyinfra-dev/pyinfra/pull/1587) added `requires_command` to the four iptables facts. Its tests didn't exercise the broken path, and it shipped a crash that [#1730](https://github.com/pyinfra-dev/pyinfra/pull/1730) fixed later. Here the PR is re-applied on its own base, as if you were about to submit it:
 
 ```sh
-git clone https://github.com/pallets/itsdangerous && cd itsdangerous
-pip install -e . pytest freezegun          # the project's own test deps
-git switch -c simplify-age
-# edit src/itsdangerous/timed.py: age = self._age(ts_int), with
-#     def _age(self, ts_int): return ts_int - self.get_timestamp()   # wrong order
-git commit -am "Move the signature age calculation into a helper"
-echo 'Move the signature age calculation in TimestampSigner.unsign into a helper, _age(), so it can be reused.' > PR_DRAFT.md
+git clone https://github.com/pyinfra-dev/pyinfra && cd pyinfra
+uv sync && . .venv/bin/activate              # the project's own dev environment
+git switch -c iptables-requires 09116428^
+git cherry-pick 09116428                      # the change from #1587
+gh pr view 1587 --json body --jq .body > PR_DRAFT.md
 ```
 
 `PR_DRAFT.md` is the PR description you plan to submit. crucible reviews it too.
 
-## 3. Learn the project (47 s, once per project)
+## 3. Learn the project (126 s, $0.10, once per project)
 
 ```sh
 crucible learn .
 ```
 
-Reads the project's merged PRs and maintainer comments and writes its house style and rules (8 rules and a PR-body style from 18 PRs here). It also finds the checks to run: `ruff check .` and `python3 -m pytest -q -x` for this repo.
+Reads the project's merged PRs and maintainer comments and writes its house style and rules (20 rules and a PR-body style from 20 PRs here). It also finds the checks to run: `ruff check .` and `python3 -m pytest -q -x` for this repo.
 
-## 4. Review (66 s, $0.42)
+## 4. Review (139 s, $0.54)
 
 ```sh
 crucible review .
 ```
 
-The project's checks run first: pytest **failed**. Then a model different from the one that wrote the change reviewed it, and a verification pass tried to disprove each finding. What survived:
+The project's checks run first: ruff passed. pytest failed, but on `test_apt_packages_update_cached`, an apt cache test that depends on today's date, not on this change. A failing check keeps the verdict NOT_GREEN unless it fails on the base too: `crucible review . --base-checks` re-runs failing checks on the base to show that. Then a model different from the one that wrote the change reviewed it, and a verification pass tried to disprove each finding. All three survived:
 
-- **critical**, `timed.py`: *_age() subtracts in the wrong order: every past signature fails max_age, future ones pass*
-- medium and low: the PR description has no testing evidence and no stated reason.
+- **critical**, `facts/iptables.py:95`: *requires_command() takes no args, so every iptables operation crashes with TypeError*. `get_fact` passes the fact's arguments (`table=...`) to `requires_command` too, and `iptables.rule` and `iptables.chain` always pass `table`. This is the bug #1730 fixed.
+- **important**: the test fixtures never pass `table`, so the crash path is untested. That's why the project's own tests passed.
+- **low**: the PR description ticks "Tests pass" but lists no commands and no linked issue.
 
 Every finding says what would prove it wrong, and the report is pinned to the commit you reviewed. crucible refuses to review uncommitted changes, so the verdict always matches `HEAD`.
 
-## 5. Fix, re-review, answer (≈ 5 min over three rounds, $0.73)
+## 5. Fix, re-review, answer
 
-Fix the bug, commit (`git commit -a --amend` works), and run `crucible review .` again. Later rounds only re-review what changed. Here they found two more real things:
-
-- the new docstring, *"Seconds between ts_int and now"*, reads like a magnitude, which invites the same sign bug again;
-- the reworded docstring broke the project's 88-column lint limit.
+Apply the fix #1730 used, `def requires_command(self, *args, **kwargs)` in the four facts, commit (`git commit -a --amend` works), and run `crucible review .` again (155 s, $0.32 here). Later rounds only re-review what changed. The critical finding is gone, and the missing-fixture finding stays open until a fixture passes `table` (for example `"arg": {"table": "nat"}` in a new `tests/facts/iptables.*` fixture). This run stopped there, so the steps below are not timed.
 
 Answer each remaining finding:
 
@@ -66,10 +62,10 @@ A refuted or deferred answer needs a reason, and it's shown in the report. Once 
 
 | step | wall time | cost |
 |---|---|---|
-| install | 4 s | – |
-| learn | 47 s | – |
-| review, round 1 (bug found) | 66 s | $0.42 |
-| rounds 2–4 | 99 + 104 + 86 s | $0.73 |
-| answers | < 1 s | – |
+| learn | 126 s | $0.10 |
+| review, round 1 (the crash found) | 139 s | $0.54 |
+| review, round 2 (after the fix) | 155 s | $0.32 |
 
-The first useful result came about two minutes after install. Reaching GREEN took about seven minutes of machine time and $1.15 in total.
+The real bug was found about four and a half minutes after starting, for $0.64.
+
+The same day, another real pyinfra change ([#2030](https://github.com/pyinfra-dev/pyinfra/pull/2030), sed escaping in `crontab`) was a miss: the reviewer raised the over-escaping of `^` and `$` that [#2040](https://github.com/pyinfra-dev/pyinfra/pull/2040) later fixed, and verification dropped it as harmless. [docs/case-studies.md](case-studies.md) has more catches and misses on upstream PRs.

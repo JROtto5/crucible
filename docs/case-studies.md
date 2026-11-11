@@ -40,6 +40,14 @@ Outcome: the merged fr.po closes those links with `</a>`, and the test strips on
 
 crucible didn't flag it: nothing told it which versions CI runs. The fix, pushed to the PR, was a small test change (+6/−3): compare with `getX/getY/getZ`, which 0.159 also has. crucible gained a readiness item, "CI dependency matrix tried locally": it reads `strategy.matrix` axes from the workflows, matches them to declared dependencies and names the versions you haven't tried, with the install command for the oldest. Across 29 real clones, only the three-mesh-bvh ones warn.
 
+## Replays of merged PRs (pyinfra, 2026-11-11)
+
+These are not our PRs. Each one re-applies a merged pyinfra PR on its own base and reviews it as if it were about to be submitted, so the later fix shows what was really wrong.
+
+**Catch: [pyinfra-dev/pyinfra#1587](https://github.com/pyinfra-dev/pyinfra/pull/1587).** It added `requires_command` to the four iptables facts with no parameters. crucible (critical, verified by reading the code): `get_fact` passes the fact's arguments to `requires_command` too, and `iptables.rule` and `iptables.chain` always pass `table=`, so every iptables operation raises `TypeError`. It also flagged that no fixture passes `table`, which is why the project's tests passed. [#1730](https://github.com/pyinfra-dev/pyinfra/pull/1730) later fixed it with `requires_command(self, *args, **kwargs)`. This run is the [quickstart](quickstart.md).
+
+**Miss: [pyinfra-dev/pyinfra#2030](https://github.com/pyinfra-dev/pyinfra/pull/2030).** It escaped sed special characters in `crontab`'s match pattern. The reviewer raised the escaping of `^` and `$`, and verification dropped it: `\^` and `\$` match literally in GNU sed, so it judged the extra escaping harmless. [#2040](https://github.com/pyinfra-dev/pyinfra/pull/2040) removed those two escapes three days later and changed the expected `interpolate_variables` commands. The kept findings were about the PR description and comments.
+
 ## How these were picked
 
 Since 2026-11-04, crucible has reviewed changes to 11 upstream projects before submission. These are cases where the public PR shows the result. Most kept findings are low (wording, tests, descriptions); `crucible stats` gives the current fixed, deferred and refuted counts for your own reviews.
