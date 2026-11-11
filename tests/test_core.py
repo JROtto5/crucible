@@ -5726,9 +5726,8 @@ class TestGeneratedOutputs(unittest.TestCase):
 
     def test_a_generator_version_bump_excuses_regenerated_output(self):
         repo = make_repo({"api/user.proto": "message User {}\n", "api/user.pb.go": self.GO_HDR + "a\n",
-                          "go.mod": "module x\nrequire google.golang.org/protobuf v1.30.0\n// protoc-gen-go v1.30.0\n"},
-                         {"api/user.pb.go": self.GO_HDR + "b\n",
-                          "go.mod": "module x\nrequire google.golang.org/protobuf v1.34.0\n// protoc-gen-go v1.34.0\n"})
+                          "go.mod": "module x\nrequire google.golang.org/protobuf v1.30.0\n"},
+                         {"api/user.pb.go": self.GO_HDR + "b\n", "go.mod": "module x\nrequire google.golang.org/protobuf v1.34.0\n"})
         r = self._run(repo)
         self.assertEqual(r["status"], "pass", r); self.assertIn("go.mod changed, which may be why", r["evidence"])
 
