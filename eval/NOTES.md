@@ -32,6 +32,29 @@
 
   Misses: current missed py-race (r1) and js-refcount (r2, the known medium-severity case); Opus missed py-race once (r2). Every arm found every bug at some severity. The recall intervals all overlap, so n=28 can't separate the arms. Cost can: Fable 5.2 costs 2.8× Opus and 5.5× the current pick per set, and it's slowest. Every bug case cost $0.94–$3.67 on Fable 5.2 vs $0.28–$0.94 on Opus, so this isn't one outlier. Decision: no reviewer change on this evidence. Fable 5.2 would only be worth it if a larger set showed a recall gain big enough to pay ~$1.05 more per caught bug than Opus.
 
+## 2026-11-11 · incremental re-review prompt (DRG-63): one amended round replayed before/after
+
+`crucible eval` only builds full reviews and `model-replay` skips incremental rounds, so neither can measure the
+re-review prompt. One stored amended round was replayed by hand instead: colyseus #1000 round 2 (8a6c1d4c, previous
+round 63e3b63c, base 18ccca0e), in a `--shared` clone on a branch whose recorded history is the round-1 commit, each
+arm with its own CRUCIBLE_HOME holding only the round-1 review and the learned project files, `--offline --no-exec
+--budget 1.5`, same models (Opus review, tiered verify). Outputs: ~/.crucible/replays/drg63-colyseus-1000-r2/.
+
+| arm | code | $ | review tokens | summary on the pass | kept |
+|---|---|---|---|---|---|
+| before | 12206e8 | $0.48 | 280k | "The diff supplied for this pass doesn't match it" (then reviewed base..HEAD by hand) | 3: raw error text (carried), CHANGELOG (carried), stale comment (new) |
+| after, label only | 046ebb0 | $0.35 | 156k | "This round reverts one change from the previous round" | 1: CHANGELOG; raw error text dropped by the carried-finding re-check |
+| after, + re-check scope | 68e3da8 | $0.23 | – | "The inter-diff puts reserveMultipleSeatsFor back to exactly its base code" | 2: raw error text, CHANGELOG (both carried) |
+
+- The label fixes the misreading in both new arms. The middle arm exposed the same confusion in the verifier: its
+  re-check dropped the raw-error finding as "byte-identical at 63e3b63c44 and HEAD, so not caused by it", though
+  round 1's commit added that line. 68e3da8 scopes both re-check prompts to base..HEAD, and the finding is kept again.
+- What the new prompt gives up: the old arm's "stale comment" low sits in a hunk round 1 already had (the stored
+  round raised it too, unanswered). The old arm found it only by ignoring the diff it was given and re-reviewing
+  everything. The new prompt keeps to the inter-diff, so a round-1 miss in an untouched hunk waits for `--full`.
+- n = 1 round, one sample per arm (the verifier isn't deterministic): a check that the symptom is gone, not a rate.
+  Spend $1.06.
+
 ## 2026-11-10 · reviewer A/B, second slice: 10 paired upstream rounds (`crucible model-replay`)
 
 Run: `crucible model-replay --clones ~/dev/oss-grind/work --rounds 6 --budget 0.8 --exclude e72b878703 7b25a717ea
@@ -87,8 +110,10 @@ for the rest. Labels: 4 held up, 2 refuted, all raised by Opus in the stored rou
     2 unjudged. Sonnet: 4 held (root-only check, write-back, comment split, guards), 1 false alarm (CHANGELOG),
     2 unjudged. Sonnet's extra catches are two low style nits, against Opus's lead of 4 on labelled held-up
     findings (10/11 vs 6/11), so the decision (Opus stays) doesn't change.
-- Among the judged unlabelled findings each arm has exactly one extra held-up finding, and it's the same one (the
-  root-only check), so in this slice the label bias toward Opus doesn't hide a Sonnet-only catch.
+- Among the first 6 judged unlabelled findings each arm had exactly one extra held-up finding, the same one (the
+  root-only check). With the 11-11 judgements Sonnet has two Sonnet-only held-up findings (the comment split and the
+  supavisor guards), both low style nits, so the label bias did hide two small Sonnet catches; Opus's lead on
+  labelled held-up findings (10/11 vs 6/11) is unaffected.
 - Over 10 pairs, Opus keeps more held-up findings, 10/11 vs 6/11 by hand. The intervals still overlap at n=11, but
   every slice points the same way, and Opus's $ per held-up finding is lower ($0.63 vs $0.99) even though Sonnet's
   rounds cost less ($0.50 vs $0.57 per round).

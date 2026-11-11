@@ -2465,6 +2465,10 @@ class TestRunReviewIncremental(unittest.TestCase):
 
 
 class TestRunReviewAmended(unittest.TestCase):
+    """Round 2 after `git commit --amend`: the reviewed commit is no ancestor of HEAD any more, but with the same
+    merge-base only the files changed between the rounds are reviewed again (38 of 57 upstream reviews were full
+    re-reviews of an amend)."""
+
     def test_recheck_of_a_carried_finding_is_scoped_to_the_whole_pr(self):
         """colyseus #1000 replay: the re-check read "caused by this change" as "since the last round" and dropped a
         true finding on a line round 1's commit added. Both re-check prompts now say the PR is base..HEAD."""
@@ -2515,6 +2519,49 @@ class TestRunReviewAmended(unittest.TestCase):
                     else:
                         os.environ[k] = v
 
+    def test_amended_big_catalog_raw_diff_stays_out_of_the_pass(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo, home = os.path.join(d, "r"), os.path.join(d, "home")
+            os.makedirs(os.path.join(repo, "po"))
+            env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",
+                       GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+            g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True, env=env).stdout.decode().strip()
+            w = lambda p, t: open(os.path.join(repo, p), "w").write(t)
+            po = lambda first: "".join(f'msgid "s{i}"\nmsgstr "{first if i == 0 else f"t{i}"}"\n\n' for i in range(150))
+            g("init", "-q", "-b", "main"); w("a.js", "export const a = 1;\n"); w("po/fr.po", "")
+            g("add", "-A"); g("commit", "-qm", "base"); g("checkout", "-qb", "x")
+            w("a.js", "export const a = 2;\n"); w("po/fr.po", po("t0")); g("add", "-A"); g("commit", "-qm", "c")
+            passes = []
+
+            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500, kind="other"):
+                if "findings" in schema["properties"]:
+                    passes.append(prompt)
+                    return {"summary": "s", "findings": []}, 0.01
+                return {"keep": True, "severity": "low", "method": "read", "actions": "r", "evidence": "e",
+                        "confidence": "high"}, 0.001
+
+            olds = (V.HOME, U.HOME, V.claude, os.environ.get("CRUCIBLE_CACHE"))
+            V.HOME = U.HOME = home
+            os.environ["CRUCIBLE_CACHE"] = os.path.join(home, "cache")
+            V.claude = fake
+            try:
+                V.run_review(repo, "main", offline=True, skip_checks=True, no_tiers=True, log=lambda *_: None)
+                w("a.js", "export const a = 3;\n"); w("po/fr.po", po("u0"))
+                g("commit", "-q", "--amend", "-am", "c")
+                passes.clear()
+                d2 = V.run_review(repo, "main", offline=True, skip_checks=True, no_tiers=True, log=lambda *_: None)
+                self.assertTrue((U.read_json(os.path.join(d2, "review.json")).get("incremental") or {}).get("amended"))
+                prompt = "\n".join(passes)
+                self.assertIn('+msgstr "u0"', prompt)                 # the small inter-diff is reviewed raw
+                self.assertIn("+export const a = 3;", prompt)
+                self.assertNotIn('msgstr "t140"', prompt)             # but the catalog's 300-line base diff isn't context
+            finally:
+                V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
+                if olds[3] is None:
+                    os.environ.pop("CRUCIBLE_CACHE", None)
+                else:
+                    os.environ["CRUCIBLE_CACHE"] = olds[3]
+
     def test_absence_recheck_is_scoped_to_the_whole_pr(self):
         with tempfile.TemporaryDirectory() as d:
             env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",
@@ -2527,9 +2574,6 @@ class TestRunReviewAmended(unittest.TestCase):
             self.assertIn("the whole PR (ffffffffff..HEAD)", text)
             self.assertIn("+2", text)
 
-    """Round 2 after `git commit --amend`: the reviewed commit is no ancestor of HEAD any more, but with the same
-    merge-base only the files changed between the rounds are reviewed again (38 of 57 upstream reviews were full
-    re-reviews of an amend)."""
 
     def test_amend_is_incremental(self):
         with tempfile.TemporaryDirectory() as d:
@@ -5331,13 +5375,11 @@ class TestSinceNote(unittest.TestCase):
         self.assertIn("big.py: whole-change diff truncated", note)
         self.assertLessEqual(note.count("z"), V.SINCE_CONTEXT_CHARS)
 
-    def test_split_file_context_goes_with_its_first_pass_only(self):
-        texts, sent = {"big.py": "BIG-WHOLE"}, set()
-        first = V.since_note("1" * 40, False, {"files": ["big.py"], "text": "x"}, texts, "2" * 40, sent)
-        second = V.since_note("1" * 40, False, {"files": ["big.py"], "text": "y"}, texts, "2" * 40, sent)
-        self.assertIn("BIG-WHOLE", first)
-        self.assertNotIn("BIG-WHOLE", second)
-        self.assertIn("already shown in an earlier pass: big.py", second)
+    def test_split_file_context_goes_with_every_pass(self):
+        # every pass is its own model call, so a later pass can't see context sent with an earlier one
+        texts = {"big.py": "BIG-WHOLE"}
+        for text in ("x", "y"):
+            self.assertIn("BIG-WHOLE", V.since_note("1" * 40, False, {"files": ["big.py"], "text": text}, texts, "2" * 40))
 
     def test_big_catalog_stays_out_of_the_context(self):
         def po(name, n):

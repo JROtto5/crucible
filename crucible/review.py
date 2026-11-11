@@ -250,7 +250,8 @@ def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, hou
 # An incremental round shows the reviewer only what changed since the last reviewed commit. Unlabelled, that
 # inter-diff reads as the PR: after an amend it isn't any commit in the log, and after a rebase it carries upstream's
 # changes too (colyseus #1000 round 2: "the diff given for this pass doesn't match the commit"). So the pass is
-# labelled, and the whole change to its files goes along once per file, the cap split evenly between them.
+# labelled, and the whole change to its files goes along, the cap split evenly between them. Every pass is its own
+# model call, so a file split over several passes carries its context in each of them.
 SINCE_CONTEXT_CHARS = 20000
 
 
@@ -262,20 +263,12 @@ def since_texts(files, digested):
             and not (catalog.enabled() and catalog.should_digest(f))}
 
 
-def since_note(prev_sha, amended, ch, full_texts, base, sent=None):
-    """The label and context for an incremental pass: what its diff is, and the whole change to the same files.
-    `sent` collects files whose context an earlier pass already carried (a big file is split over several passes)."""
-    sent = set() if sent is None else sent
-    new = [p for p in ch["files"] if p in full_texts and p not in sent]
-    share = SINCE_CONTEXT_CHARS // max(1, len(new))
-    parts = []
-    for p in new:
-        t = full_texts[p]
-        parts.append(t if len(t) <= share else t[:share] + f"\n[... {p}: whole-change diff truncated; read the file ...]")
-    sent.update(new)
-    earlier = [p for p in ch["files"] if p in full_texts and p not in new]
-    if earlier:
-        parts.append(f"(whole change already shown in an earlier pass: {', '.join(earlier)})")
+def since_note(prev_sha, amended, ch, full_texts, base):
+    """The label and context for an incremental pass: what its diff is, and the whole change to the same files."""
+    files = [p for p in ch["files"] if p in full_texts]
+    share = SINCE_CONTEXT_CHARS // max(1, len(files))
+    parts = [full_texts[p] if len(full_texts[p]) <= share
+             else full_texts[p][:share] + f"\n[... {p}: whole-change diff truncated; read the file ...]" for p in files]
     prev = prev_sha[:10]
     how = (f"The reviewed commit was amended or rebased, so {prev} is not in this branch's log, and if the base "
            f"moved, some hunks below may be upstream changes the author only rebased onto. " if amended else "")
@@ -804,10 +797,9 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         measured = length_measured(style_json)
         fkey, review_cost = facts_key(chk), 0.0
         tok_before = budget.token_snapshot()       # review passes run one after another, before any verification
-        full_texts, since_sent = since_texts(files, digested), set()
+        full_texts = since_texts(files, digested)
         for i, ch in enumerate(chunks, 1):
-            since = (since_note(prev_sha, record["incremental"]["amended"], ch, full_texts, base, since_sent)
-                     if prev_sha else "")
+            since = since_note(prev_sha, record["incremental"]["amended"], ch, full_texts, base) if prev_sha else ""
             prompt = review_prompt(project, sha, base, ch, rules, mem, facts, clog, all_files, house,
                                    draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured, since)
             # keyed on the prompt with check output reduced to outcomes: a template change invalidates the cache, but
