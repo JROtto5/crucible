@@ -1193,6 +1193,212 @@ def symbol_collisions(repo, base, files, me=None, offline=False, base_ref=None):
 
 
 
+
+# Whole-table counts. A test that asserts a bare number against count(*) of a shared table (a lookup/catalog table
+# seeded by migrations) passes on its own, and breaks the moment another change adds or removes rows of that table:
+# each PR is green alone, main goes red after both merge. The link between the two changes is the table, not a file:
+# the rows usually come from a separate migration. Idea from a reviewer exchange; no code shared.
+SQL_TABLE = r"((?:\"[^\"]+\"|[\w$]+)(?:\.(?:\"[^\"]+\"|[\w$]+))?)"
+COUNT_RX = re.compile(r"\bcount\s*\(\s*(?:\*|1)\s*\)\s+from\s+" + SQL_TABLE, re.I)
+COUNT_FILTER_RX = re.compile(r"\b(?:where|join|group\s+by|having|limit|tablesample|offset)\b|^\s*(?:\w+\s*)?,", re.I)
+COUNT_END_RX = re.compile(r"[;\"'`)]|\$\$")
+COUNT_ASSERT_RX = re.compile(r"\bassert\w*|\bexpect\b|\.to(?:Be|Equal|StrictEqual|HaveLength)\b|\bassert_?equals?\b|"
+                             r"(?:^|\s)-(?:eq|ne)\s|[!=]=|\bshould\b|\bmust\b|\bfail\b|\bdie\b|\bexit\s+1\b|"
+                             r"\braise\b|\berror\b|\bunless\b", re.I)
+COUNT_NUM_RX = re.compile(r"(?<![\w.$-])\d+(?![\w.])")
+COUNT_LOCAL_RX = re.compile(r"\bcreate\s+(?:(?:temp|temporary|unlogged)\s+)*table\s+(?:if\s+not\s+exists\s+)?"
+                            + SQL_TABLE + r"|\bwith\s+(?:recursive\s+)?" + SQL_TABLE + r"\s+as\s*\(|"
+                            r",\s*" + SQL_TABLE + r"\s+as\s*\(", re.I)
+WRITE_RX = re.compile(r"\b(?:insert\s+into|delete\s+from|truncate(?:\s+table)?(?:\s+only)?)\s+" + SQL_TABLE + r"|"
+                      r"\bcopy\s+" + SQL_TABLE + r"(?:\s*\([^)]*\))?\s+from\b", re.I)
+COUNT_TEST_RX = re.compile(r"(?:^|/)[^/]*(?:test|check|gate|verify|assert)[^/]*$|(?:^|/)(?:ci|checks?|gates?)/", re.I)
+COUNT_TEST_EXT = (".sh", ".bash", ".sql", ".py", ".js", ".mjs", ".cjs", ".ts", ".mts", ".rb", ".go", ".exs", ".ex")
+SEED_RX = re.compile(r"(?:^|/)(?:seeds?|seeders|fixtures/db|data/seed)(?:/|\.|_|$)")
+SYSTEM_TABLE_RX = re.compile(r"(?:pg_catalog\.|information_schema\.|pg_|sqlite_|mysql\.|sys\.)")
+COUNT_WINDOW = 4    # added lines after the count where the asserted number may sit (and 2 before)
+
+
+def _count_test_file(path):
+    low = path.lower()
+    return low.endswith(COUNT_TEST_EXT) and (bool(TEST_PATH_RX.search(path)) or bool(COUNT_TEST_RX.search(path)))
+
+
+def _sql_writer_file(path):
+    """Files whose added SQL changes a database's rows for everyone: SQL/migration hosts, migrations and seeds,
+    but not tests (a test's own fixture inserts run in its own database or transaction)."""
+    low = path.lower()
+    if TEST_PATH_RX.search(path) or _count_test_file(path):
+        return False
+    if low.endswith((".sql", ".psql", ".pgsql", ".plpgsql", ".ddl")):
+        return True
+    return low.endswith(SQL_HOST_EXT) and (bool(MIGRATION_DIR_RX.search(path)) or bool(SEED_RX.search(low)))
+
+
+def _table_key(raw):
+    return _sql_name(raw)
+
+
+def _same_table(a, b):
+    """schema.name keys (public. dropped): equal, or equal names where one side gives no schema (it resolves through
+    search_path, so it may be the same table)."""
+    if a == b:
+        return True
+    (sa, _, na), (sb, _, nb) = a.rpartition("."), b.rpartition(".")
+    return na == nb and (not sa or not sb)
+
+
+def _fixed_counts(files, repo=None):
+    """{table: [(path, line_no, snippet)]} for unfiltered count(*) of a named table in an added test line, with a
+    numeric literal asserted within a few added lines of it. Skipped: counts with WHERE/JOIN/GROUP BY/LIMIT (scoped to
+    known keys), counts of a table the same test creates or names as a CTE (local), and lines with no number to
+    compare against."""
+    out = {}
+    for f in files:
+        path = f.get("path")
+        if not path or f.get("deleted") or not _count_test_file(path):
+            continue
+        added = [(text, new) for h in f.get("hunks") or [] for kind, text, _old, new in h["lines"] if kind == "+"]
+        body = "\n".join(t for t, _ in added)
+        if repo:        # a table the test file creates elsewhere (not on the changed lines) is still its own
+            body += "\n" + (git(repo, "show", f"HEAD:{path}", check=False) or "")
+        local = {_table_key(next(g for g in m.groups() if g)) for m in COUNT_LOCAL_RX.finditer(body)}
+        for i, (text, line_no) in enumerate(added):
+            for m in COUNT_RX.finditer(text):
+                table = _table_key(m.group(1))
+                if any(_same_table(table, x) for x in local) or SYSTEM_TABLE_RX.match(table):
+                    continue
+                tail = text[m.end():] + "\n" + "\n".join(t for t, _ in added[i + 1:i + 3])
+                end = COUNT_END_RX.search(tail)
+                if COUNT_FILTER_RX.search(tail[:end.start()] if end else tail):
+                    continue
+                window = [t for t, _ in added[max(0, i - 2):i + 1 + COUNT_WINDOW]]
+                joined = "\n".join(window).replace(m.group(0), " ")
+                if not COUNT_ASSERT_RX.search(joined) or not COUNT_NUM_RX.search(joined):
+                    continue
+                out.setdefault(table, []).append((path, line_no, text.strip()[:80]))
+    return out
+
+
+def _writes(path, lines):
+    """Tables whose rows these added lines of one file insert, delete, truncate or COPY into."""
+    if not _sql_writer_file(path):
+        return set()
+    return {_table_key(next(g for g in m.groups() if g)) for ln in lines for m in WRITE_RX.finditer(ln)}
+
+
+def _pr_writes(slug, number, head=None):
+    """{"tables": [...], "unread": [...], "cut": bool} for a PR, or FETCH_FAILED. Cached per head SHA."""
+    path = os.path.join(util.HOME, "cache", "pr-writes", slug.replace("/", "__"), f"{int(number)}.json") if head else None
+    if path:
+        hit = read_json(path)
+        hit = hit if isinstance(hit, dict) else {}
+        got = hit.get("got")
+        if hit.get("head") == head and isinstance(hit.get("at"), (int, float)) and \
+                time.time() - hit["at"] < HUNK_CACHE_TTL and isinstance(got, dict) and \
+                isinstance(got.get("tables"), list) and isinstance(got.get("unread"), list) and \
+                isinstance(got.get("cut"), bool):
+            return got
+    data = gh_json(f"repos/{slug}/pulls/{number}/files?per_page={PR_FILES_PAGE}")
+    if not isinstance(data, list):
+        return FETCH_FAILED
+    tables = set()
+    for f in data:
+        name = f.get("filename") or ""
+        plus = [ln[1:] for ln in (f.get("patch") or "").splitlines() if ln.startswith("+") and not ln.startswith("+++")]
+        tables |= _writes(name, plus)
+    got = {"tables": sorted(tables), "cut": len(data) >= PR_FILES_PAGE,
+           "unread": [f.get("filename") or "" for f in data if not f.get("patch") and f.get("changes")
+                      and _sql_writer_file(f.get("filename") or "")]}
+    if path:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            write_json(path, {"head": head, "at": time.time(), "got": got})
+        except OSError:
+            pass
+    return got
+
+
+def count_collisions(repo, base, files, me=None, offline=False, base_ref=None):
+    """Does a test in this change assert a fixed row count of a table another change writes rows to? A test that
+    checks `count(*) from t` against a bare number (36, or "0/0/36" in a combined string) is green alone, and red as
+    soon as another migration inserts or deletes rows of t, wherever that migration lives: the link is the table.
+
+    Reads unfiltered count(*) of a named table on added lines of test-like files (tests, gate/check scripts) with an
+    asserted number nearby, then looks for INSERT/DELETE/TRUNCATE/COPY ... FROM on the same table (schema.name,
+    public. dropped) in (a) the tracking ref since the merge-base, which fails, and (b) other open PRs' migrations,
+    seeds and SQL files, which warns. Counts filtered to known keys, and tables the test makes itself, are left out.
+    No model call, no execution."""
+    name = "no other change moves a table a test counts"
+    ours = _fixed_counts(files, repo)
+    if not ours:
+        return _item(name, "na", "no test asserts a fixed count(*) of a whole table")
+    where = "; ".join(f"{t} ({v[0][0]}:{v[0][1]})" for t, v in list(ours.items())[:3])
+    fix = ("measure the count on the base first (or count only this change's own rows, WHERE key IN (...)) "
+           "instead of asserting a bare number")
+    notes, landed = [], []
+    if base_ref and base_ref != base and util.ref_exists(repo, base_ref):
+        exts = sorted(set(SQL_HOST_EXT))
+        theirs = {}
+        for f in parse_diff(git(repo, "diff", "--no-renames", "--unified=0", base, base_ref, "--",
+                                *[f":(icase)*{e}" for e in exts], check=False)):
+            plus = [t for h in f.get("hunks") or [] for kind, t, *_ in h["lines"] if kind == "+"]
+            for t in _writes(f.get("path") or "", plus):
+                theirs.setdefault(t, f["path"])
+        for t in ours:
+            hit = next((w for w in theirs if _same_table(t, w)), None)
+            if hit:
+                bare = t.rsplit(".", 1)[-1]
+                sha = git(repo, "log", "-n1", "-i", "--format=%h %s", f"{base}..{base_ref}", "-S", bare, "--",
+                          theirs[hit], check=False) or "?"
+                landed.append(f"{t} gets rows from {theirs[hit]} ({sha.strip()[:80]})")
+        notes.append(f"{base_ref} since the merge-base writes rows to {len(theirs)} table(s)")
+    else:
+        notes.append(f"no tracking ref ahead of the merge-base to compare ({base_ref or 'none given'})")
+    hits, failed, unread, unlisted = [], [], [], False
+    slug = None if offline else upstream_slug(repo)
+    if offline:
+        notes.append("open PRs not checked (offline)")
+    elif not slug:
+        notes.append("open PRs not checked (no GitHub remote)")
+    else:
+        prs, total = open_prs(slug)
+        if prs is None:
+            unlisted = True
+            notes.append(f"could not list open PRs on {slug}")
+        else:
+            cands = [pr for pr in prs if not pr["bot"] and not is_me(pr["author"], me)
+                     and any(_sql_writer_file(p) for p in pr["paths"])]
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(8) as ex:
+                got = list(ex.map(lambda pr: _pr_writes(slug, pr["number"], pr.get("head")), cands[:OVERLAP_CANDIDATES]))
+            for pr, res in zip(cands, got):
+                if res is FETCH_FAILED:
+                    failed.append(pr["number"])
+                    continue
+                same = [t for t in ours if any(_same_table(t, w) for w in res["tables"])]
+                if same:
+                    hits.append(f"#{pr['number']} by {pr['author']} ({pr['url']}) writes rows to {', '.join(same[:3])}")
+                elif res["cut"] or res["unread"]:
+                    unread.append(pr["number"])
+            notes.append(f"checked {min(len(cands), OVERLAP_CANDIDATES)} open PR(s) with migrations, seeds or SQL, "
+                         f"of {total}")
+            if len(cands) > OVERLAP_CANDIDATES:
+                notes.append(f"{len(cands) - OVERLAP_CANDIDATES} more not read")
+            if failed:
+                notes.append(f"{len(failed)} couldn't be fetched (rate limit or network; re-run later)")
+            if unread:
+                notes.append(f"{len(unread)} couldn't be read in full (" + ", ".join(f"#{n}" for n in unread[:5]) + ")")
+    if landed:
+        return _item(name, "fail", f"a test asserts a fixed row count of a table {base_ref} has changed since the "
+                     f"merge-base: " + "; ".join(landed[:3]) + f". The count will be off after the merge; {fix} "
+                     f"(counts: {where}; {'; '.join(notes)})")
+    if hits:
+        return _item(name, "warn", "a test asserts a fixed row count of a table another open PR writes to: "
+                     + "; ".join(hits[:5]) + f". Whichever merges second turns the count red; {fix} "
+                     f"(counts: {where}; {'; '.join(notes)})" + ("" if me else UNKNOWN_ME))
+    status = "warn" if failed or unread or unlisted else "pass"
+    return _item(name, status, f"fixed count(s) of {where}; {'; '.join(notes)}")
+
 # Generated files. A file is generated when .gitattributes marks it linguist-generated, when a comment in its first
 # lines carries a generator's marker (Go's "Code generated ... DO NOT EDIT.", "@generated", or "generated" next to
 # "do not edit"), or when its name is a code generator's (protobuf/gRPC stubs, *.generated.*, a generated/ directory).
@@ -1520,6 +1726,7 @@ def evaluate(repo, project, base, files, draft=None, me=None, offline=False, bas
         base_moved(repo, base_ref, base),
         migration_order(repo, base, files, base_ref),
         symbol_collisions(repo, base, files, me, offline, base_ref),
+        count_collisions(repo, base, files, me, offline, base_ref),
         generated_outputs(repo, base, files),
     ]
     return {"draft": draft_path, "issue": issue, "items": items,

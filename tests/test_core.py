@@ -5808,6 +5808,121 @@ class TestGeneratedOutputs(unittest.TestCase):
                        "evidence": "no generated file or generator input in the change"}, items)
 
 
+class TestCountCollisions(unittest.TestCase):
+    """A test asserts a bare count(*) of a shared table; another change adds rows to that table in its own migration.
+    Each is green alone; together the number is off. Fixtures written from scratch."""
+
+    SEED = "CREATE TABLE app.kinds (id int, kind text);\nINSERT INTO app.kinds VALUES (1, 'a'), (2, 'b');\n"
+    GATE = ('#!/bin/sh\nset -e\nn=$(psql -tAc "select count(*) from app.kinds")\n'
+            '[ "$n" -eq 2 ] || { echo "expected 2 kinds, got $n"; exit 1; }\n')
+
+    def setUp(self):
+        home = tempfile.mkdtemp()
+        orig = (U.HOME, R.gh_json, R.upstream_slug)
+        U.HOME, R.upstream_slug = home, (lambda repo: None)
+        R.gh_json = lambda *a: self.fail(f"unexpected gh call {a}")
+        self.addCleanup(lambda: (setattr(U, "HOME", orig[0]), setattr(R, "gh_json", orig[1]),
+                                 setattr(R, "upstream_slug", orig[2])))
+
+    @staticmethod
+    def _files(repo, rng="main...HEAD"):
+        return D.parse(sh(repo, "git", "diff", rng))
+
+    def _landed(self, mine, theirs_path, theirs_text):
+        repo = make_repo({"db/migrations/001_seed.sql": self.SEED}, mine)
+        base = sh(repo, "git", "rev-parse", "main")
+        sh(repo, "git", "checkout", "-q", "main")
+        os.makedirs(os.path.join(repo, os.path.dirname(theirs_path)), exist_ok=True)
+        open(os.path.join(repo, theirs_path), "w").write(theirs_text)
+        sh(repo, "git", "add", "-A"); sh(repo, "git", "commit", "-qm", "theirs: more kinds")
+        sh(repo, "git", "checkout", "-q", "fix")
+        return repo, base
+
+    def test_gate_script_count_vs_rows_landed_on_the_tracking_ref_fails(self):
+        repo, base = self._landed({"ci/gate_kinds.sh": self.GATE}, "db/migrations/002_more.sql",
+                                  "insert into kinds (id, kind) values (3, 'c'), (4, 'd');\n")
+        r = R.count_collisions(repo, base, self._files(repo, f"{base}..HEAD"), offline=True, base_ref="main")
+        self.assertEqual(r["status"], "fail", r)
+        self.assertIn("app.kinds gets rows from db/migrations/002_more.sql", r["evidence"])
+        self.assertIn("theirs: more kinds", r["evidence"]); self.assertIn("measure the count", r["evidence"])
+
+    def test_combined_string_literal_in_a_python_test_counts(self):
+        test = ('def test_counts(db):\n    got = db.one("select count(*) from app.kinds")\n'
+                '    assert f"0/0/{got}" == "0/0/2"\n')
+        repo, base = self._landed({"tests/test_kinds.py": test}, "db/seeds/kinds.sql",
+                                  "DELETE FROM app.kinds WHERE id = 2;\n")
+        r = R.count_collisions(repo, base, self._files(repo, f"{base}..HEAD"), offline=True, base_ref="main")
+        self.assertEqual(r["status"], "fail", r)
+
+    def test_open_pr_writing_the_table_warns_and_is_cached(self):
+        repo = make_repo({"db/migrations/001_seed.sql": self.SEED}, {"ci/gate_kinds.sh": self.GATE})
+        R.upstream_slug = lambda repo: "o/r"
+        page = {"data": {"repository": {"pullRequests": {"totalCount": 2, "pageInfo": {"hasNextPage": False},
+                "nodes": [{"number": n, "url": f"https://github.com/o/r/pull/{n}", "isDraft": False, "headRefOid": h,
+                           "author": {"login": who, "__typename": "User"}, "files": {"nodes": [{"path": p}]}}
+                          for n, h, who, p in ((51, "h51", "ann", "db/migrations/003_x.sql"),
+                                               (52, "h52", "bo", "src/app.py"))]}}}}
+        R.gh_json = lambda *a: page if a[0] == "graphql" else (
+            [{"filename": "db/migrations/003_x.sql", "patch": "@@ -0,0 +1 @@\n+INSERT INTO \"app\".\"kinds\" VALUES (9, 'z');"}]
+            if "/51/" in a[0] else self.fail(f"unexpected fetch {a}"))
+        r = R.count_collisions(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo), me="me")
+        self.assertEqual(r["status"], "warn", r)
+        self.assertIn("#51 by ann (https://github.com/o/r/pull/51) writes rows to app.kinds", r["evidence"])
+        self.assertNotIn("#52", r["evidence"])                            # touched no SQL: never fetched
+        self.assertEqual(U.read_json(os.path.join(U.HOME, "cache", "pr-writes", "o__r", "51.json"))["head"], "h51")
+
+    def test_falsifiers(self):
+        cases = {
+            "filtered to own keys": "n=$(psql -tAc \"select count(*) from app.kinds where kind = 'mine'\")\n[ \"$n\" -eq 1 ] || exit 1\n",
+            "filtered on the next line": "n=$(psql -tAc \"select count(*) from app.kinds\n where id in (1, 2)\")\n[ \"$n\" -eq 2 ] || exit 1\n",
+            "other table": "n=$(psql -tAc \"select count(*) from app.colors\")\n[ \"$n\" -eq 2 ] || exit 1\n",
+            "local temp table": "psql -c \"create temp table kinds (id int)\"\nn=$(psql -tAc \"select count(*) from kinds\")\n[ \"$n\" -eq 0 ] || exit 1\n",
+            "no asserted number": "psql -tAc \"select count(*) from app.kinds\" > counts.txt\n",
+        }
+        for label, gate in cases.items():
+            with self.subTest(label):
+                repo, base = self._landed({"ci/gate_kinds.sh": gate}, "db/migrations/002_more.sql",
+                                          "insert into app.kinds values (3, 'c');\n")
+                r = R.count_collisions(repo, base, self._files(repo, f"{base}..HEAD"), offline=True, base_ref="main")
+                self.assertIn(r["status"], ("na", "pass"), r)
+
+    def test_table_the_test_file_creates_outside_the_diff_is_local(self):
+        gate = "psql -c \"create temp table kinds (id int)\"\n"
+        repo = make_repo({"db/migrations/001_seed.sql": self.SEED, "ci/gate_kinds.sh": gate},
+                         {"ci/gate_kinds.sh": gate + "n=$(psql -tAc \"select count(*) from kinds\")\n[ \"$n\" -eq 0 ] || exit 1\n"})
+        r = R.count_collisions(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo), offline=True)
+        self.assertEqual(r["status"], "na", r)
+
+    def test_system_catalog_counts_are_ignored(self):
+        repo = make_repo({"a.py": "x = 1\n"}, {"tests/test_conn.py":
+                         'def test_conns(db):\n    assert db.one("select count(*) from pg_stat_activity") == 1\n'})
+        r = R.count_collisions(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo), offline=True)
+        self.assertEqual(r["status"], "na", r)
+
+    def test_same_name_in_another_schema_does_not_count(self):
+        repo, base = self._landed({"ci/gate_kinds.sh": self.GATE}, "db/migrations/002_more.sql",
+                                  "insert into audit.kinds values (3, 'c');\n")
+        r = R.count_collisions(repo, base, self._files(repo, f"{base}..HEAD"), offline=True, base_ref="main")
+        self.assertEqual(r["status"], "pass", r)
+
+    def test_rows_written_by_a_test_fixture_do_not_count(self):
+        repo, base = self._landed({"ci/gate_kinds.sh": self.GATE}, "tests/fixtures/kinds.sql",
+                                  "insert into app.kinds values (3, 'c');\n")
+        r = R.count_collisions(repo, base, self._files(repo, f"{base}..HEAD"), offline=True, base_ref="main")
+        self.assertEqual(r["status"], "pass", r)
+
+    def test_count_in_non_test_code_is_na(self):
+        repo = make_repo({"a.py": "x = 1\n"}, {"src/report.py": 'q = "select count(*) from app.kinds"\nassert q\nLIMIT = 2\n'})
+        r = R.count_collisions(repo, sh(repo, "git", "rev-parse", "main"), self._files(repo), offline=True)
+        self.assertEqual(r["status"], "na", r)
+
+    def test_wired_into_evaluate(self):
+        repo = make_repo({"a.py": "x = 1\n"}, {"a.py": "x = 2\n"})
+        names = [i["item"] for i in R.evaluate(repo, "p", sh(repo, "git", "rev-parse", "main"),
+                                                 self._files(repo), offline=True)["items"]]
+        self.assertIn("no other change moves a table a test counts", names)
+
+
 if __name__ == "__main__":
     unittest.main()
 
