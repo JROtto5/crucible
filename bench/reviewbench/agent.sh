@@ -21,3 +21,10 @@ rc=$?
 tail -n 5 /tmp/review.log
 echo "crucible exit $rc"
 python /agent/to_findings.py "$CRUCIBLE_HOME" > "$RB_OUT"
+out_rc=$?
+# RB_CONFIG_KEEP_REVIEW=1: leave crucible's review.json beside the findings (for private scoring of the nit tier;
+# the judge reads only findings.json)
+if [ "${RB_CONFIG_KEEP_REVIEW:-0}" = 1 ]; then
+  find "$CRUCIBLE_HOME/reviews" -name review.json -path "*/$RB_HEAD/*" -exec cp {} "$(dirname "$RB_OUT")/review.json" \; 2>/dev/null
+fi
+exit $out_rc
