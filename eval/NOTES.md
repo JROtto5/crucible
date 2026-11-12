@@ -418,3 +418,35 @@ Local eval with all of it (`crucible eval --nits`, 20 cases, one round, 2026-11-
 Re-run plan (pending the account): the same 25 PRs with `--nits` and the checklists, 3 rounds if the budget allows,
 reporting grounded/augmented P and R, recall by severity and category, comments per PR, and $ per PR (mean, median,
 max) next to the 11-11 row. Then the deep setting (`--no-tiers`) on a subset, to price the rest of the curve.
+
+### 2026-11-12 · py-race severity and the nit floor (local), and ReviewBench run 2 (reviews done, judge pending)
+
+**py-race: the checklists did not move it.** Tonight's first two runs (HEAD, `--nits`) split: one rated the lost
+update important, one medium. A/B on the same case, 4 runs per arm, `--nits` on in both: ea91f7a (before the
+checklists) rated the race itself blocking in 2/4 runs, HEAD in 2/4 (scored "caught" 3/4 vs 2/4, because a blocking
+"no concurrency test" finding also matches the case). The 11-09 three-arm run also missed it at blocking before any
+checklist existed. It is a coin-flip severity call in both arms, so there is no prompt change: tuning the prompt on
+one build case would be fitting noise. $1.87 for the A/B.
+
+**Nit floor: high confidence only** (594332a). eval now records each kept nit (b0f473e). All 6 clean cases × 2 runs:
+6 nits kept, both medium-confidence keeps were taste ("no test for a job that finishes mid-wait", "a doc comment
+mentions the previous behaviour"), plus one high-confidence one ("docstring says stopped"). The other 3 were real (dead
+`JobSet.clear()`, `timeout=None` raises TypeError, an all-separator slug is now empty and untested). With the floor
+at high, the same 12 runs kept 5, all real, at the same cost ($0.14 per clean case). `CRUCIBLE_NITS_MIN_CONFIDENCE=medium`
+restores the old floor.
+
+**ReviewBench run 2 (stopped at the account's limit before judging).** Same 25 test PRs, image at 54785aa (`--nits`,
+checklists, no cap, $5 budget per PR; built **before** the high-only floor, so it keeps medium-confidence nits too),
+`RB_CONFIG_KEEP_REVIEW=1` so each PR's review.json is kept. The run used #12, with a stop at 85% weekly, and that stop
+fired during PR 24 (66% → 85% over 24 PRs). PR 24 and the judge did not run. Measured so far, review side only:
+
+| | run 1 (11-11, 25 PRs) | run 2 (11-12, 24 PRs) |
+|---|---|---|
+| comments per PR | 11.7 | 15.3 (234 findings + 133 nits) |
+| $ per PR mean / median / max | $1.97 / $1.15 / $8.04 | $1.83 / $1.17 / $5.09 |
+| PRs at the $ cap | 1 (at $8) | 2 (PR 1, PR 13, at $5) |
+| wall per PR mean / median / max | 540 / 285 / 2,297 s | 455 / 286 / 1,466 s |
+| nit verification | – | $2.72 total; 133 kept (73 high, 60 medium confidence), 49 dropped, 28 unverified (cap) |
+
+The two capped PRs ran out of budget before nit verification, so PR 1 has no nits. Judge pending: the 24 findings
+files and review.json sidecars are kept on the bench host, so judging needs no re-review.
