@@ -1115,7 +1115,9 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 return (f,) + verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo, b, tiers, fresh,
                                             since, dctx and dctx[0], no_exec=no_exec) + (None,)
             except Failed as e:
-                if b is held and held.exhausted() and not budget.exhausted():
+                # only claude()'s pre-call refusal is the hold: a call that ran and failed (its own --max-budget-usd
+                # cut, a timeout) keeps its real reason and counts as an attempt
+                if str(e) == "budget exhausted" and b is held and not budget.exhausted():
                     return f, None, [], HELD_REASON
                 return f, None, [], str(e)
         if to_verify:
@@ -1126,7 +1128,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                         # re-runs of this commit split against the same earlier review every time, so its count
                         # alone would never grow: this commit's own stored count wins when larger
                         n = max(f["verification"].get("attempts", 1) if verify_failed(f) else 0, attempts.get(f["id"], 0))
-                        # a held finding made no call: a re-run with a bigger budget should still try it
+                        # the hold refused this call: a re-run with a bigger budget should still try it
                         f["verification"] = {"status": "unverified", "reason": err, "attempts": n + (err != HELD_REASON)}
                         kept.append(f)
                     elif v.get("salvaged") and not v["keep"]:   # second-hand: a transcription never drops a finding
@@ -1152,7 +1154,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
 
             def recheck(f):
                 try:
-                    v, trail = verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo, held, tiers[:1], fresh, since,
+                    v, trail = verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo,
+                                            budget if f["severity"] in BLOCKING else held, tiers[:1], fresh, since,
                                             dctx and dctx[0], no_exec=no_exec)
                     return f, v
                 except Failed:

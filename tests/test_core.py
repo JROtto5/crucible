@@ -6015,7 +6015,7 @@ class TestNitTier(unittest.TestCase):
                 "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "w", "fix": "x"}
 
     def _run(self, nits_out, verdicts=None, nits=True, env=None, fail_batch=False, budget=None, findings=1, verify_cost=0.0,
-             review_cost=0.0):
+             review_cost=0.0, verify_error=None):
         """-> (review.json, calls). The fake reviewer returns one important finding and `nits_out` as nits; the nit
         verifier answers `verdicts` (index -> (keep, confidence)), default keep/high for every nit."""
         from unittest import mock
@@ -6046,6 +6046,8 @@ class TestNitTier(unittest.TestCase):
                                      for i in range(n) if vs.get(i, (True, "high")) is not None]}, 0.05
             if budget is not None:
                 budget.add(verify_cost)
+            if verify_error:
+                raise U.Failed(verify_error)
             return {"keep": True, "severity": "important", "method": "read", "actions": "", "evidence": "e",
                     "confidence": "high"}, 0.02
         home = tempfile.mkdtemp(prefix="crucible-home-")
@@ -6159,6 +6161,13 @@ class TestNitTier(unittest.TestCase):
         r, _ = self._run([self._f("a nit", 2)], budget=0.3, findings=2, review_cost=0.28)
         status = {f["title"]: f["verification"]["status"] for f in r["findings"]}
         self.assertEqual(status, {"division by zero in f": "verified", "unclosed socket in g": "unverified"})
+
+    def test_a_call_that_ran_and_failed_keeps_its_reason_at_the_hold_edge(self):
+        # $1 budget, $0.15 held: two calls run, spend $0.45 each and time out. That leaves $0.10, past the hold line
+        # but not the budget's end, and the medium finding's real failure must not be relabelled as held
+        r, _ = self._run([self._f("a nit", 2)], budget=1.0, findings=2, verify_cost=0.45, verify_error="timed out")
+        self.assertEqual([(f["verification"]["reason"], f["verification"]["attempts"]) for f in r["findings"]],
+                         [("timed out", 1), ("timed out", 1)])
 
     def test_no_reserve_without_a_limit_or_nits(self):
         self.assertEqual(V.nits_reserve_usd(None, 30), 0.0)
