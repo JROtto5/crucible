@@ -48,6 +48,24 @@ So 0 of 13 rounds were judged against a base that had moved in their own files, 
 after a rebase. The "na" bucket is a blind spot: a re-review against the previous round's head never checks
 upstream. The 11-13 week-wide split still needs the other projects' rounds.
 
+## 2026-11-11 · base-moved split, second slice: every other project's round since 11-06 (stored readiness data, $0)
+
+Same method as the first slice: the `base branch hasn't moved under the change` item in each
+~/.crucible/reviews/<project>/<sha>/review.json with `started` >= 2026-11-06. 240 rounds; 144 are crucible
+reviewing its own repo, so they're listed apart from the 96 upstream rounds.
+
+| bucket | upstream rounds | round ids / projects | crucible self-review |
+|---|---|---|---|
+| moved + overlap (warn) | **3** | pyinfra 4c9f7cf0a4, 5c62b86344, 8ad9760932 (11-11 11:08-11:37; 276 commits on 3.x, 5 in touched files) | 0 |
+| moved elsewhere | 1 | lutris 03ff8a7874 | 0 |
+| unchanged | 11 | colyseus/schema 10, maplibre-gl-js 1 | 11 |
+| na (base not a remote-tracking ref) | 4 | lutris 2, maplibre-gl-js 2 | 40 |
+| not recorded (round predates the item) | 77 | supavisor 22, lutris 26, gamescope 9, MangoHud 6, Heroic 5, colyseus 5, three.js 2, phaser 1, supabase 1 | 93 |
+
+Week total with the first slice: 3 moved+overlap (all pyinfra), 6 moved elsewhere, 15 unchanged, 8 na, 77 not recorded
+(upstream only). Still open for the 11-13 note: whether any of the 3 pyinfra rounds changed a finding after a rebase
+(needs a re-run on the rebased head, not $0).
+
 ## 2026-11-11 · incremental re-review prompt (DRG-63): one amended round replayed before/after
 
 `crucible eval` only builds full reviews and `model-replay` skips incremental rounds, so neither can measure the
