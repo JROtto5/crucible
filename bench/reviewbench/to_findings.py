@@ -14,10 +14,12 @@ def find_review(home, head):
 
 
 def to_findings(review, agent="crucible", cap=MAX_FINDINGS):
-    """Line-anchored findings, most severe first (a stable sort: review.json's own order within a severity)."""
-    rows = sorted(review.get("findings") or [], key=lambda f: SEV.index(f["severity"]) if f.get("severity") in SEV else len(SEV))
+    """Line-anchored findings, most severe first (a stable sort: review.json's own order within a severity). Verified
+    nits (the --nits tier) follow the findings of the same severity, so a cap drops nits before findings."""
+    rows = [(f, 0) for f in review.get("findings") or []] + [(f, 1) for f in review.get("nits") or []]
+    rows.sort(key=lambda r: (SEV.index(r[0]["severity"]) if r[0].get("severity") in SEV else len(SEV), r[1]))
     out = []
-    for f in rows:
+    for f, _ in rows:
         path, line = f.get("file"), f.get("line")
         if not path or path == "PR_DRAFT.md" or not isinstance(line, int) or line < 1:
             continue  # PR-text findings and file-level notes have no place in a line-anchored benchmark
@@ -36,7 +38,9 @@ def main(home):
     findings = []
     if review:
         findings = to_findings(review, agent)
-        print(f"kept {len(findings)} of {len(review.get('findings') or [])} findings; cost ${review.get('cost_usd', 0):.2f}", file=sys.stderr)
+        n, nits = len(review.get("findings") or []), len(review.get("nits") or [])
+        print(f"kept {len(findings)} of {n} findings + {nits} nits; cost ${review.get('cost_usd', 0):.2f} "
+              f"(nits ${review.get('cost_nits_usd', 0):.2f})", file=sys.stderr)
     pr = json.load(open(os.environ["RB_PR_JSON"]))
     print(json.dumps({"pr": {"repo": pr.get("repo") or f"https://github.com/{os.environ['RB_NWO']}",
                              "pr_number": int(os.environ["RB_PR_NUMBER"]), "base": os.environ["RB_BASE"], "head": head},

@@ -31,7 +31,8 @@ def cmd_review(a):
     from .review import run_review
     try:
         run_review(_p(a.repo), a.base, a.force, a.budget, a.author, a.draft, a.base_checks, a.offline, a.skip_checks,
-                   full=a.full, fresh=a.fresh, no_tiers=a.no_tiers, route=a.route or None, no_exec=a.no_exec)
+                   full=a.full, fresh=a.fresh, no_tiers=a.no_tiers, route=a.route or None, no_exec=a.no_exec,
+                   nits=a.nits or None)
     except Failed as e:
         sys.exit(f"crucible: {e}")
     return cmd_status(a)
@@ -226,6 +227,9 @@ def main(argv=None):
     r.add_argument("--full", action="store_true", help="review the whole change, not just what changed since the last review")
     r.add_argument("--fresh", action="store_true", help="redo the review and bypass the review/verification cache (--force alone reuses it, so verdicts are stable)")
     r.add_argument("--no-tiers", action="store_true", help="verify every finding with the strong model only")
+    r.add_argument("--nits", action="store_true", help="also report verified non-blocking nits as a separate tier (they "
+                   "never change the verdict; CRUCIBLE_NITS=1; their verification is capped by CRUCIBLE_NITS_MAX_USD, "
+                   "default $0.75)")
     r.add_argument("--route", action="store_true", help="route by change type: a docs/PR-text-only round gets one cheaper "
                    "pass (also CRUCIBLE_ROUTE=1); see `crucible routing-replay`")
     st = s.add_parser("status", help="print the stored report for HEAD (exit 0 when GREEN)")
@@ -286,6 +290,7 @@ def main(argv=None):
     ev.add_argument("--split", choices=("build", "holdout"), help="run only build or only held-out cases (default: both)")
     ev.add_argument("--review-model"); ev.add_argument("--verify-model"); ev.add_argument("--cheap-model")
     ev.add_argument("--no-tiers", action="store_true"); ev.add_argument("--budget", type=float, default=1.5)
+    ev.add_argument("--nits", action="store_true", help="run the reviews with --nits (scored: nit count, cost, nits on clean cases)")
     ev.add_argument("--jobs", type=int, default=4); ev.add_argument("--label")
     ev.add_argument("--cache", help="shared review/verification cache dir across cases and runs (default: none)")
     ev.add_argument("--no-write", action="store_true", help="don't update eval/RESULTS.md and history")

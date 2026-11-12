@@ -39,6 +39,153 @@ VERIFY_SCHEMA = {"type": "object", "properties": {
 
 SALVAGE_MODEL = MODELS["haiku"]
 
+# ---------- nits: the recall tier (--nits / CRUCIBLE_NITS=1) ----------
+# The review prompt asks for what a strict maintainer would raise, ranked and capped at 10 per pass, and that is what
+# blocks or doesn't. Smaller real problems (an unhandled edge, a comment the code no longer matches, a missing doc
+# for a new public function) mostly never get written down: ReviewBench 2026-11-11 found 27% of its low-severity
+# golden issues. With --nits the same review call also lists them separately; they are verified (batched, read-only,
+# on the mid model, under their own $ cap), kept apart from findings, and never change the verdict. Off by default,
+# and with it off every prompt, schema and cache key is byte-identical to before.
+NITS_MAX_PER_PASS = 10
+NIT_BATCH = 12                       # nits per verification call
+NIT_PAD = 15                         # lines of context each side of a nit (findings get 40)
+NITS_SCHEMA = {"type": "array", "maxItems": NITS_MAX_PER_PASS, "items": {
+    **FINDINGS_SCHEMA["properties"]["findings"]["items"],
+    "properties": {**FINDINGS_SCHEMA["properties"]["findings"]["items"]["properties"],
+                   "severity": {"type": "string", "enum": ["medium", "low"]}}}}
+FINDINGS_NITS_SCHEMA = {**FINDINGS_SCHEMA, "properties": {**FINDINGS_SCHEMA["properties"], "nits": NITS_SCHEMA},
+                        "required": FINDINGS_SCHEMA["required"] + ["nits"]}
+NITS_NOTE = """
+        Second tier, "nits" (at most 10, separate from findings): smaller REAL problems a careful reviewer would
+        comment on but not block on: an unhandled edge case, a misleading name, comment or docstring, docs or README
+        text the change made wrong, a missing doc or test for a new public function, inconsistent error handling, a
+        small leak or perf waste, fragile code. Same rules as findings: a line in the NEW file, caused by this change,
+        and a "wrong_if". Severity medium or low only. Never a pure style/formatting preference and never a repeat of
+        a finding. Each nit is checked separately, so don't pad; an empty list is fine.
+"""
+NIT_VERDICTS_SCHEMA = {"type": "object", "properties": {"verdicts": {"type": "array", "items": {
+    "type": "object", "properties": {
+        "index": {"type": "integer"}, "keep": {"type": "boolean"},
+        "severity": {"type": "string", "enum": ["medium", "low"]},
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+        "evidence": {"type": "string"}},
+    "required": ["index", "keep", "severity", "confidence", "evidence"]}}}, "required": ["verdicts"]}
+
+
+def nits_enabled(flag=None):
+    """--nits wins; otherwise CRUCIBLE_NITS (1/true/yes)."""
+    if flag is not None:
+        return bool(flag)
+    return os.environ.get("CRUCIBLE_NITS", "").strip().lower() in ("1", "true", "yes")
+
+
+def nits_model(authors=()):
+    """The nit verifier: the mid model (CRUCIBLE_NITS_VERIFY_MODEL), unless it wrote the change."""
+    m = os.environ.get("CRUCIBLE_NITS_VERIFY_MODEL", MODELS["sonnet"])
+    return next((x for x in [m] + PREFERENCE if x not in authors), m)
+
+
+def nits_cap_usd():
+    """USD the nit verification of one review may spend (CRUCIBLE_NITS_MAX_USD, default 0.75)."""
+    try:
+        return max(0.0, float(os.environ.get("CRUCIBLE_NITS_MAX_USD", "0.75")))
+    except ValueError:
+        return 0.75
+
+
+class SubBudget:
+    """A cap inside the review's budget: calls count against both, and stop at whichever runs out first. Nits are
+    verified after the findings, so they can only spend what the findings left, and at most `cap` of it."""
+    def __init__(self, parent, cap):
+        self.parent, self.cap, self.own = parent, cap, 0.0
+
+    def remaining(self):
+        left = self.cap - self.own
+        pr = self.parent.remaining()
+        return max(0.0, left if pr is None else min(left, pr))
+
+    def exhausted(self):
+        return self.remaining() <= 0.0
+
+    def add(self, c):
+        self.own += c or 0
+        self.parent.add(c)
+
+    def __getattr__(self, name):        # meter, cached_call, snapshots: the parent's
+        return getattr(self.parent, name)
+
+
+def nit_verify_prompt(batch):
+    claims = "\n\n".join(
+        f"[{i}] {f['title']} (at {f['file']}:{f['line']}, proposed severity {f['severity']})\n"
+        f"Falsification test: {f['wrong_if']}\nCode around the cited line at HEAD:\n{code}"
+        for i, (f, code) in enumerate(batch))
+    return textwrap.dedent("""\
+        You are verifying {n} small claims ("nits") about a code change in this checkout. Try hard to DISPROVE each.
+        For each claim, read the cited code (and its callers, tests or docs where the claim depends on them). Keep a
+        claim only if it is literally true of the code at HEAD, caused by this change, and worth a reviewer's comment
+        (not a matter of taste). confidence is high only if you checked it directly and the result is unambiguous.
+        Do not modify files. Return one verdict per claim, by its [index].
+
+        """).format(n=len(batch)) + claims + "\n"
+
+
+def verify_nits(nits, codes, repo, budget, model, fresh=False):
+    """-> (kept, dropped). Batched read-only verification of the nit tier. A nit is kept only on keep=true with high
+    or medium confidence; one with no verdict (a failed call, the cap reached, a skipped index) is dropped as
+    unverified, not kept: the nit tier never fails open, so its precision is the verifier's."""
+    kept, dropped = [], []
+    for start in range(0, len(nits), NIT_BATCH):
+        batch = list(zip(nits[start:start + NIT_BATCH], codes[start:start + NIT_BATCH]))
+        prompt = nit_verify_prompt(batch)
+        key = "n-" + hashlib.sha256((model + prompt).encode()).hexdigest()[:32]
+        out = None if fresh else cache_hit(key, budget, "verify_nits")
+        err = None
+        if out is None:
+            try:
+                out, _ = claude(prompt, model, NIT_VERDICTS_SCHEMA, repo, budget, tools=TOOLS_READ, effort="medium",
+                                timeout=900, kind="verify_nits")
+                cache_put(key, out)
+            except Failed as e:
+                err = str(e)
+        by_index = {v.get("index"): v for v in (out or {}).get("verdicts") or []}
+        for i, (f, _) in enumerate(batch):
+            v = by_index.get(i)
+            if v is None:
+                f["verification"] = {"status": "unverified", "reason": err or "no verdict returned"}
+                dropped.append(f)
+            elif v["keep"] and v.get("confidence") in ("high", "medium"):
+                f["severity"] = v["severity"]
+                f["verification"] = {"status": "verified", "method": "read", "evidence": v["evidence"],
+                                     "confidence": v["confidence"], "model": model}
+                kept.append(f)
+            else:
+                f["verification"] = {"status": "dropped", "method": "read", "evidence": v["evidence"],
+                                     "confidence": v.get("confidence"), "model": model}
+                dropped.append(f)
+    return kept, dropped
+
+
+def run_nits(nit_cands, findings, repo, sha, dctx, dlabel, measured, budget, authors, fresh=False, log=print):
+    """-> the record fields of the nit tier. Nits that repeat a finding (kept or not) or each other are left out,
+    so is a description-length nit (the length check owns that), and the rest are verified under their own cap."""
+    nits = [f for f in dedupe([dict(f, source="review") for f in nit_cands]) if not any(similar(f, g) for g in findings)]
+    nits = [dict(f, source="nit") for f in nits if not (measured and length_only(f, dlabel))]
+    for f in assign_ids(nits):
+        f.setdefault("proposed_severity", f["severity"])
+        f["id"] = "NIT" + f["id"][2:]              # CR-1a2b3c4d -> NIT-1a2b3c4d: never an answerable finding id
+    model, cap = nits_model(authors), nits_cap_usd()
+    sub = SubBudget(budget, cap)
+    if nits:
+        log(f"  verifying {len(nits)} nit(s) in batches of {NIT_BATCH} ({model}, read-only, cap ${cap:.2f})")
+    codes = [region(repo, sha, f["file"], f["line"], pad=NIT_PAD, draft=dctx) for f in nits]
+    kept, dropped = verify_nits(nits, codes, repo, sub, model, fresh) if nits else ([], [])
+    kept.sort(key=lambda f: SEV.index(f["severity"]))
+    unverified = sum(1 for f in dropped if f["verification"]["status"] == "unverified")
+    if unverified:
+        log(f"  {unverified} nit(s) not verified ({dropped[0]['verification'].get('reason', '')[:160]}); left out")
+    return {"nits": kept, "nits_dropped": dropped, "nits_model": model, "cost_nits_usd": round(sub.own, 4)}
+
 
 # ---------- models ----------
 def author_models(repo, base):
@@ -195,11 +342,11 @@ def assign_ids(findings):
 
 # ---------- pipeline ----------
 def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, house="", draft="", draft_file="PR_DRAFT.md",
-                  length_measured=True, since=""):
+                  length_measured=True, since="", nits=False):
     # with no learned median the length check can't judge, so the reviewer still may (see length_only)
     length = ("Don't report the description's length: crucible measures it against this project's merged\n"
               "        PRs and reports it separately." if length_measured else "Also flag length far from the project norm.")
-    return textwrap.dedent(f"""\
+    p = textwrap.dedent(f"""\
         You are a strict senior maintainer of {project.replace('__', '/')} reviewing an outside contributor's change
         BEFORE it is submitted upstream. The checkout is at the change's HEAD ({sha[:10]}); the base is {base[:10]}.
 
@@ -245,6 +392,10 @@ def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, hou
         Diff for this pass:
         {ch['text']}
         """)
+    if not nits:                        # unchanged without --nits, so cached review passes still match
+        return p
+    anchor = "so a later round re-checks it there.\n"
+    return p.replace(anchor, anchor + textwrap.dedent(NITS_NOTE), 1)
 
 
 # An incremental round shows the reviewer only what changed since the last reviewed commit. Unlabelled, that
@@ -630,7 +781,7 @@ def anchor_since(repo, prev_sha, f, base=None):
             f"Changes since {prev_sha[:10]} in those files:\n{patch[:6000]}")
 
 
-def review_inputs(repo, base, draft=None, no_exec=False):
+def review_inputs(repo, base, draft=None, no_exec=False, nits=False):
     """What a verdict depends on besides the commit. PR_DRAFT.md is untracked, so editing it doesn't move HEAD;
     without this a rerun returned the old verdict for a draft it never read (real-use bug i). `no_exec` is recorded
     only when set, so reviews stored before it existed still match a default run."""
@@ -642,7 +793,7 @@ def review_inputs(repo, base, draft=None, no_exec=False):
     text = readiness.submitted_text(text)
     return {"base": base, "draft": os.path.abspath(path) if path else None,
             "draft_sha": hashlib.sha256(text.encode()).hexdigest()[:16] if path else None,
-            **({"no_exec": True} if no_exec else {})}
+            **({"no_exec": True} if no_exec else {}), **({"nits": True} if nits else {})}
 
 
 def verify_failed(f):
@@ -686,18 +837,23 @@ def stale_inputs(prev, inputs):
     # reverse is fine (--no-exec only promises that nothing runs now)
     if old.get("no_exec") and not inputs.get("no_exec"):
         return "its verification was read-only (--no-exec)"
+    if inputs.get("nits") and not old.get("nits"):     # the reverse is fine: a review with nits has every finding
+        return "it was reviewed without --nits"
     return None
 
 
 def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, draft=None, base_checks=False,
                offline=False, skip_checks=False, log=print, full=False, fresh=False, no_tiers=False, route=None,
-               no_exec=False):
+               no_exec=False, nits=None):
     """full: ignore the previous review of this branch (no incremental re-review).
     fresh: bypass the review/verification cache. no_tiers: verify with the strong model only.
     route: route by change type (routing.py); None reads CRUCIBLE_ROUTE.
     no_exec (or CRUCIBLE_NO_EXEC=1): nothing from the checkout is executed: no project checks, and the verifier
-    only reads. skip_checks alone stops the project's lint/test commands but not the verifier's probes."""
+    only reads. skip_checks alone stops the project's lint/test commands but not the verifier's probes.
+    nits (or CRUCIBLE_NITS=1): also ask for, verify and store the non-blocking nit tier (record["nits"]); the
+    findings and the verdict are the same as without it. Nits come from this round's passes only (not carried)."""
     route = routing.enabled(route)
+    nits = nits_enabled(nits)
     no_exec = bool(no_exec) or os.environ.get("CRUCIBLE_NO_EXEC", "0") == "1"
     skip_checks = skip_checks or no_exec            # the project's lint/test commands are code from the checkout too
     repo = os.path.abspath(repo)
@@ -715,7 +871,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         raise Failed("a review of this commit is already running")
-    inputs = review_inputs(repo, base, draft, no_exec)
+    inputs = review_inputs(repo, base, draft, no_exec, nits)
     before = read_json(os.path.join(d, "review.json")) or {}
     # failed verifier attempts so far, by finding id, so a recurring failure stops being retried (ids are stable)
     attempts = {f["id"]: f["verification"].get("attempts", 1) for f in before.get("findings") or [] if verify_failed(f)}
@@ -808,7 +964,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             record["route"] = {"kind": kind, "review_model": review_model, "verify_tiers": tiers}
             record["review_model"] = review_model
             log(f"  route: {kind} change → review {review_model}, verify {' → '.join(tiers)}")
-        cands, chunk_status, summaries = list(scanner) + house_findings, [], []
+        cands, chunk_status, summaries, nit_cands = list(scanner) + house_findings, [], [], []
         measured = length_measured(style_json)
         fkey, review_cost = facts_key(chk), 0.0
         tok_before = budget.token_snapshot()       # review passes run one after another, before any verification
@@ -816,11 +972,11 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         for i, ch in enumerate(chunks, 1):
             since = since_note(prev_sha, record["incremental"]["amended"], ch, full_texts, base) if prev_sha else ""
             prompt = review_prompt(project, sha, base, ch, rules, mem, facts, clog, all_files, house,
-                                   draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured, since)
+                                   draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured, since, nits)
             # keyed on the prompt with check output reduced to outcomes: a template change invalidates the cache, but
             # volatile output (timings) doesn't, so --force on the same commit is stable
             key_prompt = review_prompt(project, sha, base, ch, rules, mem, fkey, clog, all_files, house,
-                                       draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured, since)
+                                       draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured, since, nits)
             key = hashlib.sha256((review_model + "\0" + key_prompt).encode()).hexdigest()[:32]
             hit = None if fresh else cache_hit(key, budget, "review")
             if hit:
@@ -828,7 +984,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             else:
                 log(f"  review pass {i}/{len(chunks)}: {', '.join(ch['files'])[:90]}")
                 try:
-                    out, cost = claude(prompt, review_model, FINDINGS_SCHEMA, repo, budget, kind="review")
+                    out, cost = claude(prompt, review_model, FINDINGS_NITS_SCHEMA if nits else FINDINGS_SCHEMA, repo,
+                                       budget, kind="review")
                     review_cost += cost or 0
                     cache_put(key, out)
                 except Failed as e:
@@ -841,6 +998,13 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 if f["file"] == dlabel and draft_path:
                     f["line"] = readiness.draft_file_line(draft_full, f["line"])
                 cands.append(f)
+            for f in (out.get("nits") or [])[:NITS_MAX_PER_PASS] if nits else []:
+                f = cite_draft(dict(f, source="nit"), dlabel, repo, tracked)
+                if f.get("severity") not in ("medium", "low"):
+                    f["severity"] = "medium"
+                if f["file"] == dlabel and draft_path:
+                    f["line"] = readiness.draft_file_line(draft_full, f["line"])
+                nit_cands.append(f)
         tok_split = (tok_before, budget.token_snapshot())
         reviewed = {p for c in chunk_status if c["status"] == "reviewed" for p in c["files"]}
         if prev_sha:                                   # files untouched since the previous complete review stay covered
@@ -927,6 +1091,9 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                     elif v and not v.get("salvaged"):      # a transcription can't drop it, so it settled nothing
                         f["rechecked"] = tiers[0]
         kept.sort(key=lambda f: (SEV.index(f["severity"]), (f.get("verification") or {}).get("method") != "executed"))
+        if nits:
+            record.update(run_nits(nit_cands, cands + carried + reverify, repo, sha, dctx, dlabel, measured, budget,
+                                   authors, fresh, log))
         unsettled = [f for f in kept if verify_failed(f)]
         if unsettled:                                  # inserted first, so a failed review pass still leads
             why = (unsettled[0]["verification"].get("reason") or "no reason recorded")[:300]
@@ -1129,4 +1296,11 @@ def report(rev, ans, waivers=None):
         L += [f"- **{f['title']}** (`{f['file']}:{f['line']}`){transcribed_note(f['verification'])}: {f['verification']['evidence']}"
               for f in rev["dropped"]]
         L += ["", "</details>"]
+    if "nits" in rev:                      # only reviews run with --nits; they never count toward the verdict
+        L += ["", "## Nits (non-blocking, verified; not counted in the verdict)", ""]
+        L += [f"- {f['severity']} · `{f['file']}:{f['line']}` · **{f['title']}**: {f.get('problem', '')}"
+              + (f" Fix: {f['fix']}" if f.get("fix") else "") for f in rev["nits"]] or ["None."]
+        nd = rev.get("nits_dropped") or []
+        L += ["", f"{len(nd)} nit(s) dropped or unverified · nit verification ${rev.get('cost_nits_usd', 0)} "
+                  f"({rev.get('nits_model', '?')})"]
     return "\n".join(L) + "\n"

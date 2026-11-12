@@ -112,6 +112,9 @@ def score_case(rev, exp):
     out = {"ok": True, "cost": rev.get("cost_usd", 0), "cost_review": rev.get("cost_review_usd", 0),
            "cost_verify": rev.get("cost_verify_usd", 0), "kept": len(kept), "dropped": len(dropped),
            "blocking": len(blocking)}
+    if "nits" in rev:                  # a --nits run: the nit tier never blocks, so it is counted on its own
+        out.update(nits=len(rev["nits"]), nits_dropped=len(rev.get("nits_dropped") or []),
+                   cost_nits=rev.get("cost_nits_usd", 0), nit_hits=sum(1 for f in rev["nits"] if hits(f, exp)))
     if exp["kind"] == "bug":
         out["caught"] = any(hits(f, exp) for f in blocking)
         out["caught_any_severity"] = any(hits(f, exp) for f in kept)
@@ -141,6 +144,8 @@ def run_case(name, case_dir, exp, args, cache_dir):
                "--budget", str(args.budget)]
         if args.no_tiers:
             cmd.append("--no-tiers")
+        if getattr(args, "nits", False):
+            cmd.append("--nits")
         t0 = time.time()
         proc = subprocess.run(cmd, env=env, capture_output=True, text=True, cwd=os.path.dirname(EVAL_DIR), timeout=3600)
         secs = round(time.time() - t0, 1)
@@ -184,6 +189,10 @@ def summarize(results):
         "cost_review_usd": round(sum(r.get("cost_review", 0) or 0 for r in results), 3),
         "cost_verify_usd": round(sum(r.get("cost_verify", 0) or 0 for r in results), 3),
         "secs": round(sum(r.get("secs", 0) for r in results), 1),
+        **({"nits": sum(r.get("nits", 0) for r in results), "nits_on_clean": sum(r.get("nits", 0) for r in clean),
+            "nits_dropped": sum(r.get("nits_dropped", 0) for r in results),
+            "cost_nits_usd": round(sum(r.get("cost_nits", 0) or 0 for r in results), 3)}
+           if any("nits" in r for r in results) else {}),
         "by_split": {sp: _split_summary([r for r in results if r.get("split", "build") == sp])
                      for sp in SPLITS if any(r.get("split", "build") == sp for r in results)},
     }
@@ -269,6 +278,7 @@ def run_eval(args, log=print):
         os.makedirs(cache_dir, exist_ok=True)
     settings = {"review": args.review_model or "default", "verify": args.verify_model or "default",
                 "cheap": "off" if args.no_tiers else (args.cheap_model or "default"), "budget": args.budget,
+                **({"nits": True} if getattr(args, "nits", False) else {}),
                 "cases": len(cases), "split": getattr(args, "split", None) or "all", "subset": bool(args.cases), "shared_cache": bool(cache_dir)}
     log(f"crucible eval: {len(cases)} case(s) · {settings}")
     results = []
@@ -298,4 +308,7 @@ def run_eval(args, log=print):
         f"{summary['false_blocking']} · true dropped {summary['true_dropped']} · ${summary['cost_usd']} · {summary['secs']} s")
     for sp, ss in summary["by_split"].items():
         log(f"  {_fmt_split(sp, ss)}")
+    if "nits" in summary:
+        log(f"  nits kept {summary['nits']} ({summary['nits_on_clean']} on clean cases) · dropped {summary['nits_dropped']} "
+            f"· nit verification ${summary['cost_nits_usd']}")
     return summary
