@@ -419,7 +419,7 @@ Re-run plan (pending the account): the same 25 PRs with `--nits` and the checkli
 reporting grounded/augmented P and R, recall by severity and category, comments per PR, and $ per PR (mean, median,
 max) next to the 11-11 row. Then the deep setting (`--no-tiers`) on a subset, to price the rest of the curve.
 
-### 2026-11-12 · py-race severity and the nit floor (local), and ReviewBench run 2 (reviews done, judge pending)
+### 2026-11-12 · py-race severity, the nit floor, and ReviewBench run 2 (grounded R 41.1, aug F1 67.6, $1.77/PR)
 
 **py-race: the checklists did not move it.** Tonight's first two runs (HEAD, `--nits`) split: one rated the lost
 update important, one medium. A/B on the same case, 4 runs per arm, `--nits` on in both: ea91f7a (before the
@@ -428,7 +428,7 @@ checklists) rated the race itself blocking in 2/4 runs, HEAD in 2/4 (scored "cau
 checklist existed. It is a coin-flip severity call in both arms, so there is no prompt change: tuning the prompt on
 one build case would be fitting noise. $1.87 for the A/B.
 
-**Nit floor: high confidence only** (594332a). eval now records each kept nit (b0f473e). All 6 clean cases × 2 runs:
+**Nit floor: high confidence only** (594332a; reverted by 0ac25d7 after the judge, see below). eval now records each kept nit (b0f473e). All 6 clean cases × 2 runs:
 6 nits kept, both medium-confidence keeps were taste ("no test for a job that finishes mid-wait", "a doc comment
 mentions the previous behaviour"), plus one high-confidence one ("docstring says stopped"). The other 3 were real (dead
 `JobSet.clear()`, `timeout=None` raises TypeError, an all-separator slug is now empty and untested). With the floor
@@ -448,5 +448,63 @@ fired during PR 24 (66% → 85% over 24 PRs). PR 24 and the judge did not run. M
 | wall per PR mean / median / max | 540 / 285 / 2,297 s | 455 / 286 / 1,466 s |
 | nit verification | – | $2.72 total; 133 kept (73 high, 60 medium confidence), 49 dropped, 28 unverified (cap) |
 
-The two capped PRs ran out of budget before nit verification, so PR 1 has no nits. Judge pending: the 24 findings
-files and review.json sidecars are kept on the bench host, so judging needs no re-review.
+The two capped PRs ran out of budget before nit verification, so PR 1 has no nits. ARMOR then allowed #12 up to 92%
+for PR 24 and one judge pass (results below; the account ended at 86%).
+
+**ReviewBench run 2, judged** (25 PRs, `npm run judge --provider anthropic --model claude-sonnet-5`, 1 round, same
+golden set and judge prompts as run 1). Nits are told apart from findings with each PR's review.json; the two
+alternative columns are re-scored from the same judge verdicts (no re-judging): each candidate keeps its verdict, and
+golden coverage is the union of what the remaining candidates cover. That re-scoring reproduces run 1's official
+numbers exactly.
+
+| | run 1 (11-11) | **run 2 (11-12, as run)** | run 2, high-confidence nits only | run 2, no nits |
+|---|---|---|---|---|
+| grounded recall, macro | 32.9 | **41.1** | 37.4 | 27.8 |
+| grounded recall, micro (95% Wilson) | 32.7 (115/352, [28.0, 37.7]) | **38.6 (136/352, [33.7, 43.8])** | 35.5 | 27.0 |
+| grounded precision, macro / micro | 85.7 / 86.4 | **89.7 / 90.8** | 90.8 / 90.6 | 89.9 / 92.1 |
+| augmented precision / recall, macro | 84.0 / 46.8 | **86.3 / 55.6** | 84.9 / 50.1 | 82.9 / 38.9 |
+| augmented F1, macro | 60.1 | **67.6** | 63.0 | 52.9 |
+| comments per PR | 11.7 | 14.8 (239 findings + 130 nits) | 12.4 | 9.6 |
+| $ per PR mean / median / max | $1.97 / $1.15 / $8.04 | $1.77 / $1.11 / $5.09 | – | – |
+| wall per PR mean / median / max | 540 / 285 / 2,297 s | 441 / 246 / 1,466 s | – | – |
+
+Grounded recall (macro) by severity: high 54.0 → 61.0, medium 35.2 → 44.9, low 27.2 → 36.2 (n = 36 / 134 / 182). By
+category, run 1 → run 2: correctness 35.1 → 40.6 (133), reliability 37.6 → 45.3 (58), maintainability 35.4 → 39.2
+(44), testing 36.4 → 35.3 (35), security 21.2 → 20.4 (27; grounded precision 61.5 → 57.1 micro), documentation
+20.8 → 29.2 (21), api-architecture 12.5 → 25.0 (12), performance 31.2 → 56.2 (12), accessibility 27.8 → 38.9 (10).
+Checks executed: no (`--skip-checks`, as in run 1).
+
+Nits, by the judge (true = matched TP or novel TP):
+
+| | candidates | judged true | 95% Wilson |
+|---|---|---|---|
+| findings | 239 | 153 (64.0%) | [57.8, 69.8] |
+| nits, high confidence | 72 | 68 (94.4%) | [86.6, 97.8] |
+| nits, medium confidence | 58 | 56 (96.6%) | [88.3, 99.0] |
+
+The verifier dropped 77 nits (49 on its verdict, 28 unverified because the cap or budget ran out). 5 kept nits were not
+sent: the adapter leaves out nits with no line and nits on the PR text.
+
+Honest read:
+- The nit tier is the whole gain, and it is precise. Nits are 95% true by the judge, above the findings' 64% (the
+  findings' misses are mostly novel FPs in maintainability, where augmented precision is 37%). The nits add 13 points
+  of macro grounded recall and 15 of augmented F1, and grounded precision went up, not down.
+- **The high-only nit floor from earlier tonight (594332a) was wrong, and is reverted** (0ac25d7). Medium-confidence
+  nits are as precise as high ones (56/58), and dropping them costs 3.7 points of recall. 2 taste nits on 12 clean eval
+  runs was too small a sample to set the default.
+- Watch: findings alone did worse than in run 1 (macro grounded recall 27.8 vs 32.9). Two causes fit and one round
+  can't separate them: run-to-run noise, or the review call now filing borderline issues as nits rather than findings
+  (the dedupe only removes nits that repeat a finding). Either way the total went up.
+- Security did not improve (recall 20.4, precision 57.1), so the checklist's untrusted-input line didn't fix it.
+  api-architecture and documentation rose, on 12 and 21 golden issues.
+- Cost went down: mean $1.77 (the $5 cap held; PR 1 and PR 13 hit it before their nits were verified).
+
+Implied placement (caveat: 25 PRs vs 219, 1 round vs 3, our own judge run; the micro recall interval is ±5 points). The
+published rows are in grounded-recall order (#1 60.2, #2 53.5, #3 50.7, #5 46.3, #6 32.6, #8 28.0, #14 22.1), and so
+does augmented F1 for the rows below #3. Run 2 (grounded R 41.1 macro, augmented F1 67.6) lands between #5 Laude
+RevEngine (46.3 / 75.4) and #6 block/review (32.6 / 59.4): **about #6** (#4 is not in our notes, but sits at or above #5), up from just under block/review in run 1. To
+pass #5 it needs about 5 more points of grounded recall and 8 of augmented F1 at this precision. The top of the
+interval (43.8) still doesn't reach 46.3, so a top-5 claim isn't supported yet. Nothing was submitted.
+
+Spend: $44.22 for the 25 reviews (nit verification $2.76 of it) on #12 (66% → 86% weekly with the judge, which the
+judge CLI doesn't meter in $). Local, tonight: about $6.20 (py-race A/B, clean-case nit runs).
