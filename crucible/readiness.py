@@ -842,6 +842,13 @@ def base_moved(repo, base_ref, base):
         return _item(name, "warn", f"{remote}'s {branch} was rewritten: the merge-base {base[:10]} is no longer on it "
                      f"(tip {tip[:10]}). Rebase onto the new {base_ref} and re-run")
     n = git(repo, "rev-list", "--count", f"{base}..{tip}", check=False) or "?"
+    # every head commit already upstream (merged, or cherry-picked under a new SHA): a rebase empties the diff, so
+    # there's no "moved" to judge (11-12: the 3 pyinfra moved+overlap rounds were all merged-commit replays)
+    cherry = git(repo, "cherry", tip, "HEAD", base, check=False).split("\n")
+    cherry = [ln for ln in cherry if ln.strip()]
+    if cherry and not any(ln.startswith("+") for ln in cherry):
+        return _item(name, "na", f"replay: all {len(cherry)} commit(s) of this change are already on {remote}'s "
+                     f"{branch} (tip {tip[:10]}); rebasing would leave an empty diff")
     names = lambda a, b: set(git(repo, "diff", "--name-only", "-z", "--no-renames", a, b, check=False).split("\0")) - {""}
     both = sorted(names(base, tip) & names(base, "HEAD"))
     where = f"{n} commit(s) landed on {remote}'s {branch} since the merge-base {base[:10]} (tip {tip[:10]})"

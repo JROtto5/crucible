@@ -2066,6 +2066,17 @@ class TestClaimOwner(unittest.TestCase):
         r = R.base_moved(clone, "origin/main", base)
         self.assertEqual(r["status"], "pass", r); self.assertIn("none in the files", r["evidence"])
 
+    def test_base_moved_marks_merged_commit_replay(self):
+        # 11-12 pyinfra: the head's commit is already on upstream (same patch, new SHA), so it's a replay, not "moved"
+        up, clone, base, land = self._moved_base_fixture()
+        land("a.py", "x = 2\n")                                  # upstream merges the same change
+        r = R.base_moved(clone, "origin/main", base)
+        self.assertEqual(r["status"], "na", r); self.assertIn("replay", r["evidence"])
+        open(os.path.join(clone, "b.py"), "w").write("y = 9\n")  # one commit not upstream: back to the overlap check
+        sh(clone, "git", "commit", "-qam", "more")
+        r = R.base_moved(clone, "origin/main", base)
+        self.assertEqual(r["status"], "warn", r); self.assertIn("a.py", r["evidence"])
+
     def test_base_moved_rewritten_unreachable_and_local_bases(self):
         up, clone, base, land = self._moved_base_fixture()
         sh(up, "git", "commit", "-q", "--amend", "-m", "rewritten")       # force-pushed base: merge-base gone from it
