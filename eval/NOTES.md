@@ -301,3 +301,58 @@ Verdict: not shipped to the review path. The ship rule (no fixed/deferred findin
 | Fable 5.2 review | 27/28 [82%, 99%] | 0/12 [0%, 24%] | 4 | $5.29 | $0.39 | 28.0 min |
 
   Fable 5.2 missed py-pagination once at blocking severity (r1); every bug was found at some severity in both runs (28/28). Same recall as Sonnet (27/28) and within the Opus pick's interval (26/28); cost per caught bug is 9% above Sonnet and 22% above the Opus pick, wall time ~1.5x. Unlike BLAZE's 2.3x, the cost gap here is small, likely because the eval diffs are small (fewer findings to verify). Decision: no change; Sonnet stays for Opus-written PRs. The eval cases are all small single-bug diffs, so this says nothing about bigger PRs.
+
+## 2026-11-11 · ReviewBench test set, private offline run (johnr: "as good as OhMyBug but effective")
+
+[ReviewBench](https://github.com/review-bench/ReviewBench) (GitHub's open benchmark for AI reviewers) scores findings
+against a human-validated golden set with an LLM judge (Claude Sonnet 5, the leaderboard's judge). This run is
+**private and offline**: its own README says offline results "cannot be published on the leaderboard". Nothing was
+submitted.
+
+Setup: adapter in `bench/reviewbench/` (1fc53ec). crucible at main in a container on blaze-3, normal configuration
+(Opus review, tiered verification) plus the two changes the container forces: `--offline` (no GitHub API) and
+`--skip-checks` (dependencies not installed). Per-PR budget $8, timeout 55 min. Test set: their 25 PRs, 352 golden TPs.
+One round (the leaderboard averages 3). Judge: `npm run judge --provider anthropic --model claude-sonnet-5`.
+
+| | crucible (normal) |
+|---|---|
+| grounded recall (micro) | 32.7% (115/352, 95% Wilson [28.0, 37.7]) |
+| grounded precision (macro) | 85.7% |
+| augmented recall / precision (macro) | 46.8% / 84.0% |
+| augmented F1 (macro, computed) | 60.1 |
+| findings per PR | 11.7 (292 over 25) |
+| $ per PR (CLI `total_cost_usd`, list price) | mean $1.97, median $1.15, max $8.04; $49.22 for the 25 |
+| wall time per PR | mean 540 s, median 285 s, max 2,297 s |
+
+By severity (grounded recall): high 54.0%, medium 35.2%, low 27.2%. Weakest categories (grounded recall):
+api-architecture 12.5% (12 golden), documentation 20.8% (21), security 21.2% (27, grounded precision 42.9%);
+accessibility 27.8% (10). Best: reliability 37.6%, testing 36.4%, maintainability 35.4%, correctness 35.1%.
+
+Published leaderboard (official, full 219-PR set, 3 rounds, review-bench.ai/api/leaderboard on 11-11; it publishes no
+$ per PR):
+
+| reviewer | grounded P / R | augmented P / R | aug F1 | s / PR | comments / PR |
+|---|---|---|---|---|---|
+| #1 OhMyBug | 81.7 / 60.2 | 92.4 / 85.3 | 88.7 | 322 | 37.1 |
+| #2 diffox ultra | 78.3 / 53.5 | 81.6 / 75.5 | 78.4 | 87 | 20.1 |
+| #3 intent-review-agent | 81.8 / 50.7 | 87.7 / 74.8 | 80.7 | 213 | 17.6 |
+| #5 Laude RevEngine (Claude) | 83.6 / 46.3 | 90.8 / 64.5 | 75.4 | 182 | 11.4 |
+| #6 block/review | 88.7 / 32.6 | 91.1 / 44.1 | 59.4 | 197 | 5.9 |
+| #8 Copilot code review · Max | 87.8 / 28.0 | 88.3 / 40.4 | 55.5 | 973 | 7.1 |
+| #14 Qodo | 85.3 / 22.1 | 86.8 / 29.9 | 44.5 | 274 | 4.7 |
+| **crucible (this run, not comparable 1:1)** | 85.7 / 32.9 | 84.0 / 46.8 | 60.1 | 540 | 11.7 |
+
+Honest read:
+- crucible lands around the block/review line (#6): precision is top-tier, recall is not. OhMyBug finds about twice as
+  many golden issues (grounded R 60.2 vs 32.9) by posting ~3x as many comments at similar precision.
+- The cause is design, not a bug: crucible verifies and keeps findings it can defend, and its prompt aims at what a
+  maintainer would block on. The golden set is 52% low-severity, and crucible's low-severity recall is 27%.
+- Not comparable 1:1: 25 PRs vs 219, 1 round vs 3, our own judge run. The interval on recall is ±5 points.
+- Two adapter limits cost recall: findings are capped at 60 per PR (PR 1 kept 122), and `--skip-checks` removes the
+  executed project checks crucible normally uses.
+- Not run: a "deep" setting (`--no-tiers`, Opus verifying everything). Our pool accounts hit monthly spend limits
+  mid-run (#15, #16, #18; the reruns used #12, lent by ARMOR), so the cost/recall curve is still open.
+- Verdict: not ready to submit. Next: raise the cap, try a recall-oriented pass (more low/medium findings kept when
+  verified), add api-architecture and security guidance, then the deep setting, then re-run.
+- Spend: $49.22 for the 25 reviews, plus about $7 on attempts cut short by account limits, plus judge calls (not
+  metered by the judge CLI).
