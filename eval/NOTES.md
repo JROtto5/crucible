@@ -356,3 +356,47 @@ Honest read:
   verified), add api-architecture and security guidance, then the deep setting, then re-run.
 - Spend: $49.22 for the 25 reviews, plus about $7 on attempts cut short by account limits, plus judge calls (not
   metered by the judge CLI).
+
+### 2026-11-11 · recall changes after the ReviewBench run (ReviewBench re-run pending)
+
+What changed, and why (ReviewBench numbers above; each is its own commit):
+- **Adapter cap removed** (9fad8f7). `to_findings.py` no longer cuts at 60 per PR (PR 1 kept 122). Findings are
+  sorted by severity, so `RB_CONFIG_MAX_FINDINGS=N` drops the lowest first if a cap is wanted again.
+- **`--nits`, a verified non-blocking tier** (ea91f7a). The review prompt aims at what a strict maintainer would raise,
+  10 per pass, so small real problems are mostly never written down: low-severity recall was 27% on a golden set that
+  is 52% low. With `--nits` (or `CRUCIBLE_NITS=1`) the same review call also lists up to 10 nits per pass (medium/low:
+  edge cases, stale docs/comments, missing docs or tests for new public API, small leaks). Nits are deduped against
+  the findings, verified in batches of 12 per call on the mid model (Sonnet), read-only, under their own cap inside the
+  review budget (`CRUCIBLE_NITS_MAX_USD`, default $0.75), and kept only on keep + high/medium confidence; a nit with no
+  verdict is left out, not kept. They live in `review.json` `nits`, never touch the findings or the verdict, and with
+  the flag off every prompt, schema and cache key is unchanged. The ReviewBench adapter turns it on.
+- **Per-PR budget in the adapter $8 → $5.** The run's mean was $1.97 and one PR hit the $8 cap; nits verify after the
+  findings, so a tight budget cuts nits first.
+- **Short checklists in the review prompt** (f1c4081) for security (with "only with a concrete path from untrusted
+  input to the sink", aimed at the 42.9% security precision), API/architecture and docs. About 150 tokens per pass.
+
+Local eval with all of it (`crucible eval --nits`, 20 cases, one round, 2026-11-11 20:26):
+
+| | 2026-11-08 (18 cases, before) | 2026-11-11 (20 cases, --nits + checklists) |
+|---|---|---|
+| bug recall at blocking severity | 0.923 (12/13) | 0.857 (12/14) |
+| any-severity recall | 1.0 | 1.0 |
+| false blocking on clean cases | 0 | 0 (6 clean cases) |
+| true findings dropped by verification | 5 | 1 |
+| extra blocking findings on bug cases | 3 | 2 |
+| $ per case | $0.229 | $0.213 (nits $0.027 of it) |
+
+- Cost held: nit verification was $0.53 for 20 cases (13 kept, 10 dropped), and the total per case went down, within
+  run-to-run noise. The checklists did not visibly raise review cost.
+- The two blocking misses are severity calls, not detection: js-refcount (rated medium, as in every earlier run) and
+  py-race (the lost-increment race was found and kept, but at medium; it was important on 11-08). One round can't say
+  whether the checklists moved py-race; watch it on the next run.
+- Precision on the planted set held: 0 false blocking on clean code, and the extra blocking findings on bug cases did
+  not rise. 3 nits were kept on clean cases; they never block, but on ReviewBench they would count against precision
+  if the judge rejects them, which is the number to watch in the re-run.
+- Nits hit the labelled bug (as a separate, non-blocking comment) in 8 of 14 bug cases, mostly as a second angle on
+  a finding that was already kept.
+
+Re-run plan (pending the account): the same 25 PRs with `--nits` and the checklists, 3 rounds if the budget allows,
+reporting grounded/augmented P and R, recall by severity and category, comments per PR, and $ per PR (mean, median,
+max) next to the 11-11 row. Then the deep setting (`--no-tiers`) on a subset, to price the rest of the curve.

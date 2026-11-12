@@ -141,7 +141,9 @@ def verify_nits(nits, codes, repo, budget, model, fresh=False):
         key = "n-" + hashlib.sha256((model + prompt).encode()).hexdigest()[:32]
         out = None if fresh else cache_hit(key, budget, "verify_nits")
         err = None
-        if out is None:
+        if out is None and budget.exhausted():
+            err = "the nit verification cap (CRUCIBLE_NITS_MAX_USD) or the review budget was reached"
+        elif out is None:
             try:
                 out, _ = claude(prompt, model, NIT_VERDICTS_SCHEMA, repo, budget, tools=TOOLS_READ, effort="medium",
                                 timeout=900, kind="verify_nits")

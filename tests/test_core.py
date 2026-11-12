@@ -6004,6 +6004,176 @@ class TestCountCollisions(unittest.TestCase):
         self.assertIn("no other change moves a table a test counts", names)
 
 
+
+
+class TestNitTier(unittest.TestCase):
+    """--nits: a verified non-blocking tier kept apart from the findings (ReviewBench 2026-11-11, low recall 27%)."""
+
+    @staticmethod
+    def _f(title, line, severity="low", file="a.py"):
+        return {"severity": severity, "file": file, "line": line, "title": title, "problem": "p",
+                "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "w", "fix": "x"}
+
+    def _run(self, nits_out, verdicts=None, nits=True, env=None, fail_batch=False):
+        """-> (review.json, calls). The fake reviewer returns one important finding and `nits_out` as nits; the nit
+        verifier answers `verdicts` (index -> (keep, confidence)), default keep/high for every nit."""
+        from unittest import mock
+        repo = make_repo({"a.py": "x = 1\n"}, {"a.py": "x = 2\n" + "".join(f"y{i} = {i}\n" for i in range(30))})
+        calls = []
+
+        def fake(prompt, model, schema, cwd, budget=None, *a, **kw):
+            calls.append({"kind": kw.get("kind"), "model": model, "schema": schema, "prompt": prompt})
+            if "findings" in schema["properties"]:
+                out = {"summary": "s", "findings": [self._f("division by zero in f", 1, "important")]}
+                if "nits" in schema["properties"]:
+                    out["nits"] = nits_out
+                return out, 0.1
+            if "verdicts" in schema["properties"]:
+                if fail_batch:
+                    raise U.Failed("usage limit")
+                budget.add(0.05)                                 # what the real claude() does with the CLI's cost
+                n = prompt.count("Falsification test:")
+                vs = verdicts or {}
+                return {"verdicts": [{"index": i, "keep": vs.get(i, (True, "high"))[0], "severity": "low",
+                                      "confidence": vs.get(i, (True, "high"))[1], "evidence": f"e{i}"}
+                                     for i in range(n) if vs.get(i, (True, "high")) is not None]}, 0.05
+            return {"keep": True, "severity": "important", "method": "read", "actions": "", "evidence": "e",
+                    "confidence": "high"}, 0.02
+        home = tempfile.mkdtemp(prefix="crucible-home-")
+        with mock.patch.object(V, "HOME", home), mock.patch.object(U, "HOME", home), mock.patch.object(V, "claude", fake), \
+                mock.patch.dict(os.environ, dict({"CRUCIBLE_CACHE": os.path.join(home, "c")}, **(env or {}))):
+            d = V.run_review(repo, "main", offline=True, skip_checks=True, log=lambda *_: None, nits=nits)
+            return U.read_json(os.path.join(d, "review.json")), calls
+
+    def test_off_by_default_prompt_schema_and_record_unchanged(self):
+        r, calls = self._run([self._f("a nit", 2)], nits=None)
+        review = [c for c in calls if c["kind"] == "review"]
+        self.assertIs(review[0]["schema"], V.FINDINGS_SCHEMA)
+        self.assertNotIn("Second tier", review[0]["prompt"])
+        self.assertNotIn("verify_nits", [c["kind"] for c in calls])
+        self.assertNotIn("nits", r); self.assertNotIn("nits", r["inputs"])
+        self.assertNotIn("## Nits", V.report(r, {}))
+
+    def test_env_turns_it_on(self):
+        r, _ = self._run([self._f("a nit", 2)], nits=None, env={"CRUCIBLE_NITS": "1"})
+        self.assertEqual([f["title"] for f in r["nits"]], ["a nit"])
+
+    def test_verified_nits_kept_apart_and_never_in_the_verdict(self):
+        nits = [self._f("missing docstring on new public f", 2), self._f("magic number 30", 5, "medium"),
+                self._f("comment contradicts loop bound", 8), self._f("speculative concern", 11)]
+        r, calls = self._run(nits, verdicts={2: (True, "low"), 3: (False, "high")})
+        self.assertEqual(sorted(f["title"] for f in r["nits"]), ["magic number 30", "missing docstring on new public f"])
+        self.assertEqual({f["verification"]["status"] for f in r["nits"]}, {"verified"})
+        self.assertEqual(len(r["nits_dropped"]), 2)              # a low-confidence keep is not a keep
+        self.assertTrue(all(f["id"].startswith("NIT-") for f in r["nits"]))
+        self.assertEqual([f["title"] for f in r["findings"]], ["division by zero in f"])
+        _, blocking, unanswered = V.verdict(r, {})
+        self.assertEqual([f["title"] for f in unanswered], ["division by zero in f"])   # nits are never "unanswered"
+        self.assertEqual(V.verdict(r, {r["findings"][0]["id"]: {"disposition": "fixed", "note": "n"}})[0], "GREEN")
+        nit_calls = [c for c in calls if c["kind"] == "verify_nits"]
+        self.assertEqual(len(nit_calls), 1)                      # one batch, on the mid model
+        self.assertEqual(nit_calls[0]["model"], U.MODELS["sonnet"])
+        self.assertIn("## Nits (non-blocking", V.report(r, {}))
+        self.assertGreater(r["cost_nits_usd"], 0)
+
+    def test_nit_repeating_a_finding_or_another_nit_is_left_out(self):
+        r, calls = self._run([self._f("division by zero in f", 1), self._f("magic number 30", 5),
+                              self._f("magic number 30", 5)])
+        self.assertEqual([f["title"] for f in r["nits"]], ["magic number 30"])
+        self.assertEqual(calls[-1]["prompt"].count("Falsification test:"), 1)
+
+    TEN = ["unclosed file handle", "docstring says seconds", "README flag renamed", "retry loop never sleeps",
+           "empty list crashes max", "error swallowed silently", "timeout default changed", "unused import added",
+           "lock held across await", "log leaks token"]
+
+    def test_nits_are_batched(self):
+        r, calls = self._run([self._f(w, i + 2) for i, w in enumerate(self.TEN)])
+        self.assertEqual(len(r["nits"]), 10)
+        self.assertEqual(sum(c["kind"] == "verify_nits" for c in calls), 1)
+        with unittest.mock.patch.object(V, "NIT_BATCH", 4):
+            r, calls = self._run([self._f(w, i + 2) for i, w in enumerate(self.TEN[:9])])
+        self.assertEqual(sum(c["kind"] == "verify_nits" for c in calls), 3)
+        self.assertEqual([c["prompt"].count("Falsification test:") for c in calls if c["kind"] == "verify_nits"], [4, 4, 1])
+        self.assertEqual(len(r["nits"]), 9)
+
+    def test_failed_or_missing_verdict_drops_the_nit(self):
+        r, _ = self._run([self._f("a nit", 2), self._f("another unrelated thing", 9)], fail_batch=True)
+        self.assertEqual(r["nits"], [])
+        self.assertEqual({f["verification"]["status"] for f in r["nits_dropped"]}, {"unverified"})
+        self.assertEqual(len(r["findings"]), 1)                  # the findings don't depend on the nit tier
+        r, _ = self._run([self._f("a nit", 2), self._f("another unrelated thing", 9)], verdicts={1: None})
+        self.assertEqual([f["title"] for f in r["nits"]], ["a nit"])
+
+    def test_nit_cap_stops_spending(self):
+        r, calls = self._run([self._f("a nit", 2)], env={"CRUCIBLE_NITS_MAX_USD": "0"})
+        self.assertNotIn("verify_nits", [c["kind"] for c in calls])
+        self.assertEqual(r["nits"], []); self.assertEqual(r["cost_nits_usd"], 0)
+
+    def test_sub_budget(self):
+        parent = U.Budget(1.0)
+        sub = V.SubBudget(parent, 0.3)
+        self.assertAlmostEqual(sub.remaining(), 0.3)
+        sub.add(0.2)
+        self.assertAlmostEqual(parent.spent, 0.2); self.assertAlmostEqual(sub.remaining(), 0.1)
+        parent.add(0.75)
+        self.assertAlmostEqual(sub.remaining(), 0.05)            # whichever runs out first
+        sub.add(0.1)
+        self.assertTrue(sub.exhausted())
+        self.assertAlmostEqual(V.SubBudget(U.Budget(None), 0.5).remaining(), 0.5)
+
+    def test_a_review_without_nits_is_redone_for_nits_not_the_reverse(self):
+        prev = {"status": "done", "inputs": {"base": "b", "draft": None, "draft_sha": None}, "findings": []}
+        self.assertIn("--nits", V.stale_inputs(prev, V.review_inputs(".", "b", nits=True) | {"draft": None, "draft_sha": None}))
+        prev["inputs"]["nits"] = True
+        self.assertIsNone(V.stale_inputs(prev, {"base": "b", "draft": None, "draft_sha": None}))
+
+    def test_eval_scores_nits_separately(self):
+        from crucible import evalrun as E
+        rev = {"status": "done", "findings": [], "dropped": [], "cost_usd": 1,
+               "nits": [{"severity": "low", "file": "a.py", "line": 3, "title": "off by one", "problem": ""}],
+               "nits_dropped": [{}], "cost_nits_usd": 0.2}
+        s = E.score_case(rev, {"kind": "bug", "file": "a.py", "lines": [3], "keywords": []})
+        self.assertEqual((s["nits"], s["nits_dropped"], s["nit_hits"], s["caught"]), (1, 1, 1, False))
+        self.assertNotIn("nits", E.score_case({k: v for k, v in rev.items() if k != "nits"},
+                                              {"kind": "clean"}))
+
+
+class TestReviewBenchAdapter(unittest.TestCase):
+    def _mod(self, env=None):
+        import importlib.util
+        from unittest import mock
+        p = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bench", "reviewbench", "to_findings.py")
+        with mock.patch.dict(os.environ, env or {}):
+            spec = importlib.util.spec_from_file_location("rb_to_findings", p)
+            m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+        return m
+
+    @staticmethod
+    def _f(sev, line, title="t"):
+        return {"severity": sev, "file": "./src/a.py", "line": line, "title": title, "problem": "p"}
+
+    def test_no_cap_by_default_and_most_severe_first(self):
+        m = self._mod()
+        rev = {"findings": [self._f("low", i + 1) for i in range(100)] + [self._f("critical", 500)]}
+        out = m.to_findings(rev)
+        self.assertEqual(len(out), 101)                          # the first run capped at 60
+        self.assertEqual(out[0]["start_line"], 500); self.assertTrue(out[0]["message"].startswith("[critical]"))
+        self.assertEqual(out[1]["file"], "src/a.py")
+
+    def test_nits_follow_findings_of_the_same_severity_and_a_cap_drops_them_first(self):
+        m = self._mod()
+        rev = {"findings": [self._f("low", 1, "finding"), self._f("important", 2, "finding")],
+               "nits": [self._f("medium", 3, "nit"), self._f("low", 4, "nit")]}
+        self.assertEqual([o["start_line"] for o in m.to_findings(rev)], [2, 3, 1, 4])
+        self.assertEqual([o["start_line"] for o in m.to_findings(rev, cap=3)], [2, 3, 1])
+        self.assertEqual(len(self._mod({"RB_CONFIG_MAX_FINDINGS": "2"}).to_findings(rev)), 2)
+
+    def test_pr_text_and_lineless_findings_left_out(self):
+        m = self._mod()
+        rev = {"findings": [dict(self._f("low", 1), file="PR_DRAFT.md"), dict(self._f("low", 1), line=None)],
+               "nits": [dict(self._f("low", 0))]}
+        self.assertEqual(m.to_findings(rev), [])
+
+
 if __name__ == "__main__":
     unittest.main()
-
