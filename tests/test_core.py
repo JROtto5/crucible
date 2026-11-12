@@ -6014,7 +6014,7 @@ class TestNitTier(unittest.TestCase):
         return {"severity": severity, "file": file, "line": line, "title": title, "problem": "p",
                 "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "w", "fix": "x"}
 
-    def _run(self, nits_out, verdicts=None, nits=True, env=None, fail_batch=False):
+    def _run(self, nits_out, verdicts=None, nits=True, env=None, fail_batch=False, budget=None, findings=1, verify_cost=0.0):
         """-> (review.json, calls). The fake reviewer returns one important finding and `nits_out` as nits; the nit
         verifier answers `verdicts` (index -> (keep, confidence)), default keep/high for every nit."""
         from unittest import mock
@@ -6023,8 +6023,12 @@ class TestNitTier(unittest.TestCase):
 
         def fake(prompt, model, schema, cwd, budget=None, *a, **kw):
             calls.append({"kind": kw.get("kind"), "model": model, "schema": schema, "prompt": prompt})
+            if budget and budget.exhausted():                 # what the real claude() does
+                raise U.Failed("budget exhausted")
             if "findings" in schema["properties"]:
-                out = {"summary": "s", "findings": [self._f("division by zero in f", 1, "important")]}
+                out = {"summary": "s", "findings": [self._f("division by zero in f", 1, "important")] +
+                       [self._f(w, 3 + 2 * i, "medium") for i, w in
+                        enumerate(["unclosed socket in g", "README flag renamed", "retry loop never sleeps", "lock held across await", "token logged at info", "timeout default changed", "empty list crashes max"][:findings - 1])]}
                 if "nits" in schema["properties"]:
                     out["nits"] = nits_out
                 return out, 0.1
@@ -6037,12 +6041,15 @@ class TestNitTier(unittest.TestCase):
                 return {"verdicts": [{"index": i, "keep": vs.get(i, (True, "high"))[0], "severity": "low",
                                       "confidence": vs.get(i, (True, "high"))[1], "evidence": f"e{i}"}
                                      for i in range(n) if vs.get(i, (True, "high")) is not None]}, 0.05
+            if budget is not None:
+                budget.add(verify_cost)
             return {"keep": True, "severity": "important", "method": "read", "actions": "", "evidence": "e",
                     "confidence": "high"}, 0.02
         home = tempfile.mkdtemp(prefix="crucible-home-")
         with mock.patch.object(V, "HOME", home), mock.patch.object(U, "HOME", home), mock.patch.object(V, "claude", fake), \
                 mock.patch.dict(os.environ, dict({"CRUCIBLE_CACHE": os.path.join(home, "c")}, **(env or {}))):
-            d = V.run_review(repo, "main", offline=True, skip_checks=True, log=lambda *_: None, nits=nits)
+            d = V.run_review(repo, "main", budget_usd=budget, offline=True, skip_checks=True, log=lambda *_: None,
+                             nits=nits)
             return U.read_json(os.path.join(d, "review.json")), calls
 
     def test_off_by_default_prompt_schema_and_record_unchanged(self):
@@ -6116,6 +6123,52 @@ class TestNitTier(unittest.TestCase):
         r, calls = self._run([self._f("a nit", 2)], env={"CRUCIBLE_NITS_MAX_USD": "0"})
         self.assertNotIn("verify_nits", [c["kind"] for c in calls])
         self.assertEqual(r["nits"], []); self.assertEqual(r["cost_nits_usd"], 0)
+
+    def test_capped_review_still_verifies_its_nits(self):
+        """ReviewBench run 2: PRs 1 and 13 spent their $5 on findings and dropped every nit unverified."""
+        nits = [self._f("missing docstring on new public f", 2), self._f("magic number 30", 5)]
+        from unittest import mock
+        seen = []
+        real = V.Budget
+
+        def spy(limit):
+            b = real(limit); seen.append(b); return b
+        with mock.patch.object(V, "Budget", spy):
+            # 8 findings at $0.15 each would spend $1.20 of a $1.30 budget after the $0.10 review pass
+            r, calls = self._run(nits, budget=1.3, findings=8, verify_cost=0.15)
+        b = seen[0]
+        self.assertEqual(sorted(f["title"] for f in r["nits"]), ["magic number 30", "missing docstring on new public f"])
+        self.assertEqual(r["nits_reserve_usd"], 0.2)             # one batch's estimate, under 20% of $1.30 and the cap
+        self.assertIn("verify_nits", [c["kind"] for c in calls])
+        unv = [f for f in r["findings"] if f["verification"]["status"] == "unverified"]
+        self.assertTrue(unv)                                     # the hold cut finding verification, fail closed
+        self.assertTrue(all("budget" in f["verification"]["reason"] for f in unv))
+        self.assertEqual(len(r["findings"]), 8)                  # nothing dropped for want of budget
+        self.assertLessEqual(b.spent, 1.3 + 1e-9)
+
+    def test_no_reserve_without_a_limit_or_nits(self):
+        self.assertEqual(V.nits_reserve_usd(None, 30), 0.0)
+        self.assertEqual(V.nits_reserve_usd(5.0, 0), 0.0)
+        self.assertEqual(V.nits_reserve_usd(5.0, 13), 0.4)         # two batches
+        self.assertEqual(V.nits_reserve_usd(5.0, 100), 0.75)       # the nit cap
+        self.assertEqual(V.nits_reserve_usd(1.0, 100), 0.2)        # a fifth of a small budget
+        with unittest.mock.patch.dict(os.environ, {"CRUCIBLE_NITS_MAX_USD": "0"}):
+            self.assertEqual(V.nits_reserve_usd(5.0, 10), 0.0)
+        r, _ = self._run([self._f("a nit", 2)])
+        self.assertNotIn("nits_reserve_usd", r)
+        r, _ = self._run([self._f("a nit", 2)], nits=None, budget=1.0)
+        self.assertNotIn("nits_reserve_usd", r)
+
+    def test_held_budget(self):
+        parent = U.Budget(1.0)
+        held = V.HeldBudget(parent, 0.3)
+        self.assertAlmostEqual(held.remaining(), 0.7)
+        held.add(0.6)
+        self.assertAlmostEqual(parent.spent, 0.6); self.assertAlmostEqual(held.remaining(), 0.1)
+        held.add(0.15)
+        self.assertTrue(held.exhausted()); self.assertFalse(parent.exhausted())
+        self.assertIsNone(V.HeldBudget(U.Budget(None), 0.3).remaining())
+        self.assertFalse(V.HeldBudget(U.Budget(None), 0.3).exhausted())
 
     def test_sub_budget(self):
         parent = U.Budget(1.0)

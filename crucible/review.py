@@ -123,6 +123,44 @@ class SubBudget:
         return getattr(self.parent, name)
 
 
+# Nits are verified after the findings, so on a PR whose review budget runs out (ReviewBench run 2: PRs 1 and 13 at
+# the $5 cap) every nit went unverified and was dropped, though nits were 95% true by the judge and findings 64%.
+# The findings' verification therefore runs with a reserve held back for the nits: about one batch's cost per batch
+# of candidates, at most the nit cap and NIT_RESERVE_SHARE of the budget. Unverified findings are still kept (fail
+# closed), so the hold costs precision on a capped PR at most, never a blocking finding.
+NIT_BATCH_EST_USD = 0.20             # ReviewBench run 2: $2.76 over ~17 batches of nit verification ≈ $0.16
+NIT_RESERVE_SHARE = 0.2
+
+
+def nits_reserve_usd(limit, n_cands):
+    """USD the findings' verification leaves for the nit tier: 0 with no budget limit or no nit candidates."""
+    if limit is None or not n_cands:
+        return 0.0
+    batches = -(-n_cands // NIT_BATCH)
+    return round(min(nits_cap_usd(), NIT_RESERVE_SHARE * limit, batches * NIT_BATCH_EST_USD), 4)
+
+
+class HeldBudget:
+    """The review's budget less `hold` USD kept back for a later phase: calls count against the parent, and this
+    view runs out `hold` early. With no limit it is the parent."""
+    def __init__(self, parent, hold):
+        self.parent, self.hold = parent, hold
+
+    def remaining(self):
+        pr = self.parent.remaining()
+        return None if pr is None else max(0.0, pr - self.hold)
+
+    def exhausted(self):
+        r = self.remaining()
+        return r is not None and r <= 0.0
+
+    def add(self, c):
+        self.parent.add(c)
+
+    def __getattr__(self, name):
+        return getattr(self.parent, name)
+
+
 def nit_verify_prompt(batch):
     claims = "\n\n".join(
         f"[{i}] {f['title']} (at {f['file']}:{f['line']}, proposed severity {f['severity']})\n"
@@ -1052,11 +1090,16 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             f.setdefault("proposed_severity", f["severity"])
         kept, dropped = [f for f in new if f["source"] in ("scanner", "style")] + carried, list(carried_dropped) + ruled
         record["verify_tiers"] = tiers
+        hold = nits_reserve_usd(budget.limit, len(nit_cands)) if nits else 0.0
+        vbudget = HeldBudget(budget, hold) if hold else budget
+        if hold:
+            record["nits_reserve_usd"] = hold
+            log(f"  holding ${hold:.2f} of the budget for verifying {len(nit_cands)} nit candidate(s)")
 
         def verify(f):
             since = anchor_since(repo, prev_sha, f, base) if f.get("anchor_changed") else ""
             try:
-                return (f,) + verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo, budget, tiers, fresh,
+                return (f,) + verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo, vbudget, tiers, fresh,
                                             since, dctx and dctx[0], no_exec=no_exec) + (None,)
             except Failed as e:
                 return f, None, [], str(e)
@@ -1093,7 +1136,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
 
             def recheck(f):
                 try:
-                    v, trail = verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo, budget, tiers[:1], fresh, since,
+                    v, trail = verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo, vbudget, tiers[:1], fresh, since,
                                             dctx and dctx[0], no_exec=no_exec)
                     return f, v
                 except Failed:
