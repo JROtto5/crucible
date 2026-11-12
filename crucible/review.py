@@ -46,7 +46,9 @@ SALVAGE_MODEL = MODELS["haiku"]
 # golden issues. With --nits the same review call also lists them separately; they are verified (batched, read-only,
 # on the mid model, under their own $ cap), kept apart from findings, and never change the verdict. Off by default,
 # and with it off every prompt, schema and cache key is byte-identical to before.
-NITS_MAX_PER_PASS = 10
+# 20, was 10. The cap never bound in ReviewBench run 2 (no pass came near 10: at most 7 from a one-pass PR, 28 over
+# PR 1's 24 passes), so it was the prompt's "at most 10" that set the reviewer's sights, not a cut; nits were 95% true.
+NITS_MAX_PER_PASS = 20
 NIT_BATCH = 12                       # nits per verification call
 NIT_PAD = 15                         # lines of context each side of a nit (findings get 40)
 NITS_SCHEMA = {"type": "array", "maxItems": NITS_MAX_PER_PASS, "items": {
@@ -55,10 +57,10 @@ NITS_SCHEMA = {"type": "array", "maxItems": NITS_MAX_PER_PASS, "items": {
                    "severity": {"type": "string", "enum": ["medium", "low"]}}}}
 FINDINGS_NITS_SCHEMA = {**FINDINGS_SCHEMA, "properties": {**FINDINGS_SCHEMA["properties"], "nits": NITS_SCHEMA},
                         "required": FINDINGS_SCHEMA["required"] + ["nits"]}
-NITS_NOTE = """
-        Second tier, "nits" (at most 10, separate from findings): smaller REAL problems a careful reviewer would
-        comment on but not block on: an unhandled edge case, a misleading name, comment or docstring, docs or README
-        text the change made wrong, a missing doc or test for a new public function, inconsistent error handling, a
+NITS_NOTE = f"""
+        Second tier, "nits" (at most {NITS_MAX_PER_PASS}, separate from findings): smaller REAL problems a careful
+        reviewer would comment on but not block on: an unhandled edge case, a misleading name, comment or docstring,
+        docs or README text the change made wrong, a missing doc or test for a new public function, inconsistent error handling, a
         small leak or perf waste, fragile code. Same rules as findings: a line in the NEW file, caused by this change,
         and a "wrong_if". Severity medium or low only. Never a pure style/formatting preference and never a repeat of
         a finding. Each nit is checked separately, so don't pad; an empty list is fine.

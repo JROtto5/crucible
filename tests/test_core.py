@@ -6072,6 +6072,15 @@ class TestNitTier(unittest.TestCase):
         self.assertNotIn("nits", r); self.assertNotIn("nits", r["inputs"])
         self.assertNotIn("## Nits", V.report(r, {}))
 
+    def test_twenty_nits_per_pass(self):
+        """ReviewBench run 2: the cap of 10 never bound; the prompt's own number set the reviewer's sights."""
+        words = ("socket cache parser retry docstring README timeout locale tempfile mutex enum regex cursor buffer "
+                 "signal header cookie session pager encoder decoder schema").split()
+        r, calls = self._run([self._f(f"{w} {w[::-1]} {w.upper()}x", i + 2) for i, w in enumerate(words)])
+        self.assertEqual(V.NITS_SCHEMA["maxItems"], 20)
+        self.assertIn("at most 20", next(c["prompt"] for c in calls if c["kind"] == "review"))
+        self.assertEqual(len(r["nits"]) + len(r["nits_dropped"]), 20)    # anything past 20 is cut
+
     def test_env_turns_it_on(self):
         r, _ = self._run([self._f("a nit", 2)], nits=None, env={"CRUCIBLE_NITS": "1"})
         self.assertEqual([f["title"] for f in r["nits"]], ["a nit"])
