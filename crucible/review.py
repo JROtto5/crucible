@@ -85,6 +85,13 @@ def nits_model(authors=()):
     return next((x for x in [m] + PREFERENCE if x not in authors), m)
 
 
+def nits_keep_confidence():
+    """Verifier confidences a kept nit needs (CRUCIBLE_NITS_MIN_CONFIDENCE, default high). On the clean eval cases
+    (2026-11-12, 12 runs) both medium-confidence keeps were matters of taste and 3 of 4 high ones were real."""
+    floor = os.environ.get("CRUCIBLE_NITS_MIN_CONFIDENCE", "high").strip().lower()
+    return ("high", "medium") if floor == "medium" else ("high",)
+
+
 def nits_cap_usd():
     """USD the nit verification of one review may spend (CRUCIBLE_NITS_MAX_USD, default 0.75)."""
     try:
@@ -132,7 +139,7 @@ def nit_verify_prompt(batch):
 
 def verify_nits(nits, codes, repo, budget, model, fresh=False):
     """-> (kept, dropped). Batched read-only verification of the nit tier. A nit is kept only on keep=true with high
-    or medium confidence; one with no verdict (a failed call, the cap reached, a skipped index) is dropped as
+    confidence (nits_keep_confidence); one with no verdict (a failed call, the cap reached, a skipped index) is dropped as
     unverified, not kept: the nit tier never fails open, so its precision is the verifier's."""
     kept, dropped = [], []
     for start in range(0, len(nits), NIT_BATCH):
@@ -156,7 +163,7 @@ def verify_nits(nits, codes, repo, budget, model, fresh=False):
             if v is None:
                 f["verification"] = {"status": "unverified", "reason": err or "no verdict returned"}
                 dropped.append(f)
-            elif v["keep"] and v.get("confidence") in ("high", "medium"):
+            elif v["keep"] and v.get("confidence") in nits_keep_confidence():
                 f["severity"] = v["severity"]
                 f["verification"] = {"status": "verified", "method": "read", "evidence": v["evidence"],
                                      "confidence": v["confidence"], "model": model}

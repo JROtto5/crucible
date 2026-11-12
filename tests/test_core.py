@@ -6104,6 +6104,14 @@ class TestNitTier(unittest.TestCase):
         r, _ = self._run([self._f("a nit", 2), self._f("another unrelated thing", 9)], verdicts={1: None})
         self.assertEqual([f["title"] for f in r["nits"]], ["a nit"])
 
+    def test_medium_confidence_keep_is_dropped_unless_the_floor_is_lowered(self):
+        nits = [self._f("missing docstring on new public f", 2), self._f("doc comment mentions old behaviour", 5)]
+        r, _ = self._run(nits, verdicts={1: (True, "medium")})
+        self.assertEqual([f["title"] for f in r["nits"]], ["missing docstring on new public f"])
+        self.assertEqual(r["nits_dropped"][0]["verification"]["confidence"], "medium")
+        r, _ = self._run(nits, verdicts={1: (True, "medium")}, env={"CRUCIBLE_NITS_MIN_CONFIDENCE": "medium"})
+        self.assertEqual(len(r["nits"]), 2)
+
     def test_nit_cap_stops_spending(self):
         r, calls = self._run([self._f("a nit", 2)], env={"CRUCIBLE_NITS_MAX_USD": "0"})
         self.assertNotIn("verify_nits", [c["kind"] for c in calls])
