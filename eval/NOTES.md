@@ -533,4 +533,4 @@ Local check, `crucible eval --nits --budget 0.28`, 8 cases (6 bug, 2 clean), one
 One round on 8 cases is noise-sized. It shows that the hold costs no recall or cost here, not that it recovers nits
 at scale. A first try at `--budget 0.12` (not in the table) verified nothing in either arm: the review pass alone
 (~$0.17) used the whole budget, which no reserve can fix. The real test is PRs 1 and 13 on the next ReviewBench run (a borrowed account, not this lane): count
-their kept nits (run 2: 0 on PR 1) and their unverified findings. Spend this shift: $0.45 self-review + ~$3.75 local eval.
+their kept nits (run 2: 0 on PR 1) and their unverified findings. Spend this shift: $2.00 over 4 self-review rounds + $4.72 local eval (both budgets, both arms).
