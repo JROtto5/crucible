@@ -6109,6 +6109,14 @@ class TestNitTier(unittest.TestCase):
             r, _ = self._run([], nits=None)                          # without --nits: findings, as before
             self.assertEqual(sum(f.get("source") == "style" for f in r["findings"]), 4)
 
+    def test_security_hardening_goes_to_nits(self):
+        r, calls = self._run([self._f("a nit", 2)])
+        prompt = next(c["prompt"] for c in calls if c["kind"] == "review")
+        self.assertIn("Security hardening gaps that miss the findings' bar", prompt)
+        self.assertIn("give each site its own nit or finding", prompt)
+        _, calls = self._run([self._f("a nit", 2)], nits=None)
+        self.assertNotIn("hardening", calls[0]["prompt"])           # the findings' bar and the base prompt stay
+
     def test_env_turns_it_on(self):
         r, _ = self._run([self._f("a nit", 2)], nits=None, env={"CRUCIBLE_NITS": "1"})
         self.assertEqual([f["title"] for f in r["nits"]], ["a nit"])

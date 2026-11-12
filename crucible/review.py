@@ -57,6 +57,10 @@ NITS_SCHEMA = {"type": "array", "maxItems": NITS_MAX_PER_PASS, "items": {
                    "severity": {"type": "string", "enum": ["medium", "low"]}}}}
 FINDINGS_NITS_SCHEMA = {**FINDINGS_SCHEMA, "properties": {**FINDINGS_SCHEMA["properties"], "nits": NITS_SCHEMA},
                         "required": FINDINGS_SCHEMA["required"] + ["nits"]}
+# The security paragraph: ReviewBench run 2 found 9 of 27 golden security issues. The 18 misses were mostly hardening
+# gaps with no full exploit path, which the checklist's "concrete path from untrusted input" line rules out of the
+# findings, so nothing was written down, and sibling sites of a flaw found once. Nits are verified (95% true there),
+# so they can carry these without loosening the findings' bar. The base prompt is unchanged.
 NITS_NOTE = f"""
         Second tier, "nits" (at most {NITS_MAX_PER_PASS}, separate from findings): smaller REAL problems a careful
         reviewer would comment on but not block on: an unhandled edge case, a misleading name, comment or docstring,
@@ -64,6 +68,14 @@ NITS_NOTE = f"""
         small leak or perf waste, fragile code. Same rules as findings: a line in the NEW file, caused by this change,
         and a "wrong_if". Severity medium or low only. Never a pure style/formatting preference and never a repeat of
         a finding. Each nit is checked separately, so don't pad; an empty list is fine.
+        Security hardening gaps that miss the findings' bar (no full path from untrusted input to a sink) are nits,
+        not silence: a guard that is partial or skippable (a path prefix check without a separator, an auth, CSRF
+        or PKCE step skipped when a parameter is missing, a one-time code or state that survives a failed or
+        repeated use, an allowlist that ignores the port or scheme); state an unauthenticated caller can grow
+        without bound; error text or logs that echo internals, absolute paths, input or secrets; permissions set
+        only when a file or directory is created; secrets left on disk after the thing they belong to is deleted;
+        a container or service left running as root. When one flaw repeats at several sites (the same unchecked
+        cast or guard in sibling handlers), give each site its own nit or finding.
 """
 NIT_VERDICTS_SCHEMA = {"type": "object", "properties": {"verdicts": {"type": "array", "items": {
     "type": "object", "properties": {
