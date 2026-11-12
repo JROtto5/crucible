@@ -114,7 +114,9 @@ def score_case(rev, exp):
            "blocking": len(blocking)}
     if "nits" in rev:                  # a --nits run: the nit tier never blocks, so it is counted on its own
         out.update(nits=len(rev["nits"]), nits_dropped=len(rev.get("nits_dropped") or []),
-                   cost_nits=rev.get("cost_nits_usd", 0), nit_hits=sum(1 for f in rev["nits"] if hits(f, exp)))
+                   cost_nits=rev.get("cost_nits_usd", 0), nit_hits=sum(1 for f in rev["nits"] if hits(f, exp)),
+                   nit_list=[{**{k: f.get(k) for k in ("severity", "file", "line", "title")},   # readable on clean cases
+                              "confidence": (f.get("verification") or {}).get("confidence")} for f in rev["nits"]])
     if exp["kind"] == "bug":
         out["caught"] = any(hits(f, exp) for f in blocking)
         out["caught_any_severity"] = any(hits(f, exp) for f in kept)

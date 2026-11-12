@@ -6134,6 +6134,8 @@ class TestNitTier(unittest.TestCase):
                "nits_dropped": [{}], "cost_nits_usd": 0.2}
         s = E.score_case(rev, {"kind": "bug", "file": "a.py", "lines": [3], "keywords": []})
         self.assertEqual((s["nits"], s["nits_dropped"], s["nit_hits"], s["caught"]), (1, 1, 1, False))
+        self.assertEqual(s["nit_list"], [{"severity": "low", "file": "a.py", "line": 3, "title": "off by one",
+                                          "confidence": None}])
         self.assertNotIn("nits", E.score_case({k: v for k, v in rev.items() if k != "nits"},
                                               {"kind": "clean"}))
 
