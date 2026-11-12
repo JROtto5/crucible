@@ -128,6 +128,16 @@ diff --git a/test/fixtures/keys.js b/test/fixtures/keys.js
         self.assertEqual(hits[("test/fixtures/keys.js", "Possible secret in added line")]["severity"], "medium")
         self.assertEqual(hits[("m.js", "Debug statement left in")]["line"], 3)
 
+    def test_elided_example_key_is_not_a_secret(self):
+        """ReviewBench run 2: two critical "Possible secret" findings were doc-comment placeholders."""
+        diff = ("diff --git a/k.rs b/k.rs\n--- a/k.rs\n+++ b/k.rs\n@@ -1,0 +1,4 @@\n"
+                '+///     SecretString::new("-----BEGIN PRIVATE KEY-----\\n..."),\n'
+                '+/// let kp = KeyPair::new("ssh", SecretString::new("-----BEGIN OPENSSH PRIVATE KEY-----\u2026"))\n'
+                '+const PEM: &str = "-----BEGIN RSA PRIVATE KEY-----\\nMIIEowIBAAKCAQEA7bq";\n'
+                '+let k = "-----BEGIN EC PRIVATE KEY-----<your key here>";\n')
+        hits = [h["line"] for h in D.scan(D.parse(diff)) if h["title"] == "Possible secret in added line"]
+        self.assertEqual(hits, [3])
+
     def test_chunk_coverage_splits_big_file(self):
         big = "diff --git a/b.js b/b.js\n--- a/b.js\n+++ b/b.js\n" + "".join(
             f"@@ -{i},1 +{i},1 @@\n-x{i}\n+y{i}\n" for i in range(1, 400))
@@ -6080,6 +6090,24 @@ class TestNitTier(unittest.TestCase):
         self.assertEqual(V.NITS_SCHEMA["maxItems"], 20)
         self.assertIn("at most 20", next(c["prompt"] for c in calls if c["kind"] == "review"))
         self.assertEqual(len(r["nits"]) + len(r["nits_dropped"]), 20)    # anything past 20 is cut
+
+    def test_house_comment_checks_become_nits(self):
+        """ReviewBench run 2: the house-style comment checks were 70 of the 72 false maintainability findings."""
+        from unittest import mock
+        import crucible.style as S
+        house = [S._f("low", "a.py", 3 + i, t, "d", "x", "w") for i, t in enumerate(
+            ["Over-commented compared with this file", "Comment narrates the obvious", "Large new logic with no comments",
+             "Over-commented again elsewhere in the file"])]
+        with mock.patch.object(V.style_mod, "check", lambda *a, **k: [dict(f) for f in house]):
+            r, calls = self._run([self._f("a reviewer nit", 20)], verdicts={0: (True, "high"), 1: (False, "high")})
+            self.assertFalse([f for f in r["findings"] if f.get("source") == "style"])
+            nit_prompt = next(c["prompt"] for c in calls if c["kind"] == "verify_nits")
+            self.assertEqual(nit_prompt.count("Falsification test:"), 1 + V.HOUSE_NITS_MAX)
+            self.assertLess(nit_prompt.index("a reviewer nit"), nit_prompt.index("Over-commented"))
+            self.assertEqual([f["title"] for f in r["nits"]], ["a reviewer nit", "Comment narrates the obvious",
+                                                               "Large new logic with no comments"])
+            r, _ = self._run([], nits=None)                          # without --nits: findings, as before
+            self.assertEqual(sum(f.get("source") == "style" for f in r["findings"]), 4)
 
     def test_env_turns_it_on(self):
         r, _ = self._run([self._f("a nit", 2)], nits=None, env={"CRUCIBLE_NITS": "1"})

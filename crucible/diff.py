@@ -5,6 +5,9 @@ from .util import TEST_PATH_RX
 
 SECRET_RX = re.compile(r"(sk-ant-[\w-]{10,}|sk-[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|"
                        r"-----BEGIN [A-Z ]*PRIVATE KEY|xox[abpr]-[\w-]{10,}|eyJ[\w-]{20,}\.[\w-]{20,}\.[\w-]{10,})")
+# an elided example key ("-----BEGIN PRIVATE KEY-----\n...", "AKIA...<id>") in docs is not a secret: ReviewBench
+# run 2 had 2 critical scanner findings, both doc-comment placeholders, both judged false
+PLACEHOLDER_RX = re.compile(r"\.\.\.|\u2026|<[^<>]+>|[xX]{6,}")
 DEBUG_RX = re.compile(r"\b(debugger;|console\.log\(|print\(['\"]DEBUG|pdb\.set_trace\(\)|breakpoint\(\))")
 CONFLICT_RX = re.compile(r"^(<<<<<<< |>>>>>>> |=======$)")
 HUNK_RX = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
@@ -124,7 +127,8 @@ def scan(files):
                 if kind != "+":
                     continue
                 hit = None
-                if SECRET_RX.search(text):
+                m = SECRET_RX.search(text)
+                if m and not PLACEHOLDER_RX.search(text[m.start():]):
                     hit = ("medium" if in_test else "critical", "Possible secret in added line")
                 elif CONFLICT_RX.match(text):
                     hit = ("critical", "Merge conflict marker")

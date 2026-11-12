@@ -133,6 +133,11 @@ class SubBudget:
 # Best-effort: calls already in flight can overspend the hold, as they can the budget.
 NIT_BATCH_EST_USD = 0.20             # ReviewBench run 2: $2.76 over ~17 batches of nit verification ≈ $0.16
 NIT_RESERVE_SHARE = 0.15
+# House-style comment checks (style.check: over-commented, narrates the obvious, no comments) are heuristics that
+# never go through verification. In ReviewBench run 2 they were 70 of the 72 false maintainability findings (0 of 70
+# judged true; 43 on one PR). With --nits they become nit candidates instead: verified like any nit, after the
+# reviewer's own nits, at most HOUSE_NITS_MAX per review. Without --nits they stay findings (low, never blocking).
+HOUSE_NITS_MAX = 3
 HELD_REASON = "not verified: the rest of the review budget is held for nit verification (raise --budget)"
 HELD_PASS_REASON = "not reviewed: the rest of the review budget is held for nit verification (raise --budget)"
 
@@ -1035,6 +1040,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             record["route"] = {"kind": kind, "review_model": review_model, "verify_tiers": tiers}
             record["review_model"] = review_model
             log(f"  route: {kind} change → review {review_model}, verify {' → '.join(tiers)}")
+        house_nits = [f for f in house_findings if f["file"] != dlabel] if nits else []
+        house_findings = [f for f in house_findings if f not in house_nits]
         cands, chunk_status, summaries, nit_cands = list(scanner) + house_findings, [], [], []
         measured = length_measured(style_json)
         fkey, review_cost = facts_key(chk), 0.0
@@ -1082,6 +1089,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                     f["line"] = readiness.draft_file_line(draft_full, f["line"])
                 nit_cands.append(f)
         tok_split = (tok_before, budget.token_snapshot())
+        nit_cands += [dict(f, source="nit", house=True) for f in house_nits[:HOUSE_NITS_MAX]]   # after the reviewer's
         reviewed = {p for c in chunk_status if c["status"] == "reviewed" for p in c["files"]}
         if prev_sha:                                   # files untouched since the previous complete review stay covered
             reviewed |= set(code_files) - set(record["incremental"]["files"])
