@@ -66,6 +66,16 @@ Week total with the first slice: 3 moved+overlap (all pyinfra), 6 moved elsewher
 (upstream only). Still open for the 11-13 note: whether any of the 3 pyinfra rounds changed a finding after a rebase
 (needs a re-run on the rebased head, not $0).
 
+**Resolved 2026-11-12 12:06 ET, $0, no re-run needed.** All three pyinfra "moved + overlap" rounds are demo replays
+of commits that were already merged upstream, not open PRs: 4c9f7cf0a4 and 8ad9760932 are #1587 (on 3.x as 09116428),
+5c62b86344 is #2030 (on 3.x as 1cad0d6e). If you rebase them onto current 3.x they conflict with their own merged
+copy, so the rebased diff is empty and there is no finding to compare. They are replays of historical rounds, so the
+right bucket is "na" and not "moved + overlap". **Corrected week total: 0 upstream moved+overlap rounds.** Side
+evidence: 4c9f7cf0a4's kept finding (`requires_command()` gets the `table=` kwarg → TypeError) was fixed upstream by
+#1730 (11b62d24) and #2059 (c4636eb0). That counts as one held-up finding (n=1, too few to quote). Lesson: the
+base-moved item should mark a round whose head is already an ancestor of, or patch-equal to, the base as "replay"
+and not as "moved + overlap".
+
 ## 2026-11-11 · incremental re-review prompt (DRG-63): one amended round replayed before/after
 
 `crucible eval` only builds full reviews and `model-replay` skips incremental rounds, so neither can measure the
