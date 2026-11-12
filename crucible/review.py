@@ -360,6 +360,15 @@ def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, hou
         about something missing (no test, no docs or changelog entry), cite the code it is about and list in
         "anchor_files" where the missing piece would go (e.g. the test file), so a later round re-checks it there.
 
+        Check these where the diff touches them:
+        - Security: injection (SQL, shell, template), missing authn/authz on a new route or action, secrets in code
+          or logs, unsafe deserialization or eval, path traversal, SSRF. Flag only with a concrete path from
+          untrusted input to the sink; "could be unsafe" is not a finding.
+        - API/architecture: a changed public signature, default, error or wire/file format that breaks existing
+          callers; a contract change whose callers weren't updated; logic put in a layer the project keeps it out of.
+        - Docs: docs, comments, docstrings or README that now contradict the code; a new public API, option or flag
+          left undocumented where its peers are documented.
+
         {SEVERITY_DEFS}
 
         House style. This PR must read like a long-time regular of THIS project wrote it. As medium/low findings
