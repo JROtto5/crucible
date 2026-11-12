@@ -1,14 +1,23 @@
 """Map crucible's stored review.json (kept, verified findings) to ReviewBench's findings format."""
 import glob, json, os, sys
 
-home = sys.argv[1]
-head = os.environ["RB_HEAD"]
-paths = [p for p in glob.glob(os.path.join(home, "reviews", "*", head, "review.json"))] or \
+SEV = ["critical", "important", "medium", "low"]
+# No cap by default: every finding here is verified, and the first run's 60-per-PR cap cut PR 1 from 122 to 60.
+# RB_CONFIG_MAX_FINDINGS=N caps it again; findings are ordered by severity, so a cap drops the lowest first.
+MAX_FINDINGS = int(os.environ.get("RB_CONFIG_MAX_FINDINGS") or 0)
+
+
+def find_review(home, head):
+    paths = glob.glob(os.path.join(home, "reviews", "*", head, "review.json")) or \
         sorted(glob.glob(os.path.join(home, "reviews", "*", "*", "review.json")), key=os.path.getmtime)[-1:]
-findings = []
-if paths:
-    d = json.load(open(paths[0]))
-    for f in d.get("findings") or []:
+    return json.load(open(paths[0])) if paths else None
+
+
+def to_findings(review, agent="crucible", cap=MAX_FINDINGS):
+    """Line-anchored findings, most severe first (a stable sort: review.json's own order within a severity)."""
+    rows = sorted(review.get("findings") or [], key=lambda f: SEV.index(f["severity"]) if f.get("severity") in SEV else len(SEV))
+    out = []
+    for f in rows:
         path, line = f.get("file"), f.get("line")
         if not path or path == "PR_DRAFT.md" or not isinstance(line, int) or line < 1:
             continue  # PR-text findings and file-level notes have no place in a line-anchored benchmark
@@ -16,10 +25,23 @@ if paths:
         if f.get("problem"):
             msg = f"{msg}: {f['problem'].strip()}" if msg else f["problem"].strip()
         end = f.get("end_line") if isinstance(f.get("end_line"), int) and f.get("end_line") >= line else line
-        findings.append({"file": path.removeprefix("./"), "start_line": line, "end_line": end,
-                         "message": f"[{f.get('severity', 'medium')}] {msg}"[:4000], "producer": os.environ.get("RB_AGENT", "crucible")})
-    print(f"kept {len(findings)} of {len(d.get('findings') or [])} findings; cost ${d.get('cost_usd', 0):.2f}", file=sys.stderr)
-pr = json.load(open(os.environ["RB_PR_JSON"]))
-print(json.dumps({"pr": {"repo": pr.get("repo") or f"https://github.com/{os.environ['RB_NWO']}",
-                         "pr_number": int(os.environ["RB_PR_NUMBER"]), "base": os.environ["RB_BASE"], "head": head},
-                  "agent": os.environ.get("RB_AGENT", "crucible"), "findings": findings[:60]}))
+        out.append({"file": path.removeprefix("./"), "start_line": line, "end_line": end,
+                    "message": f"[{f.get('severity', 'medium')}] {msg}"[:4000], "producer": agent})
+    return out[:cap] if cap > 0 else out
+
+
+def main(home):
+    head, agent = os.environ["RB_HEAD"], os.environ.get("RB_AGENT", "crucible")
+    review = find_review(home, head)
+    findings = []
+    if review:
+        findings = to_findings(review, agent)
+        print(f"kept {len(findings)} of {len(review.get('findings') or [])} findings; cost ${review.get('cost_usd', 0):.2f}", file=sys.stderr)
+    pr = json.load(open(os.environ["RB_PR_JSON"]))
+    print(json.dumps({"pr": {"repo": pr.get("repo") or f"https://github.com/{os.environ['RB_NWO']}",
+                             "pr_number": int(os.environ["RB_PR_NUMBER"]), "base": os.environ["RB_BASE"], "head": head},
+                      "agent": agent, "findings": findings}))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1])
