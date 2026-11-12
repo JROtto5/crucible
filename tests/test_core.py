@@ -6015,8 +6015,8 @@ class TestNitTier(unittest.TestCase):
                 "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "w", "fix": "x"}
 
     def _run(self, nits_out, verdicts=None, nits=True, env=None, fail_batch=False, budget=None, findings=1, verify_cost=0.0,
-             review_cost=0.0, verify_error=None):
-        """-> (review.json, calls). The fake reviewer returns one important finding and `nits_out` as nits; the nit
+             review_cost=0.0, verify_error=None, passes=1):
+        """-> (review.json, calls). `passes` > 1 splits the diff into that many review passes. The fake reviewer returns one important finding and `nits_out` as nits; the nit
         verifier answers `verdicts` (index -> (keep, confidence)), default keep/high for every nit."""
         from unittest import mock
         repo = make_repo({"a.py": "x = 1\n"}, {"a.py": "x = 2\n" + "".join(f"y{i} = {i}\n" for i in range(30))})
@@ -6051,7 +6051,13 @@ class TestNitTier(unittest.TestCase):
             return {"keep": True, "severity": "important", "method": "read", "actions": "", "evidence": "e",
                     "confidence": "high"}, 0.02
         home = tempfile.mkdtemp(prefix="crucible-home-")
+        real_chunk = V.diff_mod.chunk
+
+        def chunk(files, *a, **kw):
+            chunks, unc = real_chunk(files, *a, **kw)
+            return [dict(c, text=c["text"] + f"\n# pass {i}") for c in chunks for i in range(passes)], unc
         with mock.patch.object(V, "HOME", home), mock.patch.object(U, "HOME", home), mock.patch.object(V, "claude", fake), \
+                mock.patch.object(V.diff_mod, "chunk", chunk), \
                 mock.patch.dict(os.environ, dict({"CRUCIBLE_CACHE": os.path.join(home, "c")}, **(env or {}))):
             d = V.run_review(repo, "main", budget_usd=budget, offline=True, skip_checks=True, log=lambda *_: None,
                              nits=nits)
@@ -6153,14 +6159,32 @@ class TestNitTier(unittest.TestCase):
         self.assertEqual({f["severity"] for f in unv}, {"medium"})
         self.assertEqual(len(r["findings"]), 8)                  # nothing dropped for want of budget
         imp = next(f for f in r["findings"] if f["title"] == "division by zero in f")
-        self.assertEqual(imp["verification"]["status"], "verified")   # blocking severity: verified first, whole budget
+        self.assertEqual(imp["verification"]["status"], "verified")   # blocking severity: verified first
         self.assertLessEqual(b.spent, 1.3 + 1e-9)
 
-    def test_blocking_finding_may_spend_the_hold(self):
-        # the review pass leaves $0.02 of $0.30, under the $0.045 hold: the medium finding is held, the important isn't
-        r, _ = self._run([self._f("a nit", 2)], budget=0.3, findings=2, review_cost=0.28)
+    def test_blocking_findings_are_held_too(self):
+        # the review pass leaves $0.02 of $0.30, under the $0.045 hold: both findings are held (kept, unverified)
+        # and the nit still gets verified
+        r, calls = self._run([self._f("a nit", 2)], budget=0.3, findings=2, review_cost=0.28)
         status = {f["title"]: f["verification"]["status"] for f in r["findings"]}
-        self.assertEqual(status, {"division by zero in f": "verified", "unclosed socket in g": "unverified"})
+        self.assertEqual(status, {"division by zero in f": "unverified", "unclosed socket in g": "unverified"})
+        self.assertEqual({f["verification"]["reason"] for f in r["findings"]}, {V.HELD_REASON})
+        self.assertEqual([f["title"] for f in r["nits"]], ["a nit"])
+
+    def test_review_passes_stop_at_the_nit_reserve(self):
+        """ReviewBench run 2, PR 1: 24 review passes spent $4.91 of $5 before any verification, so 0 nits."""
+        # $1 budget, $0.15 held for nits from the start; each pass costs $0.30. Passes 1-3 run (pass 3 starts with
+        # $0.25 above the hold), and passes 4-5 find nothing above it
+        r, calls = self._run([self._f("a nit", 2)], budget=1.0, review_cost=0.30, passes=5)
+        st = [c["status"] for c in r["coverage"]["chunks"]]
+        self.assertEqual(st, ["reviewed"] * 3 + ["failed"] * 2)
+        self.assertEqual({c["reason"] for c in r["coverage"]["chunks"][3:]}, {V.HELD_PASS_REASON})
+        self.assertIn("bigger --budget", r["summary"])
+        self.assertIn("verify_nits", [c["kind"] for c in calls])
+        self.assertEqual([f["title"] for f in r["nits"]], ["a nit"])
+        # the same review without --nits holds nothing back: every pass runs
+        r, _ = self._run([], nits=None, budget=1.0, review_cost=0.30, passes=5)
+        self.assertEqual([c["status"] for c in r["coverage"]["chunks"]].count("reviewed"), 4)
 
     def test_a_call_that_ran_and_failed_keeps_its_reason_at_the_hold_edge(self):
         # $1 budget, $0.15 held: two calls run, spend $0.45 each and time out. That leaves $0.10, past the hold line

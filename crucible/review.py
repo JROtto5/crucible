@@ -124,18 +124,24 @@ class SubBudget:
 
 
 # Nits verify after the findings, so a PR that hit its budget (ReviewBench run 2: PRs 1 and 13) dropped every nit,
-# though nits were 95% true and findings 64%. Medium/low findings therefore verify against the budget less a nit
-# reserve; blocking ones go first, on the whole budget. A held finding is kept unverified at the reviewer's severity.
+# though nits were 95% true and findings 64%. So everything before the nit tier runs against the budget less a nit
+# reserve: the review passes (PR 1's 24 passes spent $4.91 of its $5 before any verification) and every finding's
+# verification. A held finding is kept unverified at the reviewer's severity (R2: unverified findings were judged
+# true 30 of 31 times); a held pass leaves its files uncovered and says so. Blocking findings still verify first.
 # Best-effort: calls already in flight can overspend the hold, as they can the budget.
 NIT_BATCH_EST_USD = 0.20             # ReviewBench run 2: $2.76 over ~17 batches of nit verification ≈ $0.16
 NIT_RESERVE_SHARE = 0.15
 HELD_REASON = "not verified: the rest of the review budget is held for nit verification (raise --budget)"
+HELD_PASS_REASON = "not reviewed: the rest of the review budget is held for nit verification (raise --budget)"
 
 
-def nits_reserve_usd(limit, n_cands):
-    """USD the findings' verification leaves for the nit tier: 0 with no budget limit or no nit candidates."""
-    if limit is None or not n_cands:
+def nits_reserve_usd(limit, n_cands=None):
+    """USD the findings' verification leaves for the nit tier: 0 with no budget limit or no nit candidates.
+    n_cands None (the review passes, before any nit is known): the most it can be, the cap or 15% of the budget."""
+    if limit is None or n_cands == 0:
         return 0.0
+    if n_cands is None:
+        return round(min(nits_cap_usd(), NIT_RESERVE_SHARE * limit), 4)
     batches = -(-n_cands // NIT_BATCH)
     return round(min(nits_cap_usd(), NIT_RESERVE_SHARE * limit, batches * NIT_BATCH_EST_USD), 4)
 
@@ -1032,6 +1038,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         fkey, review_cost = facts_key(chk), 0.0
         tok_before = budget.token_snapshot()       # review passes run one after another, before any verification
         full_texts = since_texts(files, digested)
+        pass_hold = nits_reserve_usd(budget.limit) if nits else 0.0
+        pass_budget = HeldBudget(budget, pass_hold) if pass_hold else budget
         for i, ch in enumerate(chunks, 1):
             since = since_note(prev_sha, record["incremental"]["amended"], ch, full_texts, base) if prev_sha else ""
             prompt = review_prompt(project, sha, base, ch, rules, mem, facts, clog, all_files, house,
@@ -1047,12 +1055,15 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             else:
                 log(f"  review pass {i}/{len(chunks)}: {', '.join(ch['files'])[:90]}")
                 try:
+                    # the first pass always runs on the whole budget, so a small one still reviews something
                     out, cost = claude(prompt, review_model, FINDINGS_NITS_SCHEMA if nits else FINDINGS_SCHEMA, repo,
-                                       budget, kind="review")
+                                       budget if i == 1 else pass_budget, kind="review")
                     review_cost += cost or 0
                     cache_put(key, out)
                 except Failed as e:
-                    chunk_status.append({"files": ch["files"], "status": "failed", "reason": str(e)})
+                    held_pass = str(e) == BUDGET_EXHAUSTED and pass_hold and not budget.exhausted()
+                    chunk_status.append({"files": ch["files"], "status": "failed",
+                                         "reason": HELD_PASS_REASON if held_pass else str(e)})
                     continue
             chunk_status.append({"files": ch["files"], "status": "reviewed", "cached": bool(hit)})
             summaries.append(out["summary"])
@@ -1101,19 +1112,18 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         held = HeldBudget(budget, hold) if hold else budget
         if hold:
             record["nits_reserve_usd"] = hold
-            log(f"  holding ${hold:.2f} of the budget for verifying {n_nits} nit(s); blocking findings may use it")
+            log(f"  holding ${hold:.2f} of the budget for verifying {n_nits} nit(s)")
         to_verify.sort(key=lambda f: f["severity"] not in BLOCKING)    # stable: blocking ones claim the budget first
 
         def verify(f):
             since = anchor_since(repo, prev_sha, f, base) if f.get("anchor_changed") else ""
-            b = budget if f["severity"] in BLOCKING else held
             try:
-                return (f,) + verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo, b, tiers, fresh,
-                                            since, dctx and dctx[0], no_exec=no_exec) + (None,)
+                return (f,) + verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo, held, tiers,
+                                            fresh, since, dctx and dctx[0], no_exec=no_exec) + (None,)
             except Failed as e:
                 # only claude()'s pre-call refusal is the hold: a call that ran and failed (its own --max-budget-usd
                 # cut, a timeout) keeps its real reason and counts as an attempt
-                if str(e) == BUDGET_EXHAUSTED and b is held and not budget.exhausted():
+                if str(e) == BUDGET_EXHAUSTED and held is not budget and not budget.exhausted():
                     return f, None, [], HELD_REASON
                 return f, None, [], str(e)
         if to_verify:
@@ -1150,9 +1160,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
 
             def recheck(f):
                 try:
-                    v, trail = verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo,
-                                            budget if f["severity"] in BLOCKING else held, tiers[:1], fresh, since,
-                                            dctx and dctx[0], no_exec=no_exec)
+                    v, trail = verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo, held,
+                                            tiers[:1], fresh, since, dctx and dctx[0], no_exec=no_exec)
                     return f, v
                 except Failed:
                     return f, None
@@ -1188,8 +1197,9 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         if failed:
             why = next(c.get("reason") for c in chunk_status if c["status"] == "failed") or "no reason recorded"
             log(f"  review pass FAILED for {len(failed)} file(s): {why[:300]}")
+            again = "a re-run with a bigger --budget covers it" if why == HELD_PASS_REASON else "a plain re-run retries it"
             summaries.insert(0, f"The review pass failed for {', '.join(failed)[:300]} ({why[:300]}), so this review is "
-                                "incomplete; a plain re-run retries it.")
+                                f"incomplete; {again}.")
         elif prev_sha and not chunks:
             summaries.append(f"No code changed since {prev_sha[:10]}; its findings were carried or re-checked.")
         record.update(status="done", summary=" ".join(summaries)[:3000], findings=kept, dropped=dropped,
