@@ -86,10 +86,11 @@ def nits_model(authors=()):
 
 
 def nits_keep_confidence():
-    """Verifier confidences a kept nit needs (CRUCIBLE_NITS_MIN_CONFIDENCE, default high). On the clean eval cases
-    (2026-11-12, 12 runs) both medium-confidence keeps were matters of taste and 3 of 4 high ones were real."""
-    floor = os.environ.get("CRUCIBLE_NITS_MIN_CONFIDENCE", "high").strip().lower()
-    return ("high", "medium") if floor == "medium" else ("high",)
+    """Verifier confidences a kept nit needs (CRUCIBLE_NITS_MIN_CONFIDENCE, default medium: high or medium). The
+    ReviewBench judge (2026-11-12, 25 PRs) found medium-confidence nits as precise as high ones (56/58 vs 68/72), and
+    dropping them cost 3.7 points of grounded recall; `high` is for runs where a taste nit costs more than a miss."""
+    floor = os.environ.get("CRUCIBLE_NITS_MIN_CONFIDENCE", "medium").strip().lower()
+    return ("high",) if floor == "high" else ("high", "medium")
 
 
 def nits_cap_usd():
@@ -139,7 +140,7 @@ def nit_verify_prompt(batch):
 
 def verify_nits(nits, codes, repo, budget, model, fresh=False):
     """-> (kept, dropped). Batched read-only verification of the nit tier. A nit is kept only on keep=true with high
-    confidence (nits_keep_confidence); one with no verdict (a failed call, the cap reached, a skipped index) is dropped as
+    or medium confidence (nits_keep_confidence); one with no verdict (a failed call, the cap reached, a skipped index) is dropped as
     unverified, not kept: the nit tier never fails open, so its precision is the verifier's."""
     kept, dropped = [], []
     for start in range(0, len(nits), NIT_BATCH):
