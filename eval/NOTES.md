@@ -508,3 +508,29 @@ interval (43.8) still doesn't reach 46.3, so a top-5 claim isn't supported yet. 
 
 Spend: $44.22 for the 25 reviews (nit verification $2.76 of it) on #12 (66% → 86% weekly with the judge, which the
 judge CLI doesn't meter in $). Local, tonight: about $6.20 (py-race A/B, clean-case nit runs).
+
+### 2026-11-12 · a nit reserve for budget-capped reviews (ReviewBench focus item 1)
+
+ReviewBench run 2's two capped PRs (1 and 13, at $5) spent everything on the findings, and every nit then went
+unverified and was dropped (the nit tier fails closed). Change (11c0059 + the self-review round): the verification of
+medium/low findings now runs against the budget less a reserve for the nits, `min(nit cap $0.75, 15% of the budget,
+$0.20 per batch of 12 deduped nit candidates)` (`nits_reserve_usd`, recorded as `review.json` `nits_reserve_usd`).
+Blocking-severity findings are verified first, against the whole budget. A finding the hold leaves unverified is kept
+(fail closed) with its own reason, and the attempt doesn't count toward the retry limit. At the adapter's $5 the
+reserve is the full $0.75 nit cap, about 4.7× run 2's mean nit spend per PR ($0.11). No limit set: nothing changes.
+
+Local check, `crucible eval --nits --budget 0.28`, 8 cases (6 bug, 2 clean), one round per arm, d10bc6f vs the change:
+
+| | before (d10bc6f) | after |
+|---|---|---|
+| bug recall (blocking) | 6/6 | 6/6 |
+| false blocking on clean | 0 | 0 |
+| true findings dropped | 1 | 0 |
+| nits kept / dropped | 1 / 2 | 2 / 1 |
+| nit verification $ | $0.157 | $0.073 |
+| total $ | $1.378 | $1.377 |
+
+One round on 8 cases is noise-sized. It shows that the hold costs no recall or cost here, not that it recovers nits
+at scale. At $0.12 per case neither arm verified anything: the review pass alone (~$0.17) used the whole budget,
+which no reserve can fix. The real test is PRs 1 and 13 on the next ReviewBench run (a borrowed account, not this lane): count
+their kept nits (run 2: 0 on PR 1) and their unverified findings. Spend this shift: $0.45 self-review + ~$3.75 local eval.

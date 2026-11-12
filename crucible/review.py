@@ -125,11 +125,15 @@ class SubBudget:
 
 # Nits are verified after the findings, so on a PR whose review budget runs out (ReviewBench run 2: PRs 1 and 13 at
 # the $5 cap) every nit went unverified and was dropped, though nits were 95% true by the judge and findings 64%.
-# The findings' verification therefore runs with a reserve held back for the nits: about one batch's cost per batch
-# of candidates, at most the nit cap and NIT_RESERVE_SHARE of the budget. Unverified findings are still kept (fail
-# closed), so the hold costs precision on a capped PR at most, never a blocking finding.
+# So the verification of medium/low findings runs with a reserve held back for the nits: about one batch's cost per
+# batch of candidates, at most the nit cap and NIT_RESERVE_SHARE of the budget (the nit cap's $0.75 at the adapter's
+# $5). Findings at blocking severity are verified first, against the whole budget. A held finding is kept unverified
+# (fail closed) at the reviewer's severity, so the cost on a capped PR is precision, plus any medium the verifier
+# would have raised to blocking. The hold is best-effort: up to 4 verifier calls already in flight can overspend it,
+# as they can the budget itself (cost is added when a call returns).
 NIT_BATCH_EST_USD = 0.20             # ReviewBench run 2: $2.76 over ~17 batches of nit verification ≈ $0.16
-NIT_RESERVE_SHARE = 0.2
+NIT_RESERVE_SHARE = 0.15
+HELD_REASON = "not verified: the rest of the review budget is held for nit verification (raise --budget)"
 
 
 def nits_reserve_usd(limit, n_cands):
@@ -214,11 +218,17 @@ def verify_nits(nits, codes, repo, budget, model, fresh=False):
     return kept, dropped
 
 
+def nit_pool(nit_cands, findings, dlabel, measured):
+    """The nits worth verifying: not a repeat of a finding (kept or not) or of each other, not a description-length
+    nit (the length check owns that)."""
+    nits = [f for f in dedupe([dict(f, source="review") for f in nit_cands]) if not any(similar(f, g) for g in findings)]
+    return [dict(f, source="nit") for f in nits if not (measured and length_only(f, dlabel))]
+
+
 def run_nits(nit_cands, findings, repo, sha, dctx, dlabel, measured, budget, authors, fresh=False, log=print):
     """-> the record fields of the nit tier. Nits that repeat a finding (kept or not) or each other are left out,
     so is a description-length nit (the length check owns that), and the rest are verified under their own cap."""
-    nits = [f for f in dedupe([dict(f, source="review") for f in nit_cands]) if not any(similar(f, g) for g in findings)]
-    nits = [dict(f, source="nit") for f in nits if not (measured and length_only(f, dlabel))]
+    nits = nit_pool(nit_cands, findings, dlabel, measured)
     for f in assign_ids(nits):
         f.setdefault("proposed_severity", f["severity"])
         f["id"] = "NIT" + f["id"][2:]              # CR-1a2b3c4d -> NIT-1a2b3c4d: never an answerable finding id
@@ -1090,18 +1100,23 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             f.setdefault("proposed_severity", f["severity"])
         kept, dropped = [f for f in new if f["source"] in ("scanner", "style")] + carried, list(carried_dropped) + ruled
         record["verify_tiers"] = tiers
-        hold = nits_reserve_usd(budget.limit, len(nit_cands)) if nits else 0.0
-        vbudget = HeldBudget(budget, hold) if hold else budget
+        n_nits = len(nit_pool(nit_cands, cands + carried + reverify, dlabel, measured)) if nits else 0
+        hold = nits_reserve_usd(budget.limit, n_nits)
+        held = HeldBudget(budget, hold) if hold else budget
         if hold:
             record["nits_reserve_usd"] = hold
-            log(f"  holding ${hold:.2f} of the budget for verifying {len(nit_cands)} nit candidate(s)")
+            log(f"  holding ${hold:.2f} of the budget for verifying {n_nits} nit(s); blocking findings may use it")
+        to_verify.sort(key=lambda f: f["severity"] not in BLOCKING)    # stable: blocking ones claim the budget first
 
         def verify(f):
             since = anchor_since(repo, prev_sha, f, base) if f.get("anchor_changed") else ""
+            b = budget if f["severity"] in BLOCKING else held
             try:
-                return (f,) + verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo, vbudget, tiers, fresh,
+                return (f,) + verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo, b, tiers, fresh,
                                             since, dctx and dctx[0], no_exec=no_exec) + (None,)
             except Failed as e:
+                if b is held and held.exhausted() and not budget.exhausted():
+                    return f, None, [], HELD_REASON
                 return f, None, [], str(e)
         if to_verify:
             log(f"  verifying {len(to_verify)} finding(s), one per call" + (f" (tiers: {' → '.join(tiers)})" if len(tiers) > 1 else ""))
@@ -1111,7 +1126,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                         # re-runs of this commit split against the same earlier review every time, so its count
                         # alone would never grow: this commit's own stored count wins when larger
                         n = max(f["verification"].get("attempts", 1) if verify_failed(f) else 0, attempts.get(f["id"], 0))
-                        f["verification"] = {"status": "unverified", "reason": err, "attempts": n + 1}
+                        # a held finding made no call: a re-run with a bigger budget should still try it
+                        f["verification"] = {"status": "unverified", "reason": err, "attempts": n + (err != HELD_REASON)}
                         kept.append(f)
                     elif v.get("salvaged") and not v["keep"]:   # second-hand: a transcription never drops a finding
                         f["verification"] = {"status": "unverified", "tiers": trail,
@@ -1136,7 +1152,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
 
             def recheck(f):
                 try:
-                    v, trail = verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo, vbudget, tiers[:1], fresh, since,
+                    v, trail = verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo, held, tiers[:1], fresh, since,
                                             dctx and dctx[0], no_exec=no_exec)
                     return f, v
                 except Failed:

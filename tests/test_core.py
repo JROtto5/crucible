@@ -6014,7 +6014,8 @@ class TestNitTier(unittest.TestCase):
         return {"severity": severity, "file": file, "line": line, "title": title, "problem": "p",
                 "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "w", "fix": "x"}
 
-    def _run(self, nits_out, verdicts=None, nits=True, env=None, fail_batch=False, budget=None, findings=1, verify_cost=0.0):
+    def _run(self, nits_out, verdicts=None, nits=True, env=None, fail_batch=False, budget=None, findings=1, verify_cost=0.0,
+             review_cost=0.0):
         """-> (review.json, calls). The fake reviewer returns one important finding and `nits_out` as nits; the nit
         verifier answers `verdicts` (index -> (keep, confidence)), default keep/high for every nit."""
         from unittest import mock
@@ -6031,6 +6032,8 @@ class TestNitTier(unittest.TestCase):
                         enumerate(["unclosed socket in g", "README flag renamed", "retry loop never sleeps", "lock held across await", "token logged at info", "timeout default changed", "empty list crashes max"][:findings - 1])]}
                 if "nits" in schema["properties"]:
                     out["nits"] = nits_out
+                if budget is not None:
+                    budget.add(review_cost)
                 return out, 0.1
             if "verdicts" in schema["properties"]:
                 if fail_batch:
@@ -6138,20 +6141,31 @@ class TestNitTier(unittest.TestCase):
             r, calls = self._run(nits, budget=1.3, findings=8, verify_cost=0.15)
         b = seen[0]
         self.assertEqual(sorted(f["title"] for f in r["nits"]), ["magic number 30", "missing docstring on new public f"])
-        self.assertEqual(r["nits_reserve_usd"], 0.2)             # one batch's estimate, under 20% of $1.30 and the cap
+        self.assertEqual(r["nits_reserve_usd"], 0.195)           # 15% of $1.30, under one batch's estimate and the cap
         self.assertIn("verify_nits", [c["kind"] for c in calls])
         unv = [f for f in r["findings"] if f["verification"]["status"] == "unverified"]
         self.assertTrue(unv)                                     # the hold cut finding verification, fail closed
-        self.assertTrue(all("budget" in f["verification"]["reason"] for f in unv))
+        self.assertEqual({f["verification"]["reason"] for f in unv}, {V.HELD_REASON})
+        self.assertEqual({f["verification"]["attempts"] for f in unv}, {0})   # held, not tried: a re-run retries it
+        self.assertTrue(all(V.verify_retryable(f) for f in unv))
+        self.assertEqual({f["severity"] for f in unv}, {"medium"})
         self.assertEqual(len(r["findings"]), 8)                  # nothing dropped for want of budget
+        imp = next(f for f in r["findings"] if f["title"] == "division by zero in f")
+        self.assertEqual(imp["verification"]["status"], "verified")   # blocking severity: verified first, whole budget
         self.assertLessEqual(b.spent, 1.3 + 1e-9)
+
+    def test_blocking_finding_may_spend_the_hold(self):
+        # the review pass leaves $0.02 of $0.30, under the $0.045 hold: the medium finding is held, the important isn't
+        r, _ = self._run([self._f("a nit", 2)], budget=0.3, findings=2, review_cost=0.28)
+        status = {f["title"]: f["verification"]["status"] for f in r["findings"]}
+        self.assertEqual(status, {"division by zero in f": "verified", "unclosed socket in g": "unverified"})
 
     def test_no_reserve_without_a_limit_or_nits(self):
         self.assertEqual(V.nits_reserve_usd(None, 30), 0.0)
         self.assertEqual(V.nits_reserve_usd(5.0, 0), 0.0)
         self.assertEqual(V.nits_reserve_usd(5.0, 13), 0.4)         # two batches
         self.assertEqual(V.nits_reserve_usd(5.0, 100), 0.75)       # the nit cap
-        self.assertEqual(V.nits_reserve_usd(1.0, 100), 0.2)        # a fifth of a small budget
+        self.assertEqual(V.nits_reserve_usd(1.0, 100), 0.15)       # 15% of a small budget
         with unittest.mock.patch.dict(os.environ, {"CRUCIBLE_NITS_MAX_USD": "0"}):
             self.assertEqual(V.nits_reserve_usd(5.0, 10), 0.0)
         r, _ = self._run([self._f("a nit", 2)])
