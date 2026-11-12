@@ -563,7 +563,7 @@ message in a pass as a failed PR (non-zero exit, rerun), not as a finished revie
 | grounded R micro [Wilson] | 38.6 [33.7, 43.8] | 37.5 [32.6, 42.7] | | |
 | grounded P macro | 89.7 | 85.2 | 88.8 | 88.9 |
 | aug P / R macro | 86.3 / 55.6 | 93.7 / 55.3 | 89.1 / 52.5 | **94.1 / 56.6** |
-| aug F1 (macro P, R) | 67.6 | 69.6 | 65.7 | **70.6** |
+| aug F1 (macro P, R) | 67.6 | 69.6 | 66.1 | **70.7** |
 | comments / PR | 14.8 | 12.8 (169 findings + 190 nits kept) | | |
 | $ / PR mean / median / max | 1.77 / 1.11 / 5.09 | 1.56 / 0.99 / 4.91 | | |
 
