@@ -1,7 +1,7 @@
 """The review pipeline: checks → scanners → chunked review → per-finding verification → verdict."""
 import concurrent.futures as cf, datetime as dt, fcntl, hashlib, os, re, subprocess, textwrap
 from . import catalog, checks as checks_mod, diff as diff_mod, readiness, routing, style as style_mod
-from .util import (BLOCKING, HOME, MODELS, PREFERENCE, SEV, TOOLS_READ, TOOLS_RUN, Budget, Failed, NoStructuredOutput,
+from .util import (BLOCKING, BUDGET_EXHAUSTED, HOME, MODELS, PREFERENCE, SEV, TOOLS_READ, TOOLS_RUN, Budget, Failed, NoStructuredOutput,
                    claude, default_base,
                    exclude_locally, git, is_dirty, norm_words, project_dir, project_key, read_json, review_dir,
                    stable_id, token_diff, token_summary, write_json)
@@ -123,14 +123,10 @@ class SubBudget:
         return getattr(self.parent, name)
 
 
-# Nits are verified after the findings, so on a PR whose review budget runs out (ReviewBench run 2: PRs 1 and 13 at
-# the $5 cap) every nit went unverified and was dropped, though nits were 95% true by the judge and findings 64%.
-# So the verification of medium/low findings runs with a reserve held back for the nits: about one batch's cost per
-# batch of candidates, at most the nit cap and NIT_RESERVE_SHARE of the budget (the nit cap's $0.75 at the adapter's
-# $5). Findings at blocking severity are verified first, against the whole budget. A held finding is kept unverified
-# (fail closed) at the reviewer's severity, so the cost on a capped PR is precision, plus any medium the verifier
-# would have raised to blocking. The hold is best-effort: up to 4 verifier calls already in flight can overspend it,
-# as they can the budget itself (cost is added when a call returns).
+# Nits verify after the findings, so a PR that hit its budget (ReviewBench run 2: PRs 1 and 13) dropped every nit,
+# though nits were 95% true and findings 64%. Medium/low findings therefore verify against the budget less a nit
+# reserve; blocking ones go first, on the whole budget. A held finding is kept unverified at the reviewer's severity.
+# Best-effort: calls already in flight can overspend the hold, as they can the budget.
 NIT_BATCH_EST_USD = 0.20             # ReviewBench run 2: $2.76 over ~17 batches of nit verification ≈ $0.16
 NIT_RESERVE_SHARE = 0.15
 HELD_REASON = "not verified: the rest of the review budget is held for nit verification (raise --budget)"
@@ -1117,7 +1113,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             except Failed as e:
                 # only claude()'s pre-call refusal is the hold: a call that ran and failed (its own --max-budget-usd
                 # cut, a timeout) keeps its real reason and counts as an attempt
-                if str(e) == "budget exhausted" and b is held and not budget.exhausted():
+                if str(e) == BUDGET_EXHAUSTED and b is held and not budget.exhausted():
                     return f, None, [], HELD_REASON
                 return f, None, [], str(e)
         if to_verify:

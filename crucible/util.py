@@ -273,11 +273,14 @@ TOOLS_RUN = TOOLS_READ + ["Bash(node:*)", "Bash(npx vitest:*)", "Bash(npx jest:*
                           "Bash(npm test:*)", "Bash(npm run test:*)", "Bash(pytest:*)"] + PY_RUNNERS
 
 
+BUDGET_EXHAUSTED = "budget exhausted"     # claude()'s refusal before a call starts (review.py tells holds apart by it)
+
+
 def claude(prompt, model, schema, cwd, budget=None, tools=TOOLS_READ, effort="high", timeout=1500, kind="other"):
     """One isolated, structured model call. Raises Failed on any problem. `kind` labels its tokens and cost in the
     budget (Budget.kind_snapshot)."""
     if budget and budget.exhausted():
-        raise Failed("budget exhausted")
+        raise Failed(BUDGET_EXHAUSTED)
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"    # a verifier's python probe must not leave __pycache__ in the checkout
     if os.environ.get("CRUCIBLE_CLAUDE_DIR"):
