@@ -544,3 +544,35 @@ One round on 8 cases is noise-sized. It shows that the hold costs no recall or c
 at scale. A first try at `--budget 0.12` (not in the table) verified nothing in either arm: the review pass alone
 (~$0.17) used the whole budget, which no reserve can fix. The real test is PRs 1 and 13 on the next ReviewBench run (a borrowed account, not this lane): count
 their kept nits (run 2: 0 on PR 1) and their unverified findings. Spend this shift: $2.00 over 4 self-review rounds + $4.72 local eval (both budgets, both arms).
+
+### 2026-11-12 · ReviewBench run 3 (R3 code, 10df5ca): better on the 23 clean PRs, 2 PRs lost to a Fable spend limit
+
+Same 25 test PRs, same adapter (`--nits`, `RB_CONFIG_BUDGET=5`, `RB_CONFIG_KEEP_REVIEW=1`), image `crucible-rb:r3`
+built at 10df5ca (nit reserve held over the passes, 20 nits per pass, house-style and security nits). Account #18
+(ARMOR loan), 52% → 60% weekly. Sonnet 5 judge, 1 round. 2.41 h of reviews, $38.88 total.
+
+**Two PRs are damaged, not measured.** crucible routes the biggest diffs to `claude-fable-5-2`, and on #18 that model
+answered "You've hit your monthly spend limit" (Opus and Sonnet worked). PR 13 (nebula) failed every pass: 0 comments,
+$0. PR 1 (emdash) lost some passes: 32 comments vs 77 in run 2. Those two scored 0.00 grounded recall (run 2: 0.78,
+0.33). The 23 other PRs ran normally, so they are the fair comparison. Lesson for the adapter: treat a spend-limit
+message in a pass as a failed PR (non-zero exit, rerun), not as a finished review.
+
+| | run 2 (25) | run 3 as run (25) | run 2, 23 clean PRs | run 3, 23 clean PRs |
+|---|---|---|---|---|
+| grounded R macro | 41.1 | 38.0 | 39.8 | **41.3** |
+| grounded R micro [Wilson] | 38.6 [33.7, 43.8] | 37.5 [32.6, 42.7] | | |
+| grounded P macro | 89.7 | 85.2 | 88.8 | 88.9 |
+| aug P / R macro | 86.3 / 55.6 | 93.7 / 55.3 | 89.1 / 52.5 | **94.1 / 56.6** |
+| aug F1 (macro P, R) | 67.6 | 69.6 | 65.7 | **70.6** |
+| comments / PR | 14.8 | 12.8 (169 findings + 190 nits kept) | | |
+| $ / PR mean / median / max | 1.77 / 1.11 / 5.09 | 1.56 / 0.99 / 4.91 | | |
+
+As run, by severity (macro GR): high 42.5, medium 44.5, low 30.8. By category: security 45.5 (micro GR 59.3, GP 66.7;
+run 2 was R 20.4 / P 57.1), correctness 44.0, maintainability 30.1, documentation 25.0, api-architecture 25.0.
+Judged true: findings 94.2%, high nits 93.9%, medium nits 91.2%. No nits: GR 22.5, so nits carry about 15 points of
+recall at ~92% true.
+
+Reading: the R3 changes help where they were aimed (security recall up from 20 to 46, aug P up 5, aug R up 4 on the
+clean PRs) at lower cost. The as-run headline is pulled down by the two account-damaged PRs; rerunning PR 1 and PR 13
+on an account whose Fable 5.2 works is the next step before quoting a single R3 number. Still short of #5 (Laude:
+grounded R 46.3, aug F1 75.4); at aug F1 ~70 and grounded R ~41 it sits at #6 (block/review 32.6 / 59.4 is below).
