@@ -6494,6 +6494,15 @@ class TestDocRefs(unittest.TestCase):
         self.assertNotIn("pkg/doc.py:6:", text)                 # code after the docstring closed
         self.assertNotIn("pkg/doc.ts:4:", text)
 
+    def test_prose_spans_are_not_opened_by_a_delimiter_in_a_string_or_line_comment(self):
+        from crucible import docrefs
+        self.assertEqual(docrefs._py_prose("TRIPLE = '\"\"\"'\ndef send():\n    x = fetch_items(url)\n"), set())
+        self.assertEqual(docrefs._py_prose('def f():\n    """one line"""\n    fetch_items()\n'), set())
+        self.assertEqual(docrefs._py_prose('def f(:\n    """\n'), set())          # untokenizable: nothing, not all
+        self.assertEqual(docrefs._block_prose("// see /* the old way\nfetch_items(a)\n"), set())
+        self.assertEqual(docrefs._block_prose('app.use("/api/*", h)\nfetch_items()\n'), set())
+        self.assertEqual(docrefs._block_prose("/**\n * fetch_items\n */\ncode()\n"), {2, 3})
+
     def test_a_class_base_is_not_a_parameter(self):
         from crucible import docrefs
         d = make_repo({"m.py": "class Mailbox(BaseStore, metaclass=ABCMeta):\n    pass\n"},

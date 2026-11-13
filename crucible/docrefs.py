@@ -149,31 +149,60 @@ def _grep(repo, names, pathspecs):
     return out
 
 
-TRIPLE_RX = re.compile(r'"""|\'\'\'')
+def _py_prose(text):
+    """Lines after the first of every multi-line string literal (docstrings), read with tokenize so a triple quote
+    inside another string or a comment can't open a span."""
+    import io, tokenize
+    out = set()
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(text).readline):
+            if tok.type == tokenize.STRING and tok.end[0] > tok.start[0]:
+                out.update(range(tok.start[0] + 1, tok.end[0] + 1))
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        pass
+    return out
+
+
+def _block_prose(text):
+    """Lines inside /* */ comments of a C-like file. Quoted strings and // comments are skipped on the way, so a
+    glob like "src/*" or `// see /* x` doesn't open one."""
+    out, inside = set(), False
+    for no, ln in enumerate(text.split("\n"), 1):
+        if inside:
+            out.add(no)
+        i = 0
+        while i < len(ln):
+            if inside:
+                j = ln.find("*/", i)
+                if j < 0:
+                    break
+                inside, i = False, j + 2
+                continue
+            c = ln[i]
+            if c in "\"'`":
+                j = i + 1
+                while j < len(ln) and ln[j] != c:
+                    j += 2 if ln[j] == "\\" else 1
+                i = j + 1
+            elif ln.startswith("//", i):
+                break
+            elif ln.startswith("/*", i):
+                inside, i = True, i + 2
+            else:
+                i += 1
+    return out
 
 
 def _in_prose(repo, path, cache):
     """Line numbers of path (at the checkout) inside a docstring or a block comment: a docstring's body lines carry
     no comment marker, and that is where Python documents parameters and behaviour."""
     if path not in cache:
-        lines, out = set(), set()
         try:
             with open(os.path.join(repo, path), encoding="utf-8", errors="replace") as fh:
                 text = fh.read()
         except OSError:
             text = ""
-        py = path.endswith(".py")
-        inside = None                   # the open delimiter, while in a docstring or block comment
-        for no, ln in enumerate(text.split("\n"), 1):
-            if inside:
-                out.add(no)
-            for m in (TRIPLE_RX.finditer(ln) if py else re.finditer(r"/\*|\*/", ln)):
-                d = m.group(0)
-                if inside is None and d != "*/":
-                    inside = d
-                elif inside is not None and (d == inside or (inside == "/*" and d == "*/")):
-                    inside = None
-        cache[path] = out
+        cache[path] = _py_prose(text) if path.endswith(".py") else set() if path.endswith(".rb") else _block_prose(text)
     return cache[path]
 
 
