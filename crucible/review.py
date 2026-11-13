@@ -2,7 +2,7 @@
 import concurrent.futures as cf, datetime as dt, fcntl, hashlib, os, re, subprocess, textwrap
 from . import catalog, checks as checks_mod, diff as diff_mod, readiness, routing, style as style_mod
 from .util import (BLOCKING, BUDGET_EXHAUSTED, HOME, MODELS, PREFERENCE, SEV, TOOLS_READ, TOOLS_RUN, Budget, Failed, NoStructuredOutput,
-                   claude, default_base,
+                   claude, crucible_build, default_base,
                    exclude_locally, git, is_dirty, norm_words, project_dir, project_key, read_json, review_dir,
                    stable_id, token_diff, token_summary, write_json)
 
@@ -1246,7 +1246,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         record.update(status="failed", reason=str(e), cost_usd=round(budget.spent, 4))
     except Exception as e:  # noqa: BLE001 - never leave a half-written review
         record.update(status="failed", reason=f"{type(e).__name__}: {e}", cost_usd=round(budget.spent, 4))
-    record.update(token_fields(budget, tok_split))
+    record.update(token_fields(budget, tok_split), crucible_sha=crucible_build())
     write_json(os.path.join(d, "review.json"), record)
     branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD", check=False)
     idx_p = os.path.join(project_dir(project), "branches.json")

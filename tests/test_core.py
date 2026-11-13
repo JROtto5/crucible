@@ -438,6 +438,9 @@ class TestCatalogDigest(unittest.TestCase):
         self.assertIn("+x = 2", sent)                                   # code next to it is still a diff
         self.assertEqual(r["coverage"]["digested"], ["po/fr.po"]); self.assertTrue(r["coverage"]["complete"])
         self.assertIn("catalogs read as a digest of their entries: po/fr.po", report)
+        self.assertEqual(r["crucible_sha"], U.crucible_build())     # which build made it, not the PR head
+        self.assertRegex(r["crucible_sha"], r"^([0-9a-f]{40}(-dirty)?|v\d+\.\d+\.\d+)$")
+        self.assertNotEqual(r["crucible_sha"].split("-")[0], r["sha"])
 
 
 class TestCIMatrix(unittest.TestCase):

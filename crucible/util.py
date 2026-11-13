@@ -54,6 +54,27 @@ def git(repo, *args, check=True):
     return r.stdout.strip()
 
 
+_BUILD = None
+
+
+def crucible_build():
+    """crucible's own build, stamped into every review.json so "which build made this finding" can be answered later
+    (review.json's `sha` is the PR head, not ours): this checkout's HEAD, with "-dirty" for uncommitted changes, or
+    "v<version>" when crucible runs from an install that isn't its own git checkout."""
+    global _BUILD
+    if _BUILD is None:
+        from . import __version__
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        top = git(root, "rev-parse", "--show-toplevel", check=False)
+        sha = git(root, "rev-parse", "HEAD", check=False) if top and os.path.realpath(top) == os.path.realpath(root) else ""
+        if re.fullmatch(r"[0-9a-f]{40}", sha or ""):
+            dirty = git(root, "status", "--porcelain", "--untracked-files=no", check=False)
+            _BUILD = sha + ("-dirty" if dirty else "")
+        else:
+            _BUILD = "v" + __version__
+    return _BUILD
+
+
 def ref_exists(repo, ref):
     return subprocess.run(["git", "-C", repo, "rev-parse", "--verify", "--quiet", ref + "^{commit}"],
                           capture_output=True).returncode == 0
