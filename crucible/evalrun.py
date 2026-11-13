@@ -5,7 +5,8 @@ Each case in eval/cases/<name>/ has base/ (the tree before), change/ (the tree a
    "keywords": [...], "also": [{"file": "...", "lines": [...]}]}
 A "nit" case plants several non-blocking problems instead, as "issues": [{"name", "file", "lines", "keywords"}]; it
 scores how many a kept nit or finding (any severity) hits, and counts any blocking finding there as false blocking.
-It is left out of bug recall and clean-case false blocking, so the nit tier's recall is read on its own.
+It is left out of bug recall and clean-case false blocking, so the nit tier's recall is read on its own, and it only
+runs with --nits.
 `also` lists other places a correct finding may anchor (the callee that really blocks, say); keywords apply there too.
 `split` defaults to "build". Build cases are the ones prompts and verification have been tuned against, so their
 recall flatters the reviewer. Holdout cases come from real catches and are never used to justify a prompt change; the
@@ -38,6 +39,8 @@ def load_cases(names=None, split=None):
         if names and not any(n in name for n in names):
             continue
         exp = json.load(open(os.path.join(d, "expected.json")))
+        if exp.get("kind") == "nit" and not exp.get("issues"):
+            raise SystemExit(f"eval case {name}: a nit case needs a non-empty \"issues\" list")
         if case_split(exp) not in SPLITS:
             raise SystemExit(f"eval case {name}: split must be one of {', '.join(SPLITS)}, not {exp['split']!r}")
         if split and case_split(exp) != split:
@@ -289,6 +292,11 @@ def run_eval(args, log=print):
     if not os.path.isdir(os.path.join(EVAL_DIR, "cases")):
         raise SystemExit("crucible eval runs from a git clone of crucible (eval/cases is not part of the installed package)")
     cases = load_cases(args.cases, getattr(args, "split", None))
+    if not getattr(args, "nits", False):    # without --nits there is no nit tier to score, only review tokens to spend
+        skipped = [n for n, d, e in cases if e["kind"] == "nit"]
+        cases = [c for c in cases if c[2]["kind"] != "nit"]
+        if skipped:
+            log(f"skipping {len(skipped)} nit case(s) (they need --nits): {', '.join(skipped)}")
     if not cases:
         raise SystemExit("no eval cases matched")
     cache_dir = args.cache or None

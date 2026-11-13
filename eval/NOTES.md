@@ -576,3 +576,33 @@ Reading: the R3 changes help where they were aimed (security recall up from 20 t
 clean PRs) at lower cost. The as-run headline is pulled down by the two account-damaged PRs; rerunning PR 1 and PR 13
 on an account whose Fable 5.2 works is the next step before quoting a single R3 number. Still short of #5 (Laude:
 grounded R 46.3, aug F1 75.4); at aug F1 ~70 and grounded R ~41 it sits at #6 (block/review 32.6 / 59.4 is below).
+
+### 2026-11-13 · maintainability nits (ReviewBench focus item 1): local A/B, no gain visible
+
+Change: a maintainability paragraph in the `--nits` prompt, built like the security one that took run 3's security
+recall from 20 to 45.5. It covers a copied block (naming both sites), dead code (after a search for uses), debug output
+or commented-out code, a re-implemented existing helper (naming its file and line), one thing named two ways, and a
+repeated magic value. The nit verifier must search for uses or read both sites. It is limited to checkable kinds because
+run 2's false maintainability findings were taste (70 of 72 from the house-style comment checks). The run 3 golden
+misses themselves were not read: the judge output was not on this desktop or on blaze-3.
+
+New eval kind `nit`: `issues` lists planted non-blocking problems, scored by how many a kept nit or finding (any
+severity) hits; a blocking finding there counts as false blocking. These cases run only with `--nits` and stay out of
+bug recall.
+
+`crucible eval --nits --no-write`, before (4804564) vs after, 2 rounds per arm:
+
+| | before | after |
+|---|---|---|
+| nit-py-maintainability (4 planted: missed reuse, dead code, duplication, debug print) | 4/4, 4/4 | 4/4, 4/4 |
+| nit-py-maintainability-cross (3 planted, evidence in untouched files) | 3/3, 3/3 | 3/3, 3/3 (1 false blocking in r1*) |
+| clean-py-docs + clean-js-refactor: false blocking / nits kept | 0 / 0 | 0 / 0 |
+| $ for the first case + 2 clean, per round | $0.89, $0.86 | $0.82, $0.80 |
+
+\* The cross case's first fixture changed `line_items()` from a list to a JSON string, a real contract change, and the
+blocking finding was most likely that. The fixture now keeps the return type; it was not re-run.
+
+Reading: both cases are at the ceiling in both arms. The reviewer already finds blatant copy/dead/reuse problems in a
+small diff, so these cases can catch a regression but can't show a gain. There is no local evidence of a recall gain;
+the claim waits for ReviewBench run 4's maintainability category (run 3: 30.1 on 44 golden). Spend this shift: $4.83
+local eval + $0.44 self-review.
