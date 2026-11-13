@@ -1,8 +1,11 @@
 """`crucible eval`: run the full review on labelled fixture changes and score it.
 
 Each case in eval/cases/<name>/ has base/ (the tree before), change/ (the tree after) and expected.json:
-  {"kind": "bug"|"clean", "split": "build"|"holdout", "message": "<commit subject>", "file": "...", "lines": [...],
+  {"kind": "bug"|"clean"|"nit", "split": "build"|"holdout", "message": "<commit subject>", "file": "...", "lines": [...],
    "keywords": [...], "also": [{"file": "...", "lines": [...]}]}
+A "nit" case plants several non-blocking problems instead, as "issues": [{"name", "file", "lines", "keywords"}]; it
+scores how many a kept nit or finding (any severity) hits, and counts any blocking finding there as false blocking.
+It is left out of bug recall and clean-case false blocking, so the nit tier's recall is read on its own.
 `also` lists other places a correct finding may anchor (the callee that really blocks, say); keywords apply there too.
 `split` defaults to "build". Build cases are the ones prompts and verification have been tuned against, so their
 recall flatters the reviewer. Holdout cases come from real catches and are never used to justify a prompt change; the
@@ -117,7 +120,12 @@ def score_case(rev, exp):
                    cost_nits=rev.get("cost_nits_usd", 0), nit_hits=sum(1 for f in rev["nits"] if hits(f, exp)),
                    nit_list=[{**{k: f.get(k) for k in ("severity", "file", "line", "title")},   # readable on clean cases
                               "confidence": (f.get("verification") or {}).get("confidence")} for f in rev["nits"]])
-    if exp["kind"] == "bug":
+    if exp["kind"] == "nit":
+        pool = kept + list(rev.get("nits") or [])
+        out["issues"] = len(exp["issues"])
+        out["issues_found"] = sorted(i["name"] for i in exp["issues"] if any(hits(f, i) for f in pool))
+        out["false_blocking"] = len(blocking)
+    elif exp["kind"] == "bug":
         out["caught"] = any(hits(f, exp) for f in blocking)
         out["caught_any_severity"] = any(hits(f, exp) for f in kept)
         out["true_dropped"] = sum(1 for f in dropped if hits(f, exp))
@@ -176,9 +184,15 @@ def _split_summary(results):
             "false_blocking": sum(r["false_blocking"] for r in clean) if clean else None}
 
 
+def _nit_res(r):
+    fb = f", {r['false_blocking']} false blocking" if r["false_blocking"] else ""
+    return f"{len(r['issues_found'])}/{r['issues']} issues ({', '.join(r['issues_found']) or 'none'}){fb}"
+
+
 def summarize(results):
     bugs = [r for r in results if r["kind"] == "bug" and r.get("ok")]
     clean = [r for r in results if r["kind"] == "clean" and r.get("ok")]
+    nitc = [r for r in results if r["kind"] == "nit" and r.get("ok")]
     return {
         "cases": len(results), "errors": sum(1 for r in results if not r.get("ok")),
         "recall": round(sum(r["caught"] for r in bugs) / len(bugs), 3) if bugs else None,
@@ -195,6 +209,8 @@ def summarize(results):
             "nits_dropped": sum(r.get("nits_dropped", 0) for r in results),
             "cost_nits_usd": round(sum(r.get("cost_nits", 0) or 0 for r in results), 3)}
            if any("nits" in r for r in results) else {}),
+        **({"nit_issues": sum(r["issues"] for r in nitc), "nit_issues_found": sum(len(r["issues_found"]) for r in nitc),
+            "false_blocking_on_nit_cases": sum(r["false_blocking"] for r in nitc)} if nitc else {}),
         "by_split": {sp: _split_summary([r for r in results if r.get("split", "build") == sp])
                      for sp in SPLITS if any(r.get("split", "build") == sp for r in results)},
     }
@@ -240,7 +256,7 @@ def write_results(label, settings, summary, results, partial=False):
             L.append(f"| {r['case']} | {r['kind']} | {r.get('split', 'build')} | ERROR: {r.get('error', '')[:200].replace('|', '/').replace(chr(10), ' ')} | | | ${r.get('cost', 0)} |")
             continue
         res = ("caught" if r["caught"] else "caught (non-blocking)" if r["caught_any_severity"] else "**missed**") \
-            if r["kind"] == "bug" else ("clean" if not r["false_blocking"] else f"**{r['false_blocking']} false blocking**")
+            if r["kind"] == "bug" else _nit_res(r) if r["kind"] == "nit" else ("clean" if not r["false_blocking"] else f"**{r['false_blocking']} false blocking**")
         L.append(f"| {r['case']} | {r['kind']} | {r.get('split', 'build')} | {res} | {r['blocking']} | {r['kept']} / {r['dropped']} | ${r['cost']} |")
     notes_p = os.path.join(EVAL_DIR, "NOTES.md")       # hand-written context that must survive regeneration
     if os.path.exists(notes_p):
@@ -296,6 +312,7 @@ def run_eval(args, log=print):
                      "error": f"{type(e).__name__}: {e}", "cost": 0}
             results.append(r)
             tag = (("caught" if r.get("caught") else "MISSED") if r.get("kind") == "bug"
+                   else _nit_res(r) if r.get("kind") == "nit"
                    else ("clean" if not r.get("false_blocking") else f"{r['false_blocking']} FALSE BLOCKING")) if r.get("ok") \
                 else f"error: {r.get('error')}"
             log(f"  {r['case']:<28} {tag:<20} ${r.get('cost', 0)}")
@@ -310,6 +327,9 @@ def run_eval(args, log=print):
         f"{summary['false_blocking']} · true dropped {summary['true_dropped']} · ${summary['cost_usd']} · {summary['secs']} s")
     for sp, ss in summary["by_split"].items():
         log(f"  {_fmt_split(sp, ss)}")
+    if "nit_issues" in summary:
+        log(f"  nit cases: {summary['nit_issues_found']}/{summary['nit_issues']} planted issues found · false blocking "
+            f"{summary['false_blocking_on_nit_cases']}")
     if "nits" in summary:
         log(f"  nits kept {summary['nits']} ({summary['nits_on_clean']} on clean cases) · dropped {summary['nits_dropped']} "
             f"· nit verification ${summary['cost_nits_usd']}")

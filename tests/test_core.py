@@ -1671,12 +1671,15 @@ class TestEvalScoring(unittest.TestCase):
         cases = E.load_cases()
         self.assertGreaterEqual(len(cases), 16)
         for name, d, exp in cases:
-            self.assertIn(exp["kind"], ("bug", "clean"), name)
+            self.assertIn(exp["kind"], ("bug", "clean", "nit"), name)
             self.assertTrue(os.path.isdir(os.path.join(d, "base")) and os.path.isdir(os.path.join(d, "change")), name)
             self.assertIn(E.case_split(exp), E.SPLITS, name)
             if exp["kind"] == "bug":
                 self.assertTrue(exp["file"] and exp["lines"] and exp["keywords"], name)
                 self.assertTrue(os.path.exists(os.path.join(d, "change", exp["file"])), name)
+            for i in exp.get("issues", []) if exp["kind"] == "nit" else []:
+                self.assertTrue(i["name"] and i["lines"] and i["keywords"], name)
+                self.assertTrue(os.path.exists(os.path.join(d, "change", i["file"])), name)
         held = [(n, e["kind"]) for n, d, e in E.load_cases(split="holdout")]
         self.assertIn(("py-fix-reintroduces-hang", "bug"), held)
         self.assertIn(("clean-py-bounded-shutdown", "clean"), held)
@@ -6128,6 +6131,16 @@ class TestNitTier(unittest.TestCase):
         _, calls = self._run([self._f("a nit", 2)], nits=None)
         self.assertNotIn("hardening", calls[0]["prompt"])           # the findings' bar and the base prompt stay
 
+    def test_maintainability_goes_to_nits(self):
+        r, calls = self._run([self._f("a nit", 2)], verdicts={0: (True, "high")})
+        prompt = next(c["prompt"] for c in calls if c["kind"] == "review")
+        self.assertIn("Maintainability, when it is concrete and checkable", prompt)
+        self.assertIn("name the existing one's file and line", prompt)
+        nit_prompt = next(c["prompt"] for c in calls if c["kind"] == "verify_nits")
+        self.assertIn("needs a search of the checkout for its uses", nit_prompt)
+        _, calls = self._run([self._f("a nit", 2)], nits=None)
+        self.assertNotIn("Maintainability, when", calls[0]["prompt"])   # off without --nits
+
     def test_env_turns_it_on(self):
         r, _ = self._run([self._f("a nit", 2)], nits=None, env={"CRUCIBLE_NITS": "1"})
         self.assertEqual([f["title"] for f in r["nits"]], ["a nit"])
@@ -6302,6 +6315,23 @@ class TestNitTier(unittest.TestCase):
                                           "confidence": None}])
         self.assertNotIn("nits", E.score_case({k: v for k, v in rev.items() if k != "nits"},
                                               {"kind": "clean"}))
+
+    def test_eval_nit_case_counts_planted_issues_apart_from_recall(self):
+        from crucible import evalrun as E
+        exp = {"kind": "nit", "issues": [{"name": "dead", "file": "a.py", "lines": [9], "keywords": ["unused"]},
+                                         {"name": "dup", "file": "b.py", "lines": [4], "keywords": ["copied"]},
+                                         {"name": "debug", "file": "b.py", "lines": [20], "keywords": ["print"]}]}
+        rev = {"status": "done", "cost_usd": 1, "dropped": [],
+               "findings": [{"severity": "important", "file": "b.py", "line": 5, "title": "x", "problem": ""}],
+               "nits": [{"severity": "low", "file": "a.py", "line": 30, "title": "legacy_export is unused", "problem": ""}]}
+        s = E.score_case(rev, exp)
+        self.assertEqual((s["issues"], s["issues_found"], s["false_blocking"]), (3, ["dead", "dup"], 1))
+        s.update(case="n", kind="nit", split="build")
+        summ = E.summarize([s, {"case": "c", "kind": "clean", "split": "build", "ok": True, "false_blocking": 0}])
+        self.assertEqual((summ["nit_issues"], summ["nit_issues_found"], summ["false_blocking_on_nit_cases"]), (3, 2, 1))
+        self.assertEqual(summ["false_blocking"], 0)                      # a nit case's blocking stays out of clean
+        self.assertIsNone(summ["recall"])
+        self.assertEqual(E._nit_res(s), "2/3 issues (dead, dup), 1 false blocking")
 
 
 class TestReviewBenchAdapter(unittest.TestCase):

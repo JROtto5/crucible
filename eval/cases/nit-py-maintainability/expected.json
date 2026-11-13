@@ -1,0 +1,14 @@
+{
+ "kind": "nit",
+ "message": "shop: tag URLs and sales reports; drop the legacy export flag",
+ "issues": [
+  {"name": "missed-reuse", "file": "shop/tags.py", "lines": [4, 5, 6, 7, 8],
+   "keywords": ["slugify", "util.py", "re-implement", "reimplement", "duplicates the existing"]},
+  {"name": "dead-code", "file": "shop/export.py", "lines": [14, 15, 16],
+   "keywords": ["legacy_export", "dead", "unused", "no longer called", "no caller"]},
+  {"name": "duplication", "file": "shop/report.py", "lines": [4, 14],
+   "keywords": ["duplicat", "copy", "copied", "same loop", "shared helper", "identical"]},
+  {"name": "debug-print", "file": "shop/report.py", "lines": [21],
+   "keywords": ["print", "debug"]}
+ ]
+}

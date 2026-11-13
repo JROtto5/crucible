@@ -1,0 +1,62 @@
+{
+ "kind": "nit",
+ "message": "shop: CSV importer, cart totals, JSON line items",
+ "issues": [
+  {
+   "name": "missed-reuse",
+   "file": "shop/importer.py",
+   "lines": [
+    5
+   ],
+   "keywords": [
+    "to_cents",
+    "money.py",
+    "re-implement",
+    "reimplement",
+    "existing helper"
+   ]
+  },
+  {
+   "name": "dead-code",
+   "file": "shop/fmt.py",
+   "lines": [
+    1,
+    2
+   ],
+   "keywords": [
+    "format_row",
+    "dead",
+    "unused",
+    "no longer called",
+    "no caller"
+   ],
+   "also": [
+    {
+     "file": "shop/report.py",
+     "lines": []
+    }
+   ]
+  },
+  {
+   "name": "repeated-constant",
+   "file": "shop/cart.py",
+   "lines": [
+    3
+   ],
+   "keywords": [
+    "0.0825",
+    "magic",
+    "constant",
+    "tax rate"
+   ],
+   "also": [
+    {
+     "file": "shop/importer.py",
+     "lines": [
+      8
+     ]
+    }
+   ]
+  }
+ ]
+}

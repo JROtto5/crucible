@@ -61,6 +61,10 @@ FINDINGS_NITS_SCHEMA = {**FINDINGS_SCHEMA, "properties": {**FINDINGS_SCHEMA["pro
 # gaps with no full exploit path, which the checklist's "concrete path from untrusted input" line rules out of the
 # findings, so nothing was written down, and sibling sites of a flaw found once. Nits are verified (95% true there),
 # so they can carry these without loosening the findings' bar. The base prompt is unchanged.
+# The maintainability paragraph: run 3 had security at 45.5 after that paragraph, but maintainability at 30.1 (44
+# golden). The findings that went wrong there were taste ("over-commented"); the golden ones are checkable (a copied
+# block, dead code, a re-implemented helper), so each kind names what makes it checkable, and the nit verifier is
+# told to search for uses and read both sites.
 NITS_NOTE = f"""
         Second tier, "nits" (at most {NITS_MAX_PER_PASS}, separate from findings): smaller REAL problems a careful
         reviewer would comment on but not block on: an unhandled edge case, a misleading name, comment or docstring,
@@ -76,6 +80,13 @@ NITS_NOTE = f"""
         only when a file or directory is created; secrets left on disk after the thing they belong to is deleted;
         a container or service left running as root. When one flaw repeats at several sites (the same unchecked
         cast or guard in sibling handlers), give each site its own nit or finding.
+        Maintainability, when it is concrete and checkable: a block the change copies (inside the diff, or from code
+        already in the repo) where a shared helper or loop would do, naming both sites; code the change leaves dead
+        (a function, branch, parameter, import, variable or config key nothing reaches any more, after you searched
+        for its uses); leftover debug output, commented-out code or a TODO the change adds; a new helper that
+        re-implements one the repo already has (search for it, and name the existing one's file and line); one
+        thing named two ways in the change, or a name that says something the code doesn't do; a magic number or
+        string repeated across sites instead of a named constant.
 """
 NIT_VERDICTS_SCHEMA = {"type": "object", "properties": {"verdicts": {"type": "array", "items": {
     "type": "object", "properties": {
@@ -196,6 +207,8 @@ def nit_verify_prompt(batch):
         For each claim, read the cited code (and its callers, tests or docs where the claim depends on them). Keep a
         claim only if it is literally true of the code at HEAD, caused by this change, and worth a reviewer's comment
         (not a matter of taste). confidence is high only if you checked it directly and the result is unambiguous.
+        A claim that something is unused or dead needs a search of the checkout for its uses; a claim of duplication
+        or of an existing helper needs both sites read, and holds only if they really do the same thing.
         Do not modify files. Return one verdict per claim, by its [index].
 
         """).format(n=len(batch)) + claims + "\n"
