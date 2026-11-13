@@ -641,3 +641,20 @@ Reading: both cases are at the ceiling in both arms. The reviewer already finds 
 small diff, so these cases can catch a regression but can't show a gain. There is no local evidence of a recall gain;
 the claim waits for ReviewBench run 4's maintainability category (run 3: 30.1 on 44 golden). Spend this shift: $5.08
 local eval + about $0.9 over two self-review rounds.
+
+### 2026-11-13 · ReviewBench run 3: how much of what the verifier keeps holds up (BLAZE verifier-comparison ask), $0 from stored artifacts
+
+Rule (code-read): a kept item holds up if the Sonnet 5 judge (ReviewBench @ f223ce3) matched it to a golden issue as
+true or read the code at the PR head and judged it true. Same 25 PRs, R3, 1 round as run (PR 1 and 13 partly lost to
+the Fable spend limit). Verify: Sonnet 5.5 on 19 heads, Opus 5.5 on 6, cheap tier Haiku 5.5; nits batch-verified 12/call.
+
+| | n | held up | Wilson 95% |
+|---|---|---|---|
+| verifier kept / proposed | 521 | 359 (68.9%) | [64.8, 72.7] |
+| kept findings, judged | 138 | 130 (94.2%) | [89.0, 97.0] |
+| kept nits, judged | 182 | 169 (92.9%) | [88.2, 95.8] |
+| all kept, judged | 320 | 299 (93.4%) | [90.2, 95.7] |
+
+39 kept items had no judge verdict (mostly the adapter's per-PR cap): excluded, not counted true. Verify $/PR $0.73
+($18.28 / 25); whole review $1.55/PR ($38.86); verify $ per proposed item $0.035. Not measured: how often the verifier
+wrongly disproves (the judge never saw the 162 disproved items; judging them is ~$3–5 Sonnet).
