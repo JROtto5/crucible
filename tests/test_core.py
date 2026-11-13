@@ -6344,6 +6344,14 @@ class TestNitTier(unittest.TestCase):
         with self.assertRaises(SystemExit):                      # nothing left to run
             E.run_eval(args, log=logs.append)
         self.assertIn("they need --nits", logs[0])
+        ran = []
+        stub = lambda n, d, e, a, c: ran.append(n) or {"case": n, "kind": e["kind"], "split": "build", "ok": True,
+                                                       "false_blocking": 0}
+        with mock.patch.object(E, "run_case", stub):
+            E.run_eval(SimpleNamespace(cases=["nit-py-maintainability", "clean-py-docs"], split=None, nits=False, cache=None,
+                                       review_model=None, verify_model=None, cheap_model=None, no_tiers=False,
+                                       budget=1.5, jobs=1, no_write=True, label=None), log=logs.append)
+        self.assertEqual(ran, ["clean-py-docs"])                  # the clean case still runs
         with tempfile.TemporaryDirectory() as t, mock.patch.object(E, "EVAL_DIR", t):
             os.makedirs(os.path.join(t, "cases", "n"))
             json.dump({"kind": "nit", "issues": []}, open(os.path.join(t, "cases", "n", "expected.json"), "w"))

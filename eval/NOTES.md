@@ -600,9 +600,9 @@ bug recall.
 | $ for the first case + 2 clean, per round | $0.89, $0.86 | $0.82, $0.80 |
 
 \* The cross case's first fixture changed `line_items()` from a list to a JSON string, a real contract change, and the
-blocking finding was most likely that. The fixture now keeps the return type; it was not re-run.
+blocking finding was most likely that. The fixture now keeps the return type. Re-run after the fix (after arm, 1 round): 3/3, 0 false blocking, $0.25.
 
 Reading: both cases are at the ceiling in both arms. The reviewer already finds blatant copy/dead/reuse problems in a
 small diff, so these cases can catch a regression but can't show a gain. There is no local evidence of a recall gain;
-the claim waits for ReviewBench run 4's maintainability category (run 3: 30.1 on 44 golden). Spend this shift: $4.83
-local eval + $0.44 self-review.
+the claim waits for ReviewBench run 4's maintainability category (run 3: 30.1 on 44 golden). Spend this shift: $5.08
+local eval + about $0.9 over two self-review rounds.
