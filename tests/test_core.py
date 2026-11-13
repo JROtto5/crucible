@@ -6399,5 +6399,93 @@ class TestReviewBenchAdapter(unittest.TestCase):
         self.assertEqual(m.to_findings(rev), [])
 
 
+class TestDocRefs(unittest.TestCase):
+    """--nits: docs and comments outside the diff that name what the change touched (ReviewBench run 3: docs 25.0)."""
+    BASE = {
+        "pkg/api.py": 'def fetch_items(url, timeout=10):\n    """Fetch items."""\n    return [url, timeout]\n\n\n'
+                      'class Client:\n    def connect(self, host):\n        return host\n',
+        "pkg/cli.py": 'import os\ndef run_cli(argv):\n    r = os.environ.get("PKG_RETRY_LIMIT")\n'
+                      '    if "--max-retries" in argv:\n        pass\n',
+        "pkg/other.py": "# uses fetch_items with the default timeout\nfrom .api import fetch_items\nfetch_items('u')\n",
+        "README.md": "# pkg\nCall `fetch_items(url, timeout=10)`. Use `--max-retries` or PKG_RETRY_LIMIT.\n",
+        "docs/usage.md": "The client's connect(host) method opens a socket.\n",
+        "CHANGELOG.md": "- 1.0: fetch_items gains timeout\n",
+    }
+
+    def _repo(self, extra=None):
+        new = dict(self.BASE)
+        new["pkg/api.py"] = new["pkg/api.py"].replace("timeout", "deadline").replace("return host", "return host.strip()")
+        new["pkg/cli.py"] = new["pkg/cli.py"].replace("PKG_RETRY_LIMIT", "PKG_RETRIES").replace("--max-retries", "--retries")
+        new.update(extra or {})
+        d = make_repo(self.BASE, new)
+        files = D.parse(sh(d, "git", "diff", "main..fix") + "\n")
+        return d, files, (lambda p: V.git_blob(d, "HEAD", p))
+
+    def test_touched_names(self):
+        from crucible import docrefs
+        _d, files, rd = self._repo()
+        names = docrefs.touched_names(files, rd)
+        self.assertIn("definition", names["fetch_items"])        # signature changed
+        self.assertIn("changes inside", names["connect"])        # same hunk, a second function: body changed
+        self.assertIn("--max-retries", names)
+        self.assertIn("PKG_RETRY_LIMIT", names)
+        self.assertIn("run_cli", names)                          # encloses the edited lines
+        self.assertIn("timeout", names)                          # a renamed parameter: docs quote the old name
+        self.assertNotIn("url", names)                           # unchanged (and short)
+
+    def test_params_with_a_new_default_count_unchanged_ones_dont(self):
+        from crucible import docrefs
+        self.assertEqual(docrefs._params("def f(self, x: int = 4, *args, timeout: float=1.0, **kw) -> None:"),
+                         {"self": "", "x": "4", "args": "", "timeout": "1.0", "kw": ""})
+        d = make_repo({"m.py": "def send_mail(to, retries=3, verbose=False):\n    pass\n"},
+                      {"m.py": "def send_mail(to, retries=5, verbose=False):\n    pass\n"})
+        names = docrefs.touched_names(D.parse(sh(d, "git", "diff", "main..fix") + "\n"), lambda p: V.git_blob(d, "HEAD", p))
+        self.assertIn("retries", names)
+        self.assertNotIn("verbose", names)
+        self.assertNotIn("PKG_RETRIES", names)                   # only removed lines name a flag or variable
+
+    def test_mentions_docs_and_comments_not_history_or_calls(self):
+        from crucible import docrefs
+        d, files, rd = self._repo()
+        lines, names = docrefs.mentions(d, files, rd)
+        text = "\n".join(lines)
+        self.assertIn("README.md:2:", text)
+        self.assertIn("docs/usage.md:1:", text)
+        self.assertIn("pkg/other.py:1:", text)                  # a comment in other code
+        self.assertNotIn("pkg/other.py:3:", text)               # a call site is not prose
+        self.assertNotIn("CHANGELOG.md", text)                  # old entries describe old behaviour on purpose
+        note = docrefs.note(lines, names)
+        self.assertIn("OUTSIDE this diff", note)
+        self.assertEqual(docrefs.note([], names), "")
+
+    def test_lines_the_change_added_are_left_out(self):
+        from crucible import docrefs
+        d, files, rd = self._repo({"README.md": "# pkg\nCall `fetch_items(url, deadline=10)`.\n"})
+        added = {f["path"]: {n for h in f["hunks"] for k, _t, _o, n in h["lines"] if k == "+"} for f in files}
+        lines, _ = docrefs.mentions(d, files, rd, added)
+        self.assertFalse([l for l in lines if l.startswith("README.md")], lines)
+
+    def test_a_common_name_is_counted_not_listed(self):
+        from crucible import docrefs
+        many = "".join(f"connect step {i}\n" for i in range(docrefs.MAX_PER_NAME + 1))
+        d, files, rd = self._repo({"docs/many.md": many})
+        lines, _ = docrefs.mentions(d, files, rd)
+        self.assertFalse([l for l in lines if l.startswith("docs/many.md")])
+        self.assertIn("connect (", lines[-1])
+
+    def test_prompt_gets_the_list_only_with_nits(self):
+        ch = {"files": ["a.py"], "text": "diff"}
+        args = ("o__r", "a" * 40, "b" * 40, ch, "", "", "", "", ["a.py"])
+        base = V.review_prompt(*args)
+        self.assertEqual(base, V.review_prompt(*args, docs="LIST"))   # cached passes without --nits stay valid
+        with_nits = V.review_prompt(*args, nits=True, docs="Docs and comments OUTSIDE this diff: x")
+        self.assertTrue(with_nits.rstrip().endswith("OUTSIDE this diff: x"))
+        self.assertIn("Docs the change left behind", with_nits)
+
+    def test_docs_note_never_stops_a_review(self):
+        d = tempfile.mkdtemp(prefix="crucible-nogit-")
+        self.assertEqual(V.docs_note(d, "HEAD", [{"path": "a.py", "hunks": None}], {"files": ["a.py"]}), "")
+
+
 if __name__ == "__main__":
     unittest.main()

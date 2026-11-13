@@ -658,3 +658,29 @@ the Fable spend limit). Verify: Sonnet 5.5 on 19 heads, Opus 5.5 on 6, cheap tie
 39 kept items had no judge verdict (mostly the adapter's per-PR cap): excluded, not counted true. Verify $/PR $0.73
 ($18.28 / 25); whole review $1.55/PR ($38.86); verify $ per proposed item $0.035. Not measured: how often the verifier
 wrongly disproves (the judge never saw the 162 disproved items; judging them is ~$3–5 Sonnet).
+
+### 2026-11-13 · docs nits (ReviewBench focus item 2): out-of-diff doc lines in the prompt, local A/B
+
+Change: with `--nits`, each pass gets a $0 list of docs and comment lines outside the diff that name what the pass
+changed (crucible/docrefs.py), a docs paragraph in the nit note, and a stale-doc rule for the nit verifier. Run 3's
+documentation category was 25.0; the golden misses themselves were not read (judge output not on this desktop).
+
+New nit case `nit-py-docs-stale`: `deliver_message` retries 5 times (was 3) with exponential backoff, and `MAILER_HOST`
+now names the server (the old variable still works). Planted: README "(default 3)" (outside the diff), README and
+docs/config.md naming only `MAILER_SMTP_HOST` (outside), mailer/queue.py's docstring "retries 3 times ... 4n"
+(outside), and the changed function's own docstring "Waits one second between tries" (context line).
+
+`crucible eval --nits --no-write --cases docs`, before (2a5b3f1) vs after, 2 rounds per arm, run side by side:
+
+| | before | after |
+|---|---|---|
+| nit-py-docs-stale (4 planted) | 4/4, **2/4** (both README issues missed) | 4/4, 4/4 |
+| clean-py-docs: false blocking / nits kept | 0 / 0, 0 / 0 | 0 / 0, 0 / 0 |
+| $ for both cases, per round | $0.57, $0.34 | $0.59, $0.29 |
+
+Reading: the one miss in the before arm is exactly what the list targets (doc lines in files the diff doesn't show),
+but it is 1 round of 2 on one case, so this is direction, not a measured gain. The after arm's round 1 overlapped a
+change to the parameter comparison (only against the same re-added definition); on this fixture both versions list the
+same names. $0 sweep, last 8 commits of 7 local clones (56 commits): 20 get a list, median 0 lines, max 6. Spend this
+shift: $1.79 local eval.
+

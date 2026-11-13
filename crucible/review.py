@@ -1,6 +1,6 @@
 """The review pipeline: checks → scanners → chunked review → per-finding verification → verdict."""
 import concurrent.futures as cf, datetime as dt, fcntl, hashlib, os, re, subprocess, textwrap
-from . import catalog, checks as checks_mod, diff as diff_mod, readiness, routing, style as style_mod
+from . import catalog, checks as checks_mod, diff as diff_mod, docrefs, readiness, routing, style as style_mod
 from .util import (BLOCKING, BUDGET_EXHAUSTED, HOME, MODELS, PREFERENCE, SEV, TOOLS_READ, TOOLS_RUN, Budget, Failed, NoStructuredOutput,
                    claude, crucible_build, default_base,
                    exclude_locally, git, is_dirty, norm_words, project_dir, project_key, read_json, review_dir,
@@ -65,6 +65,8 @@ FINDINGS_NITS_SCHEMA = {**FINDINGS_SCHEMA, "properties": {**FINDINGS_SCHEMA["pro
 # golden). The findings that went wrong there were taste ("over-commented"); the golden ones are checkable (a copied
 # block, dead code, a re-implemented helper), so each kind names what makes it checkable, and the nit verifier is
 # told to search for uses and read both sites.
+# The docs paragraph: run 3 found 25.0% of golden documentation issues. A stale doc is usually in a file the diff
+# doesn't show, so each pass also gets the lines outside the diff that name what it touched (docs_note, $0).
 NITS_NOTE = f"""
         Second tier, "nits" (at most {NITS_MAX_PER_PASS}, separate from findings): smaller REAL problems a careful
         reviewer would comment on but not block on: an unhandled edge case, a misleading name, comment or docstring,
@@ -87,6 +89,11 @@ NITS_NOTE = f"""
         re-implements one the repo already has (search for it, and name the existing one's file and line); one
         thing named two ways in the change, or a name that says something the code doesn't do; a magic number or
         string repeated across sites instead of a named constant.
+        Docs the change left behind: when it changes a signature, default, return value, error, flag, option or
+        name, search the README, docs and the docstrings and comments of other code for the old form, and give
+        each line that now describes the code wrongly its own nit at that line, quoting it; likewise a docstring
+        or comment in the changed function that still documents a removed or renamed parameter or the old
+        behaviour, and a new public option or flag left out of the place its peers are documented.
 """
 NIT_VERDICTS_SCHEMA = {"type": "object", "properties": {"verdicts": {"type": "array", "items": {
     "type": "object", "properties": {
@@ -209,6 +216,8 @@ def nit_verify_prompt(batch):
         (not a matter of taste). confidence is high only if you checked it directly and the result is unambiguous.
         A claim that something is unused or dead needs a search of the checkout for its uses; a claim of duplication
         or of an existing helper needs both sites read, and holds only if they really do the same thing.
+        A claim that a doc, docstring or comment is stale needs that line and the code it describes read at HEAD;
+        it holds only if the text now says something the code doesn't do (not if it is merely brief).
         Do not modify files. Return one verdict per claim, by its [index].
 
         """).format(n=len(batch)) + claims + "\n"
@@ -434,7 +443,7 @@ def assign_ids(findings):
 
 # ---------- pipeline ----------
 def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, house="", draft="", draft_file="PR_DRAFT.md",
-                  length_measured=True, since="", nits=False):
+                  length_measured=True, since="", nits=False, docs=""):
     # with no learned median the length check can't judge, so the reviewer still may (see length_only)
     length = ("Don't report the description's length: crucible measures it against this project's merged\n"
               "        PRs and reports it separately." if length_measured else "Also flag length far from the project norm.")
@@ -496,7 +505,7 @@ def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, hou
     if not nits:                        # unchanged without --nits, so cached review passes still match
         return p
     anchor = "so a later round re-checks it there.\n"
-    return p.replace(anchor, anchor + textwrap.dedent(NITS_NOTE), 1)
+    return p.replace(anchor, anchor + textwrap.dedent(NITS_NOTE), 1) + (f"\n{docs}" if docs else "")
 
 
 # An incremental round shows the reviewer only what changed since the last reviewed commit. Unlabelled, that
@@ -742,6 +751,18 @@ def git_blob(repo, rev, path):
     r = subprocess.run(["git", "-C", repo, "show", f"{rev}:{path}"], capture_output=True, text=True,
                        encoding="utf-8", errors="replace")
     return r.stdout if r.returncode == 0 else ""
+
+
+def docs_note(repo, sha, files, ch):
+    """The --nits prompt's list of docs and comments outside the diff that mention what this pass's files changed
+    (crucible.docrefs); "" when there are none or the search fails, so a review never stops on it."""
+    try:
+        mine = [f for f in files if f.get("path") in set(ch["files"])]
+        added = {f["path"]: {n for h in f["hunks"] for k, _t, _o, n in h["lines"] if k == "+"} for f in files}
+        lines, names = docrefs.mentions(repo, mine, lambda p: git_blob(repo, sha, p), added)
+        return docrefs.note(lines, names)
+    except Exception:
+        return ""
 
 
 def is_ancestor(repo, a, b):
@@ -1076,12 +1097,14 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         pass_budget = HeldBudget(budget, pass_hold) if pass_hold else budget
         for i, ch in enumerate(chunks, 1):
             since = since_note(prev_sha, record["incremental"]["amended"], ch, full_texts, base) if prev_sha else ""
+            docs = docs_note(repo, sha, dfiles if prev_sha else files, ch) if nits else ""
             prompt = review_prompt(project, sha, base, ch, rules, mem, facts, clog, all_files, house,
-                                   draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured, since, nits)
+                                   draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured, since, nits, docs)
             # keyed on the prompt with check output reduced to outcomes: a template change invalidates the cache, but
             # volatile output (timings) doesn't, so --force on the same commit is stable
             key_prompt = review_prompt(project, sha, base, ch, rules, mem, fkey, clog, all_files, house,
-                                       draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured, since, nits)
+                                       draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured, since, nits,
+                                       docs)
             key = hashlib.sha256((review_model + "\0" + key_prompt).encode()).hexdigest()[:32]
             hit = None if fresh else cache_hit(key, budget, "review")
             if hit:

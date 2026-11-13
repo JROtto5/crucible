@@ -1,0 +1,15 @@
+{
+ "kind": "nit",
+ "message": "mailer: retry 5 times with exponential backoff; MAILER_HOST names the server",
+ "issues": [
+  {"name": "readme-default", "file": "README.md", "lines": [7, 10],
+   "keywords": ["default 3", "default of 3", "default is 3", "retries=3", "still says 3", "says 3"]},
+  {"name": "other-docstring", "file": "mailer/queue.py", "lines": [5, 6],
+   "keywords": ["3 times", "4n", "three times", "stale", "outdated", "no longer"]},
+  {"name": "own-docstring", "file": "mailer/send.py", "lines": [16],
+   "keywords": ["one second", "1 second", "1s between"]},
+  {"name": "env-undocumented", "file": "README.md", "lines": [12],
+   "also": [{"file": "docs/config.md", "lines": [5]}],
+   "keywords": ["MAILER_HOST"]}
+ ]
+}
