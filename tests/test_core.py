@@ -6482,6 +6482,41 @@ class TestDocRefs(unittest.TestCase):
         self.assertTrue(with_nits.rstrip().endswith("OUTSIDE this diff: x"))
         self.assertIn("Docs the change left behind", with_nits)
 
+    def test_docstring_body_lines_and_block_comments_count(self):
+        from crucible import docrefs
+        d, files, rd = self._repo({
+            "pkg/doc.py": 'def flush():\n    """Send all.\n\n    Uses fetch_items for each one.\n    """\n    x = fetch_items\n',
+            "pkg/doc.ts": "/**\n Calls fetch_items once.\n */\nconst y = fetch_items;\n"})
+        lines, _ = docrefs.mentions(d, files, rd)
+        text = "\n".join(lines)
+        self.assertIn("pkg/doc.py:4:", text)                    # inside the docstring, no comment marker
+        self.assertIn("pkg/doc.ts:2:", text)                    # inside a block comment
+        self.assertNotIn("pkg/doc.py:6:", text)                 # code after the docstring closed
+        self.assertNotIn("pkg/doc.ts:4:", text)
+
+    def test_a_class_base_is_not_a_parameter(self):
+        from crucible import docrefs
+        d = make_repo({"m.py": "class Mailbox(BaseStore, metaclass=ABCMeta):\n    pass\n"},
+                      {"m.py": "class Mailbox(RedisStore, metaclass=Other):\n    pass\n"})
+        names = docrefs.touched_names(D.parse(sh(d, "git", "diff", "main..fix") + "\n"), lambda p: V.git_blob(d, "HEAD", p))
+        self.assertIn("Mailbox", names)
+        self.assertNotIn("BaseStore", names)
+        self.assertNotIn("metaclass", names)
+
+    def test_incremental_round_leaves_out_lines_the_whole_change_added(self):
+        # round 2 reviews only the inter-diff, but the README line the PR added in round 1 is still the PR's own
+        base = {"m.py": "def send_mail(to, retries=3):\n    pass\n", "README.md": "# m\n"}
+        d = make_repo(base, {"m.py": "def send_mail(to, retries=4):\n    pass\n",
+                             "README.md": "# m\nsend_mail retries 4 times.\n"})
+        sha1 = sh(d, "git", "rev-parse", "HEAD")
+        open(os.path.join(d, "m.py"), "w").write("def send_mail(to, retries=5):\n    pass\n")
+        sh(d, "git", "commit", "-qam", "five")
+        delta = D.parse(sh(d, "git", "diff", f"{sha1}..HEAD") + "\n")
+        whole = D.parse(sh(d, "git", "diff", "main..HEAD") + "\n")
+        ch = {"files": ["m.py"]}
+        self.assertIn("README.md:2:", V.docs_note(d, "HEAD", delta, ch))          # without the whole change: listed
+        self.assertEqual(V.docs_note(d, "HEAD", delta, ch, whole), "")          # with it: the PR's own line
+
     def test_docs_note_never_stops_a_review(self):
         d = tempfile.mkdtemp(prefix="crucible-nogit-")
         self.assertEqual(V.docs_note(d, "HEAD", [{"path": "a.py", "hunks": None}], {"files": ["a.py"]}), "")

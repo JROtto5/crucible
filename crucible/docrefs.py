@@ -53,6 +53,8 @@ def _defs(path, text):
     return [g for g in (m.groups() if m else ()) if _name_ok(g)]
 
 
+# a class's parentheses hold its bases (or a metaclass keyword), not parameters
+CLASS_RX = re.compile(r"^\s*(?:export\s+)?(?:abstract\s+)?class\b")
 PARAM_RX = re.compile(r"(?:^|[(,])\s*\**(\w+)\s*(?::\s*[^=,()]+?)?\s*(?:=\s*([^,()]+?))?\s*(?=[,)])")
 
 
@@ -88,7 +90,7 @@ def touched_names(files, read_new):
         for h in f.get("hunks") or []:
             new_params = {}                 # {def name: its parameters} on this hunk's added lines
             for k, t, *_ in h["lines"]:
-                if k == "+" and re.search(r"\(.*\)", t):
+                if k == "+" and re.search(r"\(.*\)", t) and not CLASS_RX.match(t):
                     for n in _defs(path, t):
                         new_params[n] = _params(t)
             for k, t, *_ in h["lines"]:
@@ -98,7 +100,7 @@ def touched_names(files, read_new):
                         # a parameter renamed, dropped or given a new default: docs quote it with the old one
                         # (only against the same definition re-added with its argument list on one line: a
                         # deleted function is named itself, and a reflowed one can't be compared)
-                        for pn, d in (_params(t).items() if n in new_params else ()):
+                        for pn, d in (_params(t).items() if n in new_params and not CLASS_RX.match(t) else ()):
                             if _name_ok(pn) and pn not in ("self", "cls") and new_params[n].get(pn) != d:
                                 out.setdefault(pn, f"parameter of {n} renamed, removed or re-defaulted in {path}")
                     for n in FLAG_RX.findall(t):
@@ -147,6 +149,34 @@ def _grep(repo, names, pathspecs):
     return out
 
 
+TRIPLE_RX = re.compile(r'"""|\'\'\'')
+
+
+def _in_prose(repo, path, cache):
+    """Line numbers of path (at the checkout) inside a docstring or a block comment: a docstring's body lines carry
+    no comment marker, and that is where Python documents parameters and behaviour."""
+    if path not in cache:
+        lines, out = set(), set()
+        try:
+            with open(os.path.join(repo, path), encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            text = ""
+        py = path.endswith(".py")
+        inside = None                   # the open delimiter, while in a docstring or block comment
+        for no, ln in enumerate(text.split("\n"), 1):
+            if inside:
+                out.add(no)
+            for m in (TRIPLE_RX.finditer(ln) if py else re.finditer(r"/\*|\*/", ln)):
+                d = m.group(0)
+                if inside is None and d != "*/":
+                    inside = d
+                elif inside is not None and (d == inside or (inside == "/*" and d == "*/")):
+                    inside = None
+        cache[path] = out
+    return cache[path]
+
+
 def mentions(repo, files, read_new, changed_lines=None):
     """-> (lines, names): ["path:line: text"] outside the change's own +/- lines that mention a touched name, and the
     names searched. changed_lines: {path: set(new line numbers)} the diff added, which the reviewer already sees."""
@@ -158,7 +188,10 @@ def mentions(repo, files, read_new, changed_lines=None):
     hits = [(p, no, t, True) for p, no, t in _grep(repo, picked, list(DOC_GLOBS)) if not HISTORY_RX.search(p)]
     code_specs = [f"*.{e}" for e in ("py", "rb", "go", "rs", "js", "mjs", "cjs", "jsx", "ts", "tsx", "java", "kt",
                                      "c", "cc", "cpp", "h", "hpp", "cs", "swift", "php")]
-    hits += [(p, no, t, False) for p, no, t in _grep(repo, picked, code_specs) if COMMENT_RX.match(t)]
+    spans = {}
+    for p, no, t in _grep(repo, picked, code_specs):
+        if COMMENT_RX.match(t) or no in _in_prose(repo, p, spans):
+            hits.append((p, no, t, False))
     by_name, out, seen = {n: [] for n in picked}, [], set()
     for p, no, t, _doc in hits:
         if no in changed_lines.get(p, ()) or (p, no) in seen:

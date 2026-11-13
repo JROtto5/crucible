@@ -753,12 +753,15 @@ def git_blob(repo, rev, path):
     return r.stdout if r.returncode == 0 else ""
 
 
-def docs_note(repo, sha, files, ch):
+def docs_note(repo, sha, files, ch, whole=None):
     """The --nits prompt's list of docs and comments outside the diff that mention what this pass's files changed
-    (crucible.docrefs); "" when there are none or the search fails, so a review never stops on it."""
+    (crucible.docrefs); "" when there are none or the search fails, so a review never stops on it. files: what this
+    round reviews (in an incremental round, the inter-diff); whole: the whole change, whose added lines are left out
+    of the list in every round (the author wrote them for this PR; they are not "outside the diff")."""
     try:
         mine = [f for f in files if f.get("path") in set(ch["files"])]
-        added = {f["path"]: {n for h in f["hunks"] for k, _t, _o, n in h["lines"] if k == "+"} for f in files}
+        added = {f["path"]: {n for h in f["hunks"] for k, _t, _o, n in h["lines"] if k == "+"}
+                 for f in (whole if whole is not None else files)}
         lines, names = docrefs.mentions(repo, mine, lambda p: git_blob(repo, sha, p), added)
         return docrefs.note(lines, names)
     except Exception:
@@ -1097,7 +1100,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         pass_budget = HeldBudget(budget, pass_hold) if pass_hold else budget
         for i, ch in enumerate(chunks, 1):
             since = since_note(prev_sha, record["incremental"]["amended"], ch, full_texts, base) if prev_sha else ""
-            docs = docs_note(repo, sha, dfiles if prev_sha else files, ch) if nits else ""
+            docs = docs_note(repo, sha, dfiles if prev_sha else files, ch, files) if nits else ""
             prompt = review_prompt(project, sha, base, ch, rules, mem, facts, clog, all_files, house,
                                    draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured, since, nits, docs)
             # keyed on the prompt with check output reduced to outcomes: a template change invalidates the cache, but
