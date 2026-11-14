@@ -6044,11 +6044,12 @@ class TestNitTier(unittest.TestCase):
                 "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "w", "fix": "x"}
 
     def _run(self, nits_out, verdicts=None, nits=True, env=None, fail_batch=False, budget=None, findings=1, verify_cost=0.0,
-             review_cost=0.0, verify_error=None, passes=1):
+             review_cost=0.0, verify_error=None, passes=1, repo_files=None):
         """-> (review.json, calls). `passes` > 1 splits the diff into that many review passes. The fake reviewer returns one important finding and `nits_out` as nits; the nit
         verifier answers `verdicts` (index -> (keep, confidence)), default keep/high for every nit."""
         from unittest import mock
-        repo = make_repo({"a.py": "x = 1\n"}, {"a.py": "x = 2\n" + "".join(f"y{i} = {i}\n" for i in range(30))})
+        repo = make_repo(*(repo_files or ({"a.py": "x = 1\n"},
+                                          {"a.py": "x = 2\n" + "".join(f"y{i} = {i}\n" for i in range(30))})))
         calls = []
 
         def fake(prompt, model, schema, cwd, budget=None, *a, **kw):
@@ -6091,6 +6092,15 @@ class TestNitTier(unittest.TestCase):
             d = V.run_review(repo, "main", budget_usd=budget, offline=True, skip_checks=True, log=lambda *_: None,
                              nits=nits)
             return U.read_json(os.path.join(d, "review.json")), calls
+
+    def test_callers_outside_the_diff_reach_the_prompt_only_with_nits(self):
+        files = ({"a.py": "def rebuild_index(x, y):\n    return x\n", "b.py": "from a import rebuild_index\nrebuild_index(1, 2)\n"},
+                 {"a.py": "def rebuild_index(x):\n    return x\n"})
+        for nits, want in ((True, True), (None, False)):
+            _r, calls = self._run([], nits=nits, repo_files=files)
+            prompt = next(c["prompt"] for c in calls if c["kind"] == "review")
+            self.assertEqual("Contracts this change altered" in prompt, want, nits)
+            self.assertEqual("b.py:2: rebuild_index(1, 2)" in prompt, want, nits)
 
     def test_off_by_default_prompt_schema_and_record_unchanged(self):
         r, calls = self._run([self._f("a nit", 2)], nits=None)
@@ -6595,6 +6605,27 @@ class TestCallSites(unittest.TestCase):
         self.assertEqual(callsites.breaks(("a", ""), ("a, b=2", ""), ".py"), [])
         self.assertEqual(callsites.breaks(("a, b", ""), ("a, b=2", ""), ".py"), [])    # a parameter made optional
         self.assertTrue(callsites.breaks(("a int", ""), ("a int, b int", ""), ".go"))  # no model: any change counts
+
+    def test_a_name_inside_a_keyword_or_receiver_is_still_found(self):
+        from crucible import callsites
+        self.assertEqual(callsites.signatures("async def sync(a, b):\n    pass\n", "x.py"), {"sync": [("a, b", "")]})
+        self.assertIn("sync", callsites.signatures("async function sync(a, b) {\n}\n", "x.js"))
+        self.assertEqual(callsites.signatures("func (s *Server) Serve(l net.Listener) error {\n}\n", "x.go"),
+                         {"Serve": [("l net.Listener", "error")]})
+
+    def test_split_top_comparisons_and_arrows_are_not_brackets(self):
+        from crucible import callsites
+        self.assertEqual(callsites._split_top("a = x < 3, b, cc"), ["a = x < 3", "b", "cc"])
+        self.assertEqual(callsites._split_top("m: Map<K, V>, f = () => 1, g"), ["m: Map<K, V>", "f = () => 1", "g"])
+        self.assertEqual(callsites.breaks(("a = x < 3, b, cc", ""), ("a = x < 3, b, cc", "int"), ".py"), [])
+
+    def test_a_line_with_a_common_and_a_rare_name_is_still_listed(self):
+        from crucible import callsites
+        d = make_repo({"a.py": "def rebuild_index(x):\n    return x\n\n\ndef shard_map(x):\n    return x\n",
+                       "b.py": "from a import rebuild_index, shard_map\n" + "rebuild_index(1)\n" * 9})
+        lines, _ = callsites.sites(d, {"rebuild_index": ("a.py", "r"), "shard_map": ("a.py", "r")})
+        self.assertIn("b.py:1: from a import rebuild_index, shard_map  [rebuild_index, shard_map]", lines)
+        self.assertIn("rebuild_index (10 lines)", lines[-1])
 
     def test_sites_list_callers_and_imports_not_defs_comments_or_the_prs_own_lines(self):
         from crucible import callsites

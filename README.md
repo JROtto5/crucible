@@ -13,7 +13,7 @@ crucible answer  CR-80b53167 fixed "restore for…of; re-added [1,2,3] test"
 crucible status                                  # GREEN / NOT_GREEN + readiness, for this exact commit
 crucible polish                                  # PR_DRAFT.md → PR_DRAFT.polished.md in the project's voice
 crucible prep                                    # likely maintainer questions + evidence-backed answers
-crucible eval                                    # score the reviewer on 18 labelled fixture changes
+crucible eval                                    # score the reviewer on 24 labelled fixture changes
 crucible reply   https://github.com/o/r/pull/12  # draft answers to real review comments (never posted)
 ```
 
@@ -170,7 +170,7 @@ Environment variables:
 - `CRUCIBLE_CATALOG_DIGEST=0`: review big `.po`/`.pot` changes as a raw diff instead of the entry digest.
 - `CRUCIBLE_HOME`: where state is kept (default `~/.crucible`). `CRUCIBLE_CACHE` can point at a shared cache.
 
-Run `crucible eval` (about $3–5 for all 18 cases) after changing prompts or models.
+Run `crucible eval` (about $5–6 for all 24 cases; 20 of them with `--nits` cost $5.03 on 2026-11-12) after changing prompts or models.
 
 Found a wrong finding, a missed bug or a crash? See [CONTRIBUTING.md](CONTRIBUTING.md): issue templates ask for exactly what's needed to turn it into a regression test.
 

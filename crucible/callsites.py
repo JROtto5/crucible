@@ -11,7 +11,7 @@ each line (a caller may pass only what still works); nothing here is a finding.
 import os
 import re
 
-from .docrefs import COMMENT_RX, DEF_RX, GENERIC, NOT_NAMES, _enclosing, _grep, _in_prose
+from .docrefs import CODE_SPECS, COMMENT_RX, DEF_RX, GENERIC, NOT_NAMES, _enclosing, _grep, _in_prose
 from .util import CODE_EXT_RX, TEST_PATH_RX
 
 MAX_NAMES = 8
@@ -20,8 +20,6 @@ MAX_LINES = 30
 LINE_CHARS = 160
 SIG_LINES = 30            # a definition's argument list is read for at most this many lines
 PY_JS = {".py", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".mts", ".cts"}
-CODE_SPECS = [f"*.{e}" for e in ("py", "rb", "go", "rs", "js", "mjs", "cjs", "jsx", "ts", "tsx", "mts", "cts",
-                                 "java", "kt", "c", "cc", "cpp", "h", "hpp", "cs", "swift", "php", "vue", "svelte")]
 CTOR = {"__init__", "constructor"}
 CLASS_LINE_RX = re.compile(r"^(\s*)(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+(\w+)")
 # from just after a definition's name to its "(": generics, or `= async function` / `= (` for an arrow function
@@ -69,18 +67,21 @@ def _strip_comment(ln, ext):
 
 
 def _split_top(s):
-    """s split on commas outside brackets and quotes."""
-    out, depth, cur, q = [], 0, "", None
-    for c in s:
+    """s split on commas outside brackets and quotes. "<" opens a bracket only straight after a name (a generic,
+    Map<K, V>), and ">" closes only a "<", so `a = x < 3, b` and an arrow's "=>" don't swallow the next parameter."""
+    out, stack, cur, q = [], [], "", None
+    for i, c in enumerate(s):
         if q:
             q = None if c == q else q
         elif c in "\"'`":
             q = c
-        elif c in "([{<":
-            depth += 1
-        elif c in ")]}>" and depth:
-            depth -= 1
-        elif c == "," and not depth:
+        elif c in "([{" or c == "<" and i and (s[i - 1].isalnum() or s[i - 1] == "_"):
+            stack.append(c)
+        elif c in ")]}" and stack:
+            stack.pop()
+        elif c == ">" and stack and stack[-1] == "<" and s[i - 1:i] != "=":
+            stack.pop()
+        elif c == "," and not stack:
             out.append(cur)
             cur = ""
             continue
@@ -99,17 +100,18 @@ def signatures(text, path):
     lines, out = text.split("\n"), {}
     for i, ln in enumerate(lines):
         m = rx.match(ln)
-        name = next((g for g in m.groups() if g), None) if m else None
+        gi = next((k for k, g in enumerate(m.groups(), 1) if g), None) if m else None
+        name = m.group(gi) if gi else None
         if not name or name in NOT_NAMES or CLASS_LINE_RX.match(ln):   # a class's parentheses hold bases
             continue
-        written = name
         if name in CTOR:
             name = _class_above(lines, i)
             if not name:
                 continue
         buf = " ".join(_strip_comment(x, ext) for x in lines[i:i + SIG_LINES])
-        at = buf.find(written)
-        opener = OPEN_RX.match(buf, at + len(written)) if at >= 0 else None
+        # from where the pattern matched the name: a text search would find "sync" inside "async def sync(" or
+        # "Serve" inside "func (s *Server) Serve(" (comment cutting only shortens the line after the name)
+        opener = OPEN_RX.match(buf, m.end(gi))
         if not opener:                          # a constant, a type, a struct: no argument list
             continue
         start, depth, q, end = opener.end() - 1, 0, None, -1
@@ -199,7 +201,7 @@ def breaks(old, new, ext):
 def changed_contracts(files, read_old, read_new):
     """{name: (path, reason)} for definitions in the change's code files whose contract a caller could feel.
     read_old(path)/read_new(path) -> the file at the base / HEAD ("" when absent)."""
-    out, new_defs, olds = {}, {}, {}
+    out, new_defs = {}, {}
     code = [f for f in files if not f.get("binary") and CODE_EXT_RX.search(f.get("path") or "")]
     for f in code:
         path = f["path"]
@@ -214,7 +216,6 @@ def changed_contracts(files, read_old, read_new):
         ext = os.path.splitext(path)[1].lower()
         old_text = read_old(old_path)
         old_sigs, new_sigs = signatures(old_text, old_path), new_defs.get(path, {})
-        olds[path] = old_sigs
         # only definitions the change touches: a def line on a +/- line, or one enclosing an edited line
         touched = set()
         old_lines, new_lines = old_text.split("\n"), (read_new(path) or "").split("\n")
@@ -254,7 +255,7 @@ def _call_rx(name):
                       rf"(?<![\w$]){n}(?![\w$]).*\bfrom\s+['\"]|\brequire\(")
 
 
-def sites(repo, contracts, changed_lines=None, def_files=None):
+def sites(repo, contracts, changed_lines=None):
     """-> (lines, names): ["path:line: text"] call and import lines of each name outside the change's added lines,
     and {name: reason} for the names searched."""
     if not contracts:
@@ -273,14 +274,18 @@ def sites(repo, contracts, changed_lines=None, def_files=None):
                  and re.search(rf"(?<![\w$]){re.escape(n)}(?![\w$])", t)]
         if not found or no in _in_prose(repo, p, spans):
             continue
-        by_name[found[0]].append((p, no, t, found))
-    out, common = [], []
+        for n in found:
+            by_name[n].append((p, no, t, found))
+    out, common, listed = [], [], set()
     for n in picked:
         hs = by_name[n]
         if len(hs) > MAX_PER_NAME:
             common.append(f"{n} ({len(hs)} lines)")
             continue
         for p, no, t, found in hs:
+            if (p, no) in listed:               # an import of several names: listed once, tagged with all of them
+                continue
+            listed.add((p, no))
             t = t.strip()
             out.append(f"{p}:{no}: {t[:LINE_CHARS] + (' ...' if len(t) > LINE_CHARS else '')}  [{', '.join(found)}]")
     out = out[:MAX_LINES]

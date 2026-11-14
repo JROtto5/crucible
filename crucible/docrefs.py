@@ -36,6 +36,9 @@ GENERIC = {"main", "init", "setup", "teardown", "setUp", "tearDown", "initialize
 DOC_GLOBS = ("*.md", "*.mdx", "*.rst", "*.adoc", "*.txt", "*README", "*README.*")
 HISTORY_RX = re.compile(r"(?:^|/)(?:CHANGELOG|CHANGES|HISTORY|NEWS|RELEASE[-_]?NOTES)[^/]*$|(?:^|/)changelog\.d/|"
                         r"(?:^|/)(?:LICENSE|COPYING|NOTICE|requirements[^/]*\.txt|CMakeLists\.txt)$", re.I)
+# code files to search, as git pathspecs (docrefs: their comments; callsites: their calls)
+CODE_SPECS = [f"*.{e}" for e in ("py", "rb", "go", "rs", "js", "mjs", "cjs", "jsx", "ts", "tsx", "mts", "cts", "java",
+                                 "kt", "c", "cc", "cpp", "h", "hpp", "cs", "swift", "php", "vue", "svelte")]
 COMMENT_RX = re.compile(r"^\s*(?:#(?!include|define|if|end|pragma|!)|//|/?\*|<!--|--\s|\"\"\"|''')")
 MAX_NAMES = 12            # most specific names first (longest), so a big diff doesn't search 200 words
 MAX_PER_NAME = 6          # a name mentioned more often than this is common prose ("timeout"): say how often, not where
@@ -203,10 +206,8 @@ def mentions(repo, files, read_new, changed_lines=None):
     picked = sorted(names, key=lambda n: (-len(n), n))[:MAX_NAMES]
     changed_lines = changed_lines or {}
     hits = [(p, no, t, True) for p, no, t in _grep(repo, picked, list(DOC_GLOBS)) if not HISTORY_RX.search(p)]
-    code_specs = [f"*.{e}" for e in ("py", "rb", "go", "rs", "js", "mjs", "cjs", "jsx", "ts", "tsx", "java", "kt",
-                                     "c", "cc", "cpp", "h", "hpp", "cs", "swift", "php")]
     spans = {}
-    for p, no, t in _grep(repo, picked, code_specs):
+    for p, no, t in _grep(repo, picked, CODE_SPECS):
         if COMMENT_RX.match(t) or no in _in_prose(repo, p, spans):
             hits.append((p, no, t, False))
     by_name, out, seen = {n: [] for n in picked}, [], set()
