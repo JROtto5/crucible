@@ -25,10 +25,12 @@ CLASS_LINE_RX = re.compile(r"^(\s*)(?:export\s+)?(?:default\s+)?(?:abstract\s+)?
 # from just after a definition's name to its "(": generics, or `= async function` / `= (` for an arrow function
 OPEN_RX = re.compile(r"\s*(?:<[^()]*>)?\s*(?:=\s*(?:async\s+)?(?:function\s*\*?\s*\w*)?\s*)?\(")
 # from just after the closing ")" to the return type, when the definition states one
-RET_RX = {".py": re.compile(r"\s*->\s*([^:]+?)\s*:"), None: re.compile(r"\s*:\s*([^{=;]+?)\s*(?:\{|=>|;|$)")}
+# (never past the end of that line: Ruby's body follows its signature with no "{" or ";")
+RET_RX = {".py": re.compile(r"[ \t]*->[ \t]*([^:\n]+?)[ \t]*:"),
+          None: re.compile(r"[ \t]*:[ \t]*([^{=;\n]+?)[ \t]*(?:\{|=>|;|\n|$)")}
 for _e in PY_JS - {".py"}:
     RET_RX[_e] = RET_RX[None]
-RET_RX[None] = re.compile(r"\s*([^{;]*?)\s*(?:\{|;|$)")       # Go, Rust, C: whatever sits before the body
+RET_RX[None] = re.compile(r"[ \t]*([^{;\n]*?)[ \t]*(?:\{|;|\n|$)")   # Go, Rust, C: whatever sits before the body
 
 
 def _class_above(lines, i):
@@ -113,7 +115,7 @@ def signatures(text, path):
             name = _class_above(lines, i)
             if not name:
                 continue
-        buf = " ".join(_strip_comment(x, ext) for x in lines[i:i + SIG_LINES])
+        buf = "\n".join(_strip_comment(x, ext) for x in lines[i:i + SIG_LINES])
         # from where the pattern matched the name: a text search would find "sync" inside "async def sync(" or
         # "Serve" inside "func (s *Server) Serve(" (comment cutting only shortens the line after the name)
         opener = OPEN_RX.match(buf, m.end(gi))
@@ -255,8 +257,10 @@ def changed_contracts(files, read_old, read_new):
 
 
 def _call_rx(name):
+    # a call, an import, or a line that is only the name (one entry of a multi-line import list)
     n = re.escape(name)
     return re.compile(rf"(?<![\w$]){n}\s*(?:<[^()]*>)?\s*\(|\bimport\b.*(?<![\w$]){n}(?![\w$])|"
+                      rf"^\s*{n}(?:\s+as\s+\w+)?\s*,?\s*$|"
                       rf"(?<![\w$]){n}(?![\w$]).*\bfrom\s+['\"]|\brequire\(")
 
 
@@ -296,6 +300,9 @@ def sites(repo, contracts, changed_lines=None):
     out = out[:MAX_LINES]
     if common:
         out.append(f"(too many to list; search them: {', '.join(common)})")
+    rest = sorted(set(contracts) - set(picked))
+    if out and rest:
+        out.append(f"(also changed, not searched: {', '.join(rest)})")
     return out, {n: contracts[n] for n in picked}
 
 

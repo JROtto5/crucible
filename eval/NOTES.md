@@ -700,7 +700,9 @@ not read (judge output not on this desktop).
 $0 sweep, last 12 non-merge commits of lutris, colyseus, mangohud, heroic and crucible (60 commits): 5 have a changed
 contract, 4 get a list, median 0 lines, max 5. Read by hand: lutris cb04e81d (`read_version_from_config` drops its
 `default` parameter, 4 callers) and colyseus ccc3ba38 (`guard(root, serverEntry, hostSuffix)` -> `guard(o)`) are real
-contract changes. The first sweep had heroic 94836a3e at 13 lines from React props objects compared as one blob and
+contract changes. Re-run after self-review round 4 (the rebase moved crucible's window to include this branch): 6 with
+a changed contract, 5 get a list, max 6; the new one is crucible 21db940 (`sites()` drops its unused `def_files`
+parameter), also real. The first sweep had heroic 94836a3e at 13 lines from React props objects compared as one blob and
 generic names (`install`, `remove`); after comparing destructured keys and skipping common names, max 5.
 
 New bug case `py-api-stale-caller`: `charge(customer_id, amount)` now takes the Customer; the PR updates invoices.py

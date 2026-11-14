@@ -6671,8 +6671,29 @@ class TestCallSites(unittest.TestCase):
         note = V.callers_note(d, "main", "fix", files, {"files": ["pkg/api.py"]})
         self.assertIn("pkg/use.py:3:", note)
         self.assertNotIn("main.ts", note)                        # web.ts is another pass's file
-        nd = tempfile.mkdtemp(prefix="crucible-nogit-")
-        self.assertEqual(V.callers_note(nd, "main", "HEAD", [{"path": "a.py", "hunks": None}], {"files": ["a.py"]}), "")
+        from unittest import mock
+        with mock.patch.object(V.callsites, "sites", side_effect=OSError("git grep failed")):
+            self.assertEqual(V.callers_note(d, "main", "fix", files, {"files": ["pkg/api.py"]}), "")
+
+    def test_a_ruby_body_edit_is_not_a_contract_change(self):
+        from crucible import callsites
+        old = "class A\n  def compute_total(a, b)\n    x = 1\n  end\nend\n"
+        self.assertEqual(callsites.signatures(old, "a.rb"), {"compute_total": [("a, b", "")]})
+        d = make_repo({"a.rb": old}, {"a.rb": old.replace("x = 1", "x = 2")})
+        self.assertEqual(self._contracts(d, D.parse(sh(d, "git", "diff", "main..fix") + "\n")), {})
+        self.assertEqual(callsites.signatures("def f(a) -> Dict[\n    str, int]:\n    pass\n", "a.py")["f"][0][0], "a")
+
+    def test_multi_line_imports_and_names_past_the_cap(self):
+        from crucible import callsites
+        d = make_repo({"a.py": "def rebuild_index(x):\n    return x\n",
+                       "b.py": "from a import (\n    other,\n    rebuild_index,\n)\n",
+                       "c.ts": "import {\n  rebuild_index as ri,\n} from './a';\n"})
+        names = {f"name_{i:02d}_x": ("a.py", "r") for i in range(callsites.MAX_NAMES)}
+        lines, picked = callsites.sites(d, dict(names, rebuild_index=("a.py", "removed or renamed")))
+        self.assertIn("b.py:3: rebuild_index,  [rebuild_index]", lines)
+        self.assertIn("c.ts:2: rebuild_index as ri,  [rebuild_index]", lines)
+        self.assertNotIn("b.py:2", "\n".join(lines))
+        self.assertTrue(lines[-1].startswith("(also changed, not searched: name_"), lines[-1])
 
 
 if __name__ == "__main__":
