@@ -69,7 +69,9 @@ def _strip_comment(ln, ext):
 def _split_top(s, generics=True):
     """s split on commas outside brackets and quotes. "<" opens a bracket only straight after a name (a generic,
     Map<K, V>), and ">" closes only a "<", so `a = x < 3, b` and an arrow's "=>" don't swallow the next parameter;
-    a "<" still open at the end was a comparison (`a=x<3, b`), and the split is redone without generics."""
+    a "<" still open at the end was a comparison (`a=x<3, b`), and the split is redone without generics. Best effort:
+    an unspaced comparison next to a generic (`a=x<3, m: Map<K, V>`) or a `>` (`a=x<3, b=y>2`) still splits wrong,
+    and the worst that does is one wrong "removed or renamed" line for the reviewer to dismiss."""
     out, stack, cur, q = [], [], "", None
     for i, c in enumerate(s):
         if q:
