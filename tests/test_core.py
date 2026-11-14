@@ -6502,6 +6502,9 @@ class TestDocRefs(unittest.TestCase):
         self.assertEqual(docrefs._block_prose("// see /* the old way\nfetch_items(a)\n"), set())
         self.assertEqual(docrefs._block_prose('app.use("/api/*", h)\nfetch_items()\n'), set())
         self.assertEqual(docrefs._block_prose("/**\n * fetch_items\n */\ncode()\n"), {2, 3})
+        self.assertEqual(docrefs._block_prose('const p = s.replace(/\\/*$/, "");\nfetch_items()\n'), set())   # a regex
+        self.assertEqual(docrefs._block_prose("const t = `\n  src/*.js\n`;\nfetch_items()\n"), set())      # a template
+        self.assertEqual(docrefs._block_prose("  /* one line */\nfetch_items()\n"), set())
 
     def test_a_class_base_is_not_a_parameter(self):
         from crucible import docrefs

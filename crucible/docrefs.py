@@ -164,32 +164,16 @@ def _py_prose(text):
 
 
 def _block_prose(text):
-    """Lines inside /* */ comments of a C-like file. Quoted strings and // comments are skipped on the way, so a
-    glob like "src/*" or `// see /* x` doesn't open one."""
+    """Lines inside /* */ comments of a C-like file. Only a line that starts with /* opens one: mid-line, a /* is as
+    often a regex literal (/\\/*$/), a glob in a string or template literal ("src/*") or inside a // comment, and a
+    span opened by mistake would never close. A block comment that opens after code on its line is missed."""
     out, inside = set(), False
     for no, ln in enumerate(text.split("\n"), 1):
         if inside:
             out.add(no)
-        i = 0
-        while i < len(ln):
-            if inside:
-                j = ln.find("*/", i)
-                if j < 0:
-                    break
-                inside, i = False, j + 2
-                continue
-            c = ln[i]
-            if c in "\"'`":
-                j = i + 1
-                while j < len(ln) and ln[j] != c:
-                    j += 2 if ln[j] == "\\" else 1
-                i = j + 1
-            elif ln.startswith("//", i):
-                break
-            elif ln.startswith("/*", i):
-                inside, i = True, i + 2
-            else:
-                i += 1
+            inside = "*/" not in ln
+        elif ln.lstrip().startswith("/*"):
+            inside = "*/" not in ln.lstrip()[2:]
     return out
 
 
