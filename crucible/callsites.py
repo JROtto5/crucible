@@ -26,7 +26,7 @@ CLASS_LINE_RX = re.compile(r"^(\s*)(?:export\s+)?(?:default\s+)?(?:abstract\s+)?
 OPEN_RX = re.compile(r"\s*(?:<[^()]*>)?\s*(?:=\s*(?:async\s+)?(?:function\s*\*?\s*\w*)?\s*)?\(")
 # from just after the closing ")" to the return type, when the definition states one
 # (never past the end of that line: Ruby's body follows its signature with no "{" or ";")
-RET_RX = {".py": re.compile(r"[ \t]*->[ \t]*([^:\n]+?)[ \t]*:"),
+RET_RX = {".py": re.compile(r"\s*->\s*([^:]+?)\s*:"),             # Python always closes it with ":"
           None: re.compile(r"[ \t]*:[ \t]*([^{=;\n]+?)[ \t]*(?:\{|=>|;|\n|$)")}
 for _e in PY_JS - {".py"}:
     RET_RX[_e] = RET_RX[None]
@@ -56,7 +56,7 @@ def _name_ok(n):
 
 def _strip_comment(ln, ext):
     """A definition line without its trailing comment (a crude cut: a '#' or '//' outside quotes)."""
-    mark = "#" if ext == ".py" else "//"
+    mark = "#" if ext in (".py", ".rb") else "//"
     q = None
     for i, c in enumerate(ln):
         if q:
@@ -266,25 +266,28 @@ def _call_rx(name):
 
 def sites(repo, contracts, changed_lines=None):
     """-> (lines, names): ["path:line: text"] call and import lines of each name outside the change's added lines,
-    and {name: reason} for the names searched."""
+    and {name: reason} for the names listed. Every name is searched (one git grep); at most MAX_NAMES of those with
+    callers are listed, most specific (longest) first, and the others with callers are named."""
     if not contracts:
         return [], {}
-    picked = sorted(contracts, key=lambda n: (-len(n), n))[:MAX_NAMES]
+    ranked = sorted(contracts, key=lambda n: (-len(n), n))
     changed_lines, spans = changed_lines or {}, {}
-    by_name = {n: [] for n in picked}
-    rxs = {n: _call_rx(n) for n in picked}
-    for p, no, t in _grep(repo, picked, CODE_SPECS):
+    by_name = {n: [] for n in ranked}
+    rxs = {n: _call_rx(n) for n in ranked}
+    for p, no, t in _grep(repo, ranked, CODE_SPECS):
         if no in changed_lines.get(p, ()) or COMMENT_RX.match(t):
             continue
         rx = DEF_RX.get(os.path.splitext(p)[1].lower())
         m = rx.match(t) if rx else None
         defined = {g for g in (m.groups() if m else ()) if g}
-        found = [n for n in picked if n not in defined and rxs[n].search(t)
+        found = [n for n in ranked if n not in defined and rxs[n].search(t)
                  and re.search(rf"(?<![\w$]){re.escape(n)}(?![\w$])", t)]
         if not found or no in _in_prose(repo, p, spans):
             continue
         for n in found:
             by_name[n].append((p, no, t, found))
+    with_callers = [n for n in ranked if by_name[n]]
+    picked, rest = with_callers[:MAX_NAMES], with_callers[MAX_NAMES:]
     out, common, listed = [], [], set()
     for n in picked:
         hs = by_name[n]
@@ -297,12 +300,12 @@ def sites(repo, contracts, changed_lines=None):
             listed.add((p, no))
             t = t.strip()
             out.append(f"{p}:{no}: {t[:LINE_CHARS] + (' ...' if len(t) > LINE_CHARS else '')}  [{', '.join(found)}]")
-    out = out[:MAX_LINES]
+    if len(out) > MAX_LINES:
+        out = out[:MAX_LINES] + [f"({len(out) - MAX_LINES} more lines not listed)"]
     if common:
         out.append(f"(too many to list; search them: {', '.join(common)})")
-    rest = sorted(set(contracts) - set(picked))
-    if out and rest:
-        out.append(f"(also changed, not searched: {', '.join(rest)})")
+    if rest:
+        out.append(f"(more changed contracts with callers, not listed: {', '.join(rest)})")
     return out, {n: contracts[n] for n in picked}
 
 

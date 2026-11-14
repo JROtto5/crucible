@@ -6681,19 +6681,36 @@ class TestCallSites(unittest.TestCase):
         self.assertEqual(callsites.signatures(old, "a.rb"), {"compute_total": [("a, b", "")]})
         d = make_repo({"a.rb": old}, {"a.rb": old.replace("x = 1", "x = 2")})
         self.assertEqual(self._contracts(d, D.parse(sh(d, "git", "diff", "main..fix") + "\n")), {})
-        self.assertEqual(callsites.signatures("def f(a) -> Dict[\n    str, int]:\n    pass\n", "a.py")["f"][0][0], "a")
+        self.assertEqual(callsites.signatures("def f(a) -> Dict[\n    str, int]:\n    pass\n", "a.py")["f"],
+                         [("a", "Dict[ str, int]")])                         # a multi-line return annotation
+        self.assertEqual(callsites.signatures("def compute_total(a) # note\n  1\nend\n", "a.rb")["compute_total"],
+                         [("a", "")])
 
     def test_multi_line_imports_and_names_past_the_cap(self):
         from crucible import callsites
         d = make_repo({"a.py": "def rebuild_index(x):\n    return x\n",
                        "b.py": "from a import (\n    other,\n    rebuild_index,\n)\n",
                        "c.ts": "import {\n  rebuild_index as ri,\n} from './a';\n"})
-        names = {f"name_{i:02d}_x": ("a.py", "r") for i in range(callsites.MAX_NAMES)}
+        # nine changed contracts, and only the shortest name has callers: it is still searched and listed
+        names = {f"long_name_{i:02d}_without_callers": ("a.py", "r") for i in range(callsites.MAX_NAMES)}
         lines, picked = callsites.sites(d, dict(names, rebuild_index=("a.py", "removed or renamed")))
         self.assertIn("b.py:3: rebuild_index,  [rebuild_index]", lines)
         self.assertIn("c.ts:2: rebuild_index as ri,  [rebuild_index]", lines)
         self.assertNotIn("b.py:2", "\n".join(lines))
-        self.assertTrue(lines[-1].startswith("(also changed, not searched: name_"), lines[-1])
+        self.assertEqual(list(picked), ["rebuild_index"])
+        # more names with callers than the cap: the shortest are named, not dropped
+        many = "".join(f"def caller_fn_{i:02d}(x):\n    return x\n" for i in range(callsites.MAX_NAMES + 1))
+        d2 = make_repo({"a.py": many, "b.py": "".join(f"caller_fn_{i:02d}(1)\n" for i in range(callsites.MAX_NAMES + 1))})
+        lines, picked = callsites.sites(d2, {f"caller_fn_{i:02d}": ("a.py", "r") for i in range(callsites.MAX_NAMES + 1)})
+        self.assertEqual(len(picked), callsites.MAX_NAMES)
+        self.assertEqual(lines[-1], f"(more changed contracts with callers, not listed: caller_fn_{callsites.MAX_NAMES:02d})")
+
+    def test_the_line_cap_says_how_many_it_cut(self):
+        from crucible import callsites
+        names = {f"helper_fn_{i}": ("a.py", "r") for i in range(5)}
+        body = "".join(f"helper_fn_{i}({j})\n" for i in range(5) for j in range(7))
+        lines, _ = callsites.sites(make_repo({"b.py": body}), names)
+        self.assertEqual(lines[callsites.MAX_LINES], f"({35 - callsites.MAX_LINES} more lines not listed)")
 
 
 if __name__ == "__main__":
