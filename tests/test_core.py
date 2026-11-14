@@ -6702,8 +6702,8 @@ class TestCallSites(unittest.TestCase):
         many = "".join(f"def caller_fn_{i:02d}(x):\n    return x\n" for i in range(callsites.MAX_NAMES + 1))
         d2 = make_repo({"a.py": many, "b.py": "".join(f"caller_fn_{i:02d}(1)\n" for i in range(callsites.MAX_NAMES + 1))})
         lines, picked = callsites.sites(d2, {f"caller_fn_{i:02d}": ("a.py", "r") for i in range(callsites.MAX_NAMES + 1)})
-        self.assertEqual(len(picked), callsites.MAX_NAMES)
-        self.assertEqual(lines[-1], f"(more changed contracts, callers not listed: caller_fn_{callsites.MAX_NAMES:02d})")
+        self.assertEqual(len(picked), callsites.MAX_NAMES + 1)                 # 8 listed, the 9th named
+        self.assertEqual(lines[-1], f"(more changed contracts with callers, not listed: caller_fn_{callsites.MAX_NAMES:02d})")
 
     def test_search_is_bounded_and_common_names_take_no_slot(self):
         import time
@@ -6716,13 +6716,25 @@ class TestCallSites(unittest.TestCase):
             t0 = time.monotonic()
             lines, picked = callsites.sites("/nonexistent", names)
             self.assertLess(time.monotonic() - t0, 5)                 # was 43 s before names were looked up per line
-        self.assertEqual(picked, {})                                 # every searched name has > MAX_PER_NAME sites
+        # every searched name has > MAX_PER_NAME sites: counted, and still named in the note's header
         self.assertTrue(any(l.startswith("(too many to list; search them: contract_000") for l in lines))
-        self.assertTrue(lines[-1].endswith("and 216 more)"), lines[-1])   # past MAX_SEARCH: counted, not dropped
+        self.assertEqual(lines[-1], "(changed contracts not searched for callers: contract_064, contract_065, contract_066,"
+                         " contract_067, contract_068, contract_069, contract_070, contract_071, contract_072, contract_073,"
+                         " contract_074, contract_075, contract_076, contract_077, contract_078, contract_079, contract_080,"
+                         " contract_081, contract_082, contract_083 and 216 more)")
+        self.assertIn("contract_000 in a.py: r", callsites.note(lines, picked))
+        self.assertNotIn("HEAD: .", callsites.note(lines, picked))
         d = make_repo({"b.py": "noisy_name(1)\n" * 9 + "quiet_name(1)\n"})
         lines, picked = callsites.sites(d, {"noisy_name": ("a.py", "r"), "quiet_name": ("a.py", "r")})
-        self.assertEqual(list(picked), ["quiet_name"])
+        self.assertEqual(list(picked), ["quiet_name", "noisy_name"])
         self.assertIn("b.py:10: quiet_name(1)  [quiet_name]", lines)
+
+    def test_a_counted_only_result_still_names_its_contract(self):
+        from crucible import callsites
+        d = make_repo({"b.py": "noisy_name(1)\n" * 9})
+        lines, names = callsites.sites(d, {"noisy_name": ("a.py", "removed or renamed")})
+        self.assertEqual(lines, ["(too many to list; search them: noisy_name (9 lines))"])
+        self.assertIn("HEAD: noisy_name in a.py: removed or renamed.", callsites.note(lines, names))
 
     def test_the_line_cap_says_how_many_it_cut(self):
         from crucible import callsites

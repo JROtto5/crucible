@@ -267,8 +267,8 @@ def _call_rx(name):
 
 def sites(repo, contracts, changed_lines=None):
     """-> (lines, names): ["path:line: text"] call and import lines of each name outside the change's added lines,
-    and {name: reason} for the names listed. Every name is searched (one git grep); at most MAX_NAMES of those with
-    callers are listed, most specific (longest) first, and the others with callers are named."""
+    and {name: reason} for every name those lines mention. The MAX_SEARCH most specific (longest) names are searched
+    (one git grep); at most MAX_NAMES of those with callers are listed, and the rest are named."""
     if not contracts:
         return [], {}
     ranked = sorted(contracts, key=lambda n: (-len(n), n))
@@ -290,9 +290,9 @@ def sites(repo, contracts, changed_lines=None):
         for n in found:
             by_name[n].append((p, no, t, found))
     # a name with more sites than MAX_PER_NAME is counted, not listed, and doesn't take one of the MAX_NAMES slots
-    common = [f"{n} ({len(by_name[n])} lines)" for n in ranked if len(by_name[n]) > MAX_PER_NAME]
+    common = [n for n in ranked if len(by_name[n]) > MAX_PER_NAME]
     with_callers = [n for n in ranked if 0 < len(by_name[n]) <= MAX_PER_NAME]
-    picked, rest = with_callers[:MAX_NAMES], with_callers[MAX_NAMES:] + unsearched
+    picked, rest = with_callers[:MAX_NAMES], with_callers[MAX_NAMES:]
     out, listed = [], set()
     for n in picked:
         for p, no, t, found in by_name[n]:
@@ -304,14 +304,14 @@ def sites(repo, contracts, changed_lines=None):
     if len(out) > MAX_LINES:
         out = out[:MAX_LINES] + [f"({len(out) - MAX_LINES} more lines not listed)"]
     if common:
-        out.append(f"(too many to list; search them: {', '.join(common)})")
-    if rest and (out or common):
-        out.append(f"(more changed contracts, callers not listed: {', '.join(rest[:20])}"
-                   f"{f' and {len(rest) - 20} more' if len(rest) > 20 else ''})")
-    elif rest:
-        out.append(f"(changed contracts not searched for callers: {', '.join(rest[:20])}"
-                   f"{f' and {len(rest) - 20} more' if len(rest) > 20 else ''})")
-    return out, {n: contracts[n] for n in picked}
+        out.append(f"(too many to list; search them: {', '.join(f'{n} ({len(by_name[n])} lines)' for n in common)})")
+    named = picked + common
+    for label, group in (("more changed contracts with callers, not listed", rest),
+                         ("changed contracts not searched for callers", unsearched)):
+        if group:
+            out.append(f"({label}: {', '.join(group[:20])}{f' and {len(group) - 20} more' if len(group) > 20 else ''})")
+            named += group[:20]
+    return out, {n: contracts[n] for n in named}
 
 
 def note(lines, names):
