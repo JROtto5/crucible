@@ -6703,7 +6703,26 @@ class TestCallSites(unittest.TestCase):
         d2 = make_repo({"a.py": many, "b.py": "".join(f"caller_fn_{i:02d}(1)\n" for i in range(callsites.MAX_NAMES + 1))})
         lines, picked = callsites.sites(d2, {f"caller_fn_{i:02d}": ("a.py", "r") for i in range(callsites.MAX_NAMES + 1)})
         self.assertEqual(len(picked), callsites.MAX_NAMES)
-        self.assertEqual(lines[-1], f"(more changed contracts with callers, not listed: caller_fn_{callsites.MAX_NAMES:02d})")
+        self.assertEqual(lines[-1], f"(more changed contracts, callers not listed: caller_fn_{callsites.MAX_NAMES:02d})")
+
+    def test_search_is_bounded_and_common_names_take_no_slot(self):
+        import time
+        from unittest import mock
+        from crucible import callsites
+        names = {f"contract_{i:03d}": ("a.py", "r") for i in range(300)}
+        hits = [("b.py", k, f"contract_{k % 300:03d}(1) + contract_{(k + 1) % 300:03d}(2)") for k in range(1, 40001)]
+        with mock.patch.object(callsites, "_grep", return_value=hits), \
+                mock.patch.object(callsites, "_in_prose", return_value=set()):
+            t0 = time.monotonic()
+            lines, picked = callsites.sites("/nonexistent", names)
+            self.assertLess(time.monotonic() - t0, 5)                 # was 43 s before names were looked up per line
+        self.assertEqual(picked, {})                                 # every searched name has > MAX_PER_NAME sites
+        self.assertTrue(any(l.startswith("(too many to list; search them: contract_000") for l in lines))
+        self.assertTrue(lines[-1].endswith("and 216 more)"), lines[-1])   # past MAX_SEARCH: counted, not dropped
+        d = make_repo({"b.py": "noisy_name(1)\n" * 9 + "quiet_name(1)\n"})
+        lines, picked = callsites.sites(d, {"noisy_name": ("a.py", "r"), "quiet_name": ("a.py", "r")})
+        self.assertEqual(list(picked), ["quiet_name"])
+        self.assertIn("b.py:10: quiet_name(1)  [quiet_name]", lines)
 
     def test_the_line_cap_says_how_many_it_cut(self):
         from crucible import callsites

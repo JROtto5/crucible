@@ -14,7 +14,8 @@ import re
 from .docrefs import CODE_SPECS, COMMENT_RX, DEF_RX, GENERIC, NOT_NAMES, _enclosing, _grep, _in_prose
 from .util import CODE_EXT_RX, TEST_PATH_RX
 
-MAX_NAMES = 8
+MAX_NAMES = 8             # names listed with their callers
+MAX_SEARCH = 64           # names searched for callers (a deleted file can change hundreds)
 MAX_PER_NAME = 8          # more call sites than this: counted, not listed
 MAX_LINES = 30
 LINE_CHARS = 160
@@ -25,7 +26,7 @@ CLASS_LINE_RX = re.compile(r"^(\s*)(?:export\s+)?(?:default\s+)?(?:abstract\s+)?
 # from just after a definition's name to its "(": generics, or `= async function` / `= (` for an arrow function
 OPEN_RX = re.compile(r"\s*(?:<[^()]*>)?\s*(?:=\s*(?:async\s+)?(?:function\s*\*?\s*\w*)?\s*)?\(")
 # from just after the closing ")" to the return type, when the definition states one
-# (never past the end of that line: Ruby's body follows its signature with no "{" or ";")
+# (outside Python, never past the end of that line: Ruby's body follows its signature with no "{" or ";")
 RET_RX = {".py": re.compile(r"\s*->\s*([^:]+?)\s*:"),             # Python always closes it with ":"
           None: re.compile(r"[ \t]*:[ \t]*([^{=;\n]+?)[ \t]*(?:\{|=>|;|\n|$)")}
 for _e in PY_JS - {".py"}:
@@ -271,30 +272,30 @@ def sites(repo, contracts, changed_lines=None):
     if not contracts:
         return [], {}
     ranked = sorted(contracts, key=lambda n: (-len(n), n))
-    changed_lines, spans = changed_lines or {}, {}
+    ranked, unsearched = ranked[:MAX_SEARCH], ranked[MAX_SEARCH:]
+    changed_lines, spans, rank = changed_lines or {}, {}, {n: i for i, n in enumerate(ranked)}
     by_name = {n: [] for n in ranked}
-    rxs = {n: _call_rx(n) for n in ranked}
+    rxs = {}
     for p, no, t in _grep(repo, ranked, CODE_SPECS):
         if no in changed_lines.get(p, ()) or COMMENT_RX.match(t):
             continue
+        # only the names the line holds as whole words: testing every name on every hit grows as names x hits
+        here = sorted(set(re.findall(r"[\w$]+", t)) & rank.keys(), key=rank.get)
         rx = DEF_RX.get(os.path.splitext(p)[1].lower())
-        m = rx.match(t) if rx else None
+        m = rx.match(t) if rx and here else None
         defined = {g for g in (m.groups() if m else ()) if g}
-        found = [n for n in ranked if n not in defined and rxs[n].search(t)
-                 and re.search(rf"(?<![\w$]){re.escape(n)}(?![\w$])", t)]
+        found = [n for n in here if n not in defined and (rxs.get(n) or rxs.setdefault(n, _call_rx(n))).search(t)]
         if not found or no in _in_prose(repo, p, spans):
             continue
         for n in found:
             by_name[n].append((p, no, t, found))
-    with_callers = [n for n in ranked if by_name[n]]
-    picked, rest = with_callers[:MAX_NAMES], with_callers[MAX_NAMES:]
-    out, common, listed = [], [], set()
+    # a name with more sites than MAX_PER_NAME is counted, not listed, and doesn't take one of the MAX_NAMES slots
+    common = [f"{n} ({len(by_name[n])} lines)" for n in ranked if len(by_name[n]) > MAX_PER_NAME]
+    with_callers = [n for n in ranked if 0 < len(by_name[n]) <= MAX_PER_NAME]
+    picked, rest = with_callers[:MAX_NAMES], with_callers[MAX_NAMES:] + unsearched
+    out, listed = [], set()
     for n in picked:
-        hs = by_name[n]
-        if len(hs) > MAX_PER_NAME:
-            common.append(f"{n} ({len(hs)} lines)")
-            continue
-        for p, no, t, found in hs:
+        for p, no, t, found in by_name[n]:
             if (p, no) in listed:               # an import of several names: listed once, tagged with all of them
                 continue
             listed.add((p, no))
@@ -304,8 +305,12 @@ def sites(repo, contracts, changed_lines=None):
         out = out[:MAX_LINES] + [f"({len(out) - MAX_LINES} more lines not listed)"]
     if common:
         out.append(f"(too many to list; search them: {', '.join(common)})")
-    if rest:
-        out.append(f"(more changed contracts with callers, not listed: {', '.join(rest)})")
+    if rest and (out or common):
+        out.append(f"(more changed contracts, callers not listed: {', '.join(rest[:20])}"
+                   f"{f' and {len(rest) - 20} more' if len(rest) > 20 else ''})")
+    elif rest:
+        out.append(f"(changed contracts not searched for callers: {', '.join(rest[:20])}"
+                   f"{f' and {len(rest) - 20} more' if len(rest) > 20 else ''})")
     return out, {n: contracts[n] for n in picked}
 
 
