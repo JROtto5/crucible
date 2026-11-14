@@ -6468,6 +6468,14 @@ class TestDocRefs(unittest.TestCase):
         self.assertIn("OUTSIDE this diff", note)
         self.assertEqual(docrefs.note([], names), "")
 
+    def test_comments_in_mts_and_vue_files_are_searched(self):
+        from crucible import docrefs
+        d, files, rd = self._repo({"web/client.mts": "// fetch_items retries on 503\n",
+                                   "web/List.vue": "<script>\n// calls fetch_items with the default timeout\n</script>\n"})
+        text = "\n".join(docrefs.mentions(d, files, rd)[0])
+        self.assertIn("web/client.mts:1:", text)
+        self.assertIn("web/List.vue:2:", text)
+
     def test_lines_the_change_added_are_left_out(self):
         from crucible import docrefs
         d, files, rd = self._repo({"README.md": "# pkg\nCall `fetch_items(url, deadline=10)`.\n"})
@@ -6616,6 +6624,7 @@ class TestCallSites(unittest.TestCase):
     def test_split_top_comparisons_and_arrows_are_not_brackets(self):
         from crucible import callsites
         self.assertEqual(callsites._split_top("a = x < 3, b, cc"), ["a = x < 3", "b", "cc"])
+        self.assertEqual(callsites._split_top("a=x<3, b, cc"), ["a=x<3", "b", "cc"])        # unspaced: no ">" closes it
         self.assertEqual(callsites._split_top("m: Map<K, V>, f = () => 1, g"), ["m: Map<K, V>", "f = () => 1", "g"])
         self.assertEqual(callsites.breaks(("a = x < 3, b, cc", ""), ("a = x < 3, b, cc", "int"), ".py"), [])
 

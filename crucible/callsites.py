@@ -66,16 +66,17 @@ def _strip_comment(ln, ext):
     return ln
 
 
-def _split_top(s):
+def _split_top(s, generics=True):
     """s split on commas outside brackets and quotes. "<" opens a bracket only straight after a name (a generic,
-    Map<K, V>), and ">" closes only a "<", so `a = x < 3, b` and an arrow's "=>" don't swallow the next parameter."""
+    Map<K, V>), and ">" closes only a "<", so `a = x < 3, b` and an arrow's "=>" don't swallow the next parameter;
+    a "<" still open at the end was a comparison (`a=x<3, b`), and the split is redone without generics."""
     out, stack, cur, q = [], [], "", None
     for i, c in enumerate(s):
         if q:
             q = None if c == q else q
         elif c in "\"'`":
             q = c
-        elif c in "([{" or c == "<" and i and (s[i - 1].isalnum() or s[i - 1] == "_"):
+        elif c in "([{" or generics and c == "<" and i and (s[i - 1].isalnum() or s[i - 1] == "_"):
             stack.append(c)
         elif c in ")]}" and stack:
             stack.pop()
@@ -86,6 +87,8 @@ def _split_top(s):
             cur = ""
             continue
         cur += c
+    if "<" in stack:
+        return _split_top(s, generics=False)
     out.append(cur)
     return [p.strip() for p in out if p.strip()]
 
