@@ -3961,6 +3961,16 @@ class TestDraftScope(unittest.TestCase):
             open(os.path.join(repo, "PR_BODY.md"), "w").write(text)
             self.assertEqual(R.newer_draft(repo, draft)["status"], "pass", text)
 
+    def test_copy_out_of_a_title_line_draft_passes(self):
+        # heroic-6053: PR_DRAFT.md starts `TITLE: ...`; PR_BODY.md is the rest of it. A copy, not a rival
+        repo, draft = self._repo()
+        open(draft, "w").write("TITLE: fix: open the dialog\n\n<!-- describe -->\nFixes #1\n\nold design\n")
+        os.utime(draft, (1_700_000_000, 1_700_000_000))
+        open(os.path.join(repo, "PR_BODY.md"), "w").write("<!-- describe -->\nFixes #1\n\nold design\n")
+        self.assertEqual(R.newer_draft(repo, draft)["status"], "pass", R.newer_draft(repo, draft))
+        open(os.path.join(repo, "PR_BODY.md"), "w").write("<!-- describe -->\nFixes #1\n\nnew design\n")
+        self.assertEqual(R.newer_draft(repo, draft)["status"], "warn")
+
     def test_older_tracked_or_unrelated_files_pass(self):
         repo, draft = self._repo()
         for n in ("PR_BODY.md", "NOTES.md", "PREP.md", "pr_template_notes.md"):

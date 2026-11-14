@@ -753,6 +753,11 @@ def newer_draft(repo, draft_path):
     # the draft itself (a plain `cp`), what it submits (title + body), or the body alone (the title goes in
     # `gh pr create --title`)
     copies = {norm(raw), norm(submitted_text(raw)), norm(split_draft(raw)["body"])}
+    # a draft whose first line is `TITLE: ...` (the lanes' layout; split_draft doesn't read it as a title): the body
+    # is everything after that line (heroic-6053 warned on a plain copy)
+    m = re.match(r"\s*title:[^\n]*\n", raw, re.I)
+    if m:
+        copies.add(norm(raw[m.end():]))
     seen, newer = set(), []
     for d in {os.path.dirname(os.path.abspath(draft_path)), os.path.abspath(repo)}:
         try:
