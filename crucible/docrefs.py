@@ -166,14 +166,18 @@ def _py_prose(text):
 def _block_prose(text):
     """Lines inside /* */ comments of a C-like file. Only a line that starts with /* opens one: mid-line, a /* is as
     often a regex literal (/\\/*$/), a glob in a string or template literal ("src/*") or inside a // comment, and a
-    span opened by mistake would never close. A block comment that opens after code on its line is missed."""
-    out, inside = set(), False
+    span opened by mistake would never close. A span that never closes counts for nothing (a line-start /* inside a
+    multi-line string, a .gitignore template, would otherwise take the rest of the file); one that a later */ does
+    close is still counted. A block comment that opens after code on its line is missed."""
+    out, span = set(), None
     for no, ln in enumerate(text.split("\n"), 1):
-        if inside:
-            out.add(no)
-            inside = "*/" not in ln
-        elif ln.lstrip().startswith("/*"):
-            inside = "*/" not in ln.lstrip()[2:]
+        if span is not None:
+            span.append(no)
+            if "*/" in ln:
+                out.update(span)
+                span = None
+        elif ln.lstrip().startswith("/*") and "*/" not in ln.lstrip()[2:]:
+            span = []
     return out
 
 
