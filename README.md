@@ -19,7 +19,7 @@ crucible reply   https://github.com/o/r/pull/12  # draft answers to real review 
 
 ## Measured, not guessed
 
-`crucible eval` runs the full review on 18 labelled fixture changes in JS, TS and Python: 16 build cases and 2 held-out ones (below). The 12 build bug cases cover off-by-one, a null edge, a missing `await`, refcount/ownership, an API break, shell and SQL injection, a units mix-up, a race, pagination, a deleted test hiding a regression and a committed secret. The 4 build clean cases are a refactor, a docs change, a fix with tests and an opt-in option with tests. Latest results ([eval/RESULTS.md](eval/RESULTS.md)):
+`crucible eval` runs the full review on 24 labelled fixture changes in JS, TS and Python: 20 build cases and 4 held-out ones (below). The 13 build bug cases cover off-by-one, a null edge, a missing `await`, refcount/ownership, an API break, a caller the change left stale in a file the diff doesn't touch, shell and SQL injection, a units mix-up, a race, pagination, a deleted test hiding a regression and a committed secret. The 4 build clean cases are a refactor, a docs change, a fix with tests and an opt-in option with tests. The 3 nit cases plant several non-blocking problems each (maintainability, stale docs) and run only with `--nits`. Latest results ([eval/RESULTS.md](eval/RESULTS.md)):
 
 | | recall (blocking) | recall (any severity) | false blocking findings on clean changes | cost, 16 cases |
 |---|---|---|---|---|
@@ -48,7 +48,7 @@ Caveats, in their words and ours:
 - **Larger PRs.** These are company-scale changes, larger than the small upstream PRs crucible is tuned for.
 
 
-Those 16 cases are the **build** split: crucible's prompts and verifier have been tuned while watching them, so they flatter it. Cases from real catches go in a **held-out** split (`"split": "holdout"` in `expected.json`) that no prompt change may be justified by, and `crucible eval` reports held-out recall and false blocking on their own line (`--split holdout` runs only those). The first two (2026-11-07): a shutdown fix that calls a helper whose close waits without a bound before its new bounded wait, so the hang it fixes comes back (from gamescope #2516), and the correct version of the same fix. Held-out: recall 1/1, false blocking 0 on 1 clean case, $1.07. Two cases are far too few to read a percentage from; the column exists so each new real catch lands where tuning can't flatter it.
+The cases above are the **build** split: crucible's prompts and verifier have been tuned while watching them, so they flatter it. Cases from real catches go in a **held-out** split (`"split": "holdout"` in `expected.json`) that no prompt change may be justified by, and `crucible eval` reports held-out recall and false blocking on their own line (`--split holdout` runs only those). The first two (2026-11-07): a shutdown fix that calls a helper whose close waits without a bound before its new bounded wait, so the hang it fixes comes back (from gamescope #2516), and the correct version of the same fix. Held-out: recall 1/1, false blocking 0 on 1 clean case, $1.07. Two cases are far too few to read a percentage from; the column exists so each new real catch lands where tuning can't flatter it.
 
 ## How a review works
 

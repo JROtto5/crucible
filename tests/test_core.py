@@ -6535,5 +6535,105 @@ class TestDocRefs(unittest.TestCase):
         self.assertEqual(V.docs_note(d, "HEAD", [{"path": "a.py", "hunks": None}], {"files": ["a.py"]}), "")
 
 
+class TestCallSites(unittest.TestCase):
+    """--nits: call sites outside the diff of a definition whose contract changed (run 3: api-architecture 25.0)."""
+    BASE = {
+        "pkg/api.py": "class Client:\n    def __init__(self, host, port=80):\n        self.host = host\n\n"
+                      "    def ping(self, path):\n        return path\n\n\n"
+                      "def fetch_items(url, timeout=10, *, retries=3):\n    return [url, timeout]\n\n\n"
+                      "def parse_row(row,\n              sep=\",\"):\n    return row.split(sep)\n\n\n"
+                      "def old_helper(value):\n    return value\n",
+        "pkg/use.py": "from pkg.api import fetch_items, old_helper, Client\n# fetch_items(url, timeout=5) in a comment\n"
+                      "r = fetch_items('u', timeout=5)\nc = Client('h', 8080)\nold_helper(1)\nparse_row('a,b', ';')\n",
+        "web.ts": "export function formatDate(d: Date, locale: string = 'en'): string {\n  return '';\n}\n"
+                  "export const loadUser = async (id: string, opts?: Opts) => {\n  return id;\n};\n"
+                  "export function Badge({ runner, title, className }: Props) {\n  return runner;\n}\n",
+        "main.ts": "import { formatDate, loadUser, Badge } from './web';\nformatDate(new Date(), 'fr');\nloadUser('1');\n"
+                   "Badge({ runner: 1, title: 'x' });\n",
+    }
+
+    def _repo(self, extra=None):
+        new = dict(self.BASE)
+        new["pkg/api.py"] = (new["pkg/api.py"].replace("host, port=80", "host, *, port=80")
+                             .replace("url, timeout=10, *, retries=3", "url, deadline=10, *, retries=3, verbose=False")
+                             .replace('sep=","', 'sep="\\t"').replace("def ping(self, path)", "def ping(self, path, extra=None)")
+                             .replace("\n\n\ndef old_helper(value):\n    return value\n", "\n"))
+        new["web.ts"] = (new["web.ts"].replace("d: Date, locale: string = 'en'", "locale: string, d: Date")
+                         .replace("opts?: Opts)", "opts?: Opts, extra?: number)")
+                         .replace("{ runner, title, className }", "{ runner, className, iconOnly = false }"))
+        new.update(extra or {})
+        d = make_repo(self.BASE, new)
+        files = D.parse(sh(d, "git", "diff", "main..fix") + "\n")
+        return d, files
+
+    def _contracts(self, d, files):
+        from crucible import callsites
+        return callsites.changed_contracts(files, lambda p: V.git_blob(d, "main", p), lambda p: V.git_blob(d, "fix", p))
+
+    def test_breaking_changes_are_found_compatible_ones_are_not(self):
+        d, files = self._repo()
+        c = {n: why for n, (_p, why) in self._contracts(d, files).items()}
+        self.assertIn("timeout removed or renamed", c["fetch_items"])
+        self.assertIn("keyword-only", c["Client"])                  # __init__ is filed under its class
+        self.assertIn('default of sep ","', c["parse_row"])         # a multi-line definition
+        self.assertEqual(c["old_helper"], "removed or renamed")
+        self.assertIn("positional order d, locale -> locale, d", c["formatDate"])
+        self.assertIn("no longer reads title", c["Badge"])          # an options key dropped; one added is fine
+        self.assertNotIn("iconOnly", c["Badge"])
+        self.assertNotIn("ping", c)                                 # an optional parameter appended
+        self.assertNotIn("loadUser", c)
+
+    def test_param_lists(self):
+        from crucible import callsites
+        self.assertEqual(callsites._param_list("self, a: int = 4, *args, b=f(1, 2), **kw"),
+                         [("a", "pos", "4", None), ("args", "star", None, None), ("b", "kw", "f(1, 2)", None),
+                          ("kw", "star", None, None)])
+        self.assertEqual(callsites._param_list("{ a, b = 2, ...rest }: P, x?: number")[0][3], {"a", "b", "rest"})
+        self.assertEqual(callsites._param_list("x?: number")[0][2], "?")
+        self.assertEqual(callsites.breaks(("a, b=1", "int"), ("a, b=1", "str"), ".py"), ["return int -> str"])
+        self.assertEqual(callsites.breaks(("a", ""), ("a", "int"), ".py"), [])         # an annotation added
+        self.assertEqual(callsites.breaks(("a", ""), ("a, b=2", ""), ".py"), [])
+        self.assertEqual(callsites.breaks(("a, b", ""), ("a, b=2", ""), ".py"), [])    # a parameter made optional
+        self.assertTrue(callsites.breaks(("a int", ""), ("a int, b int", ""), ".go"))  # no model: any change counts
+
+    def test_sites_list_callers_and_imports_not_defs_comments_or_the_prs_own_lines(self):
+        from crucible import callsites
+        d, files = self._repo({"pkg/new.py": "from pkg.api import fetch_items\nfetch_items('u', deadline=1)\n"})
+        added = {f["path"]: {n for h in f["hunks"] for k, _t, _o, n in h["lines"] if k == "+"} for f in files}
+        lines, names = callsites.sites(d, self._contracts(d, files), added)
+        text = "\n".join(lines)
+        for want in ("pkg/use.py:1:", "pkg/use.py:3:", "pkg/use.py:4:", "pkg/use.py:5:", "pkg/use.py:6:",
+                     "main.ts:1:", "main.ts:2:", "main.ts:4:"):
+            self.assertIn(want, text)
+        self.assertNotIn("pkg/use.py:2:", text)                 # a comment
+        self.assertNotIn("pkg/api.py", text)                    # the definitions themselves
+        self.assertNotIn("pkg/new.py", text)                    # the PR added that caller
+        self.assertIn("[fetch_items, old_helper, Client]", text)  # one import line, every name it carries
+        note = callsites.note(lines, names)
+        self.assertIn("OUTSIDE this diff", note)
+        self.assertIn("fetch_items in pkg/api.py", note)
+        self.assertEqual(callsites.note([], names), "")
+
+    def test_a_common_name_and_a_moved_function(self):
+        from crucible import callsites
+        d = make_repo({"a.py": "def install(x):\n    return x\n\n\ndef rebuild_index(x):\n    return x\n",
+                       "b.py": "", "c.py": "from a import rebuild_index\nrebuild_index(1)\n"},
+                      {"a.py": "", "b.py": "def rebuild_index(x):\n    return x\n"})
+        files = D.parse(sh(d, "git", "diff", "main..fix") + "\n")
+        c = self._contracts(d, files)
+        self.assertNotIn("install", c)                           # every pkg.install( would be listed
+        self.assertIn("moved to b.py", c["rebuild_index"][1])
+        lines, _ = callsites.sites(d, c)
+        self.assertIn("c.py:1:", "\n".join(lines))
+
+    def test_callers_note_whole_change_and_never_stops_a_review(self):
+        d, files = self._repo()
+        note = V.callers_note(d, "main", "fix", files, {"files": ["pkg/api.py"]})
+        self.assertIn("pkg/use.py:3:", note)
+        self.assertNotIn("main.ts", note)                        # web.ts is another pass's file
+        nd = tempfile.mkdtemp(prefix="crucible-nogit-")
+        self.assertEqual(V.callers_note(nd, "main", "HEAD", [{"path": "a.py", "hunks": None}], {"files": ["a.py"]}), "")
+
+
 if __name__ == "__main__":
     unittest.main()

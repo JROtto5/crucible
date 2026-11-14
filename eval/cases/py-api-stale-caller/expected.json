@@ -1,0 +1,15 @@
+{
+ "kind": "bug",
+ "split": "build",
+ "message": "billing: charge() takes the Customer, so invoices look the customer up once",
+ "file": "jobs/retry.py",
+ "lines": [
+  10
+ ],
+ "also": [{"file": "billing/charge.py", "lines": [4, 6]}],
+ "keywords": [
+  "retry_failed",
+  "jobs/retry",
+  "retry.py"
+ ]
+}

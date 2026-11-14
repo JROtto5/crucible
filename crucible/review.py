@@ -1,6 +1,6 @@
 """The review pipeline: checks → scanners → chunked review → per-finding verification → verdict."""
 import concurrent.futures as cf, datetime as dt, fcntl, hashlib, os, re, subprocess, textwrap
-from . import catalog, checks as checks_mod, diff as diff_mod, docrefs, readiness, routing, style as style_mod
+from . import callsites, catalog, checks as checks_mod, diff as diff_mod, docrefs, readiness, routing, style as style_mod
 from .util import (BLOCKING, BUDGET_EXHAUSTED, HOME, MODELS, PREFERENCE, SEV, TOOLS_READ, TOOLS_RUN, Budget, Failed, NoStructuredOutput,
                    claude, crucible_build, default_base,
                    exclude_locally, git, is_dirty, norm_words, project_dir, project_key, read_json, review_dir,
@@ -67,6 +67,9 @@ FINDINGS_NITS_SCHEMA = {**FINDINGS_SCHEMA, "properties": {**FINDINGS_SCHEMA["pro
 # told to search for uses and read both sites.
 # The docs paragraph: run 3 found 25.0% of golden documentation issues. A stale doc is usually in a file the diff
 # doesn't show, so each pass also gets the lines outside the diff that name what it touched (docs_note, $0).
+# The API/architecture paragraph: run 3 found 25.0% of golden api-architecture issues (12). Most are a contract
+# change whose callers live in files the diff doesn't show, so each pass also gets those call sites (callers_note,
+# $0); the rest are a new pattern beside the repo's existing one, or a layer crossed, which the paragraph names.
 NITS_NOTE = f"""
         Second tier, "nits" (at most {NITS_MAX_PER_PASS}, separate from findings): smaller REAL problems a careful
         reviewer would comment on but not block on: an unhandled edge case, a misleading name, comment or docstring,
@@ -94,6 +97,12 @@ NITS_NOTE = f"""
         each line that now describes the code wrongly its own nit at that line, quoting it; likewise a docstring
         or comment in the changed function that still documents a removed or renamed parameter or the old
         behaviour, and a new public option or flag left out of the place its peers are documented.
+        API and architecture, after you looked at how the repo does it today: a second way of doing something the
+        repo already does one way (its error type or result shape, config or environment loading, logging, an HTTP
+        or database client, a registry), naming the existing one's file and line; an import or call that crosses a
+        layer the repo keeps apart (core code importing UI or CLI code, a library reading argv or the process
+        environment directly); a public name, export or option that doesn't follow the naming or placement of its
+        peers. A changed contract that breaks a caller is a finding, not a nit (see the call sites below, if any).
 """
 NIT_VERDICTS_SCHEMA = {"type": "object", "properties": {"verdicts": {"type": "array", "items": {
     "type": "object", "properties": {
@@ -768,6 +777,20 @@ def docs_note(repo, sha, files, ch, whole=None):
         return ""
 
 
+def callers_note(repo, base, sha, files, ch):
+    """The --nits prompt's list of call and import lines outside the diff that use a definition whose contract this
+    pass's files changed, base -> HEAD (crucible.callsites); "" when there are none or the search fails. files: the
+    whole change, also in an incremental round (a caller left stale in round 1 is still stale), whose added lines
+    are left out (the author already updated those)."""
+    try:
+        mine = [f for f in files if f.get("path") in set(ch["files"])]
+        added = {f["path"]: {n for h in f["hunks"] for k, _t, _o, n in h["lines"] if k == "+"} for f in files}
+        contracts = callsites.changed_contracts(mine, lambda p: git_blob(repo, base, p), lambda p: git_blob(repo, sha, p))
+        return callsites.note(*callsites.sites(repo, contracts, added))
+    except Exception:
+        return ""
+
+
 def is_ancestor(repo, a, b):
     return subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", a, b], capture_output=True).returncode == 0
 
@@ -1101,6 +1124,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         for i, ch in enumerate(chunks, 1):
             since = since_note(prev_sha, record["incremental"]["amended"], ch, full_texts, base) if prev_sha else ""
             docs = docs_note(repo, sha, dfiles if prev_sha else files, ch, files) if nits else ""
+            if nits:
+                docs = "\n".join(x for x in (callers_note(repo, base, sha, files, ch), docs) if x)
             prompt = review_prompt(project, sha, base, ch, rules, mem, facts, clog, all_files, house,
                                    draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured, since, nits, docs)
             # keyed on the prompt with check output reduced to outcomes: a template change invalidates the cache, but

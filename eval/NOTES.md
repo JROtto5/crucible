@@ -684,3 +684,37 @@ change to the parameter comparison (only against the same re-added definition); 
 same names. $0 sweep, last 8 commits of 7 local clones (56 commits): 20 get a list, median 0 lines, max 6. Spend this
 shift: $1.79 local eval.
 
+
+### 2026-11-14 · API call sites (ReviewBench focus item 3): stale callers outside the diff in the prompt, local A/B, no gain visible
+
+Change: with `--nits`, each pass gets a $0 list of call and import lines outside the diff that use a definition whose
+contract the pass's files changed (crucible/callsites.py). The signature of each touched definition is compared base
+-> HEAD: a parameter removed or renamed, a positional reorder, a parameter made keyword-only, a new required
+parameter, a changed default, a changed return annotation, a key a destructured options object stops reading, a
+definition removed or moved. Appending an optional parameter, giving one a default, or adding an annotation is not
+listed. Other languages (Go, Rust, C...) have no parameter model: any change to the argument list counts. The nit note
+gains an API/architecture paragraph (a second way of doing what the repo already does one way, a crossed layer, a
+public name off its peers' pattern). Run 3's api-architecture category was 25.0 on 12 golden issues; the misses were
+not read (judge output not on this desktop).
+
+$0 sweep, last 12 non-merge commits of lutris, colyseus, mangohud, heroic and crucible (60 commits): 5 have a changed
+contract, 4 get a list, median 0 lines, max 5. Read by hand: lutris cb04e81d (`read_version_from_config` drops its
+`default` parameter, 4 callers) and colyseus ccc3ba38 (`guard(root, serverEntry, hostSuffix)` -> `guard(o)`) are real
+contract changes. The first sweep had heroic 94836a3e at 13 lines from React props objects compared as one blob and
+generic names (`install`, `remove`); after comparing destructured keys and skipping common names, max 5.
+
+New bug case `py-api-stale-caller`: `charge(customer_id, amount)` now takes the Customer; the PR updates invoices.py
+and its test, and `jobs/retry.py` (not in the diff) still passes the id. `crucible eval --nits --no-write --cases
+py-api-stale-caller ts-api-break clean-py-docs clean-js-refactor`, before (0eb9546) vs after, 2 rounds per arm:
+
+| | before | after |
+|---|---|---|
+| py-api-stale-caller | caught, caught | caught, caught |
+| ts-api-break | caught, caught | caught, caught |
+| clean-py-docs + clean-js-refactor: false blocking / nits kept | 0 / 0 | 0 / 0 |
+| $ for the 4 cases, per round | $1.15, $0.67 | $1.27, $0.72 |
+
+Reading: ceiling in both arms again. In a 7-file fixture the reviewer greps for the caller on its own; the note is
+for a large repo split over passes, where it doesn't, and no local case shows that. Cost +10% on these 4 cases ($1.99 vs $1.82 over both rounds)
+(+$0.04-0.06 on the stale-caller case, where the note appears). The claim waits for ReviewBench run 4's
+api-architecture category. Spend this shift: $3.81 local eval.
