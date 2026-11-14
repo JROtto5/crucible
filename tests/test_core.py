@@ -3711,7 +3711,7 @@ class TestStatsWindow(unittest.TestCase):
             o, w = s["overall"], s["window"]
             self.assertEqual((o["reviews"], o["cost"], o["unique"], o["fixed"], o["unanswered"]), (2, 2.5, 3, 1, 2))
             self.assertEqual(w, {"since": "2026-11-07T05:15:00", "project": None, "stored": 4, "undated": 1,
-                                 "newest": "2026-11-07T09:00:00", "in_window": 2})
+                                 "newest": "2026-11-07T09:00:00", "in_window": 2, "builds": {"unstamped": 2}})
             self.assertEqual(ST.collect(root)["overall"]["reviews"], 4)                  # no window: everything
             text = ST.report(s)
             self.assertIn("Window: reviews finished since 2026-11-07 05:15:00: 2 of 4.", text)
@@ -4423,6 +4423,26 @@ class TestLengthLeftToHouseCheck(unittest.TestCase):
             self._store_rule_drop(root)
             o = ST.collect(root)["overall"]
             self.assertEqual((o["unique"], o["dropped"]), (1, 1))   # only the verifier's drop is counted
+
+    def test_stats_counts_window_reviews_by_build(self):
+        # 2026-11-14 check-in: a figure must say which crucible build made it (BLAZE's v2.5/v2.8 label mix-up)
+        from crucible import stats as ST
+        with tempfile.TemporaryDirectory() as root:
+            for i, (sha, at) in enumerate([("aaaaaaa111", "2026-11-14T01:00"), ("aaaaaaa111", "2026-11-14T02:00"),
+                                           ("bbbbbbb222", "2026-11-14T03:00"), (None, "2026-11-14T04:00"),
+                                           ("ccccccc333", "2026-11-13T01:00")]):
+                d = os.path.join(root, "o__r", f"run{i}")
+                os.makedirs(d)
+                rev = {"status": "done", "repo": "o__r", "finished": at, "findings": []}
+                if sha:
+                    rev["crucible_sha"] = sha
+                with open(os.path.join(d, "review.json"), "w") as f:
+                    json.dump(rev, f)
+            w = ST.collect(root, since="2026-11-14T00:00")["window"]
+            self.assertEqual(w["builds"], {"aaaaaaa111": 2, "bbbbbbb222": 1, "unstamped": 1})   # 11-13 one is out
+            self.assertEqual(ST.builds_line(w), "Built by (crucible_sha): aaaaaaa 2, bbbbbbb 1; unstamped 1.")
+            self.assertEqual(ST.builds_line({"builds": {"unstamped": 3}}),
+                             "Built by (crucible_sha): none stamped; unstamped 3.")
 
 
 class TestBodyWordsSkipsFoldedCode(unittest.TestCase):

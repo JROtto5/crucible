@@ -92,7 +92,8 @@ def _load(root, include_self, project, since=None):
                     answers[(repo, fid)] = a
     dated = [t for t in seen if t]
     window = {"since": since, "project": project, "stored": len(seen), "undated": len(seen) - len(dated),
-              "newest": max(dated) if dated else None, "in_window": len(reviews)}
+              "newest": max(dated) if dated else None, "in_window": len(reviews),
+              "builds": dict(collections.Counter(rev.get("crucible_sha") or "unstamped" for _, rev in reviews))}
     return reviews, answers, window
 
 
@@ -227,9 +228,18 @@ def report(s):
     out.append(tokens_line(s))
     if w["since"]:
         out.append(f"Window: reviews finished since {w['since'].replace('T', ' ')}: {w['in_window']} of {w['stored']}.")
+    out.append(builds_line(w))
     out.append(_source(w))
     out.append("Counts are unique findings (same id, or same title in one project, count once); model findings only.")
     return "\n".join(out)
+
+
+def builds_line(w):
+    """Which crucible build made the window's reviews: count per `crucible_sha`, unstamped (older) reviews apart."""
+    b = dict(w.get("builds") or {})
+    un = b.pop("unstamped", 0)
+    parts = [f"{sha[:7]} {n}" for sha, n in sorted(b.items(), key=lambda kv: (-kv[1], kv[0]))]
+    return f"Built by (crucible_sha): {', '.join(parts) or 'none stamped'}; unstamped {un}."
 
 
 def tokens(s):
