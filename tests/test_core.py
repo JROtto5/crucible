@@ -3399,7 +3399,9 @@ class TestDescriptionHeuristics(unittest.TestCase):
         for line in ("Rebased against main.", "Pass `transferBuffers: true` to keep the old behaviour.",
                      "Bumps the version to 1/2.", "On master the helper is private.",
                      "It passes the raw buffer to the worker instead of a copy.", "They pass through unchanged.",
-                     "Refactor the loader (1/2).", "Rendering fails on main thread when the canvas is detached."):
+                     "Refactor the loader (1/2).", "Split the loader (2/2).",
+                     "Rendering fails on main thread when the canvas is detached.",
+                     "The recursion fails on the base case when n is 0."):
             self.assertFalse(S.has_testing_evidence(line), line)
 
     def test_m_no_evidence_is_still_flagged(self):
@@ -7043,10 +7045,16 @@ class TestReportSummary(unittest.TestCase):
                               "2 findings kept (1 medium, 1 low).")
         self.assertEqual(V.reviewer_summary(["Correct.", "No issues found beyond style."], []), "Correct. No findings kept.")
         self.assertEqual(V.reviewer_summary(["Two findings are medium."], kept[:1]), "1 finding kept (1 low).")
+        self.assertEqual(V.reviewer_summary(["The only issue is a low-severity PR description format point."], kept[1:]),
+                         "1 finding kept (1 medium).")
+        # a pass summary without a full stop stays apart from the next pass's tally
+        self.assertEqual(V.reviewer_summary(["a looks fine", "The only finding is low."], kept[1:]),
+                         "a looks fine 1 finding kept (1 medium).")
 
     def test_summary_without_a_tally_is_untouched(self):
         for text in ("The parser drops one token per line, so `split()` is the right call.",
-                     "The finding at line 42 is the only real risk.", "The main finding is that the parser has no test.", ""):
+                     "The finding at line 42 is the only real risk.", "The main finding is that the parser has no test.",
+                     "It fixes one issue in the parser.", "The issue at line 42 is the only real risk.", ""):
             self.assertEqual(V.reviewer_summary([text] if text else [], [{"severity": "low"}]), text)
 
 if __name__ == "__main__":

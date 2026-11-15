@@ -1543,14 +1543,15 @@ def tokens_note(rev):
             f"verify {tv['total']:,}{'; ' + ', '.join(extra) if extra else ''})")
 
 
-# A sentence that counts or grades the findings: a count or "only/no" word up to two words before "finding(s)", or
-# "finding is/are <severity>". Falsifiers (tests/test_core.py TestReportSummary). Replaced: "The only finding is a
-# low-severity PR description format point.", "No issues found beyond style.", "Two findings are medium.". Kept: "The
-# finding at line 42 is the only real risk.", "The main finding is that the parser has no test.", and every note crucible
-# writes itself (verification failed, review pass failed, nothing changed since), which never go through this filter.
+# A sentence that counts or grades the findings: a count or "only/no" word up to two words before "finding(s)" (or
+# "issue(s)" followed by found/raised/is/are), or "finding/issue is/are <severity>". Falsifiers (tests/test_core.py
+# TestReportSummary). Replaced: "The only finding is a low-severity PR description format point.", "The only issue is a
+# low-severity ...", "No issues found beyond style.", "Two findings are medium.". Kept: "The finding at line 42 is the
+# only real risk.", "The main finding is that the parser has no test.", "It fixes one issue in the parser.", and every
+# note crucible writes itself (verification failed, review pass failed, nothing changed since), which never go through it.
 _TALLY_RX = re.compile(r"(?i)\b(?:no|only|one|two|three|four|five|single|sole|\d+)\b(?:[\s-]+[a-z-]+){0,2}?[\s-]+"
-                       r"(?:findings?|issues? (?:found|raised))\b"
-                       r"|\bfindings? (?:is|are|was|were) (?:a |an |all |both )?(?:critical|important|high|medium|low)\b")
+                       r"(?:findings?|issues? (?:found|raised|is|are|was|were))\b"
+                       r"|\b(?:findings?|issues?) (?:is|are|was|were) (?:a |an |all |both )?(?:critical|important|high|medium|low)\b")
 
 
 def reviewer_summary(summaries, kept):
@@ -1559,7 +1560,8 @@ def reviewer_summary(summaries, kept):
     description format point" over a kept medium, that point dropped; DRG-105). Such sentences give way to the kept
     tally; a summary with none is returned as written."""
     text = " ".join(summaries)
-    sents = re.split(r"(?<=[.!?])\s+", text.strip())
+    # per pass: a pass summary without a final full stop must not merge into the next pass's tally sentence
+    sents = [x for t in summaries for x in re.split(r"(?<=[.!?])\s+", t.strip()) if x]
     rest = [x for x in sents if not _TALLY_RX.search(x)]
     if len(rest) == len(sents):
         return text
