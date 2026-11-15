@@ -758,4 +758,4 @@ checks the findings are unchanged). But 2/3 vs 0/3 is not evidence of that eithe
 `--no-write` kept no finding titles to compare. Unresolved: in run 4, compare false blocking on PRs with and without
 a sweep, and keep review.json from the next local run of this case to read the blocking finding. On this case the
 sweep added 2-3 kept nits per round.
-Spend this shift: $4.15 + $1.63 local eval, $1.13 + $0.84 self-review rounds 1-2.
+Spend this shift: $4.15 + $1.63 local eval, $1.13 + $0.55 self-review rounds 1-2 ($2.34 over all 4 rounds).
