@@ -6598,8 +6598,11 @@ class TestReviewBenchAdapter(unittest.TestCase):
             os.makedirs(os.path.join(t, "reviews", "r", "h1"))
             pr = os.path.join(t, "pr.json"); json.dump({"repo": "https://github.com/o/r"}, open(pr, "w"))
             env = {"RB_HEAD": "h1", "RB_PR_JSON": pr, "RB_PR_NUMBER": "1", "RB_BASE": "b", "RB_NWO": "o/r"}
-            for rev, rc in (({"findings": [self._f("low", 1)]}, 0),
-                            ({"findings": [self._f("low", 1)], "coverage": {"chunks": [{"reason": lim}]}}, 3)):
+            ok = {"status": "done", "findings": [self._f("low", 1)], "coverage": {"chunks": [{"status": "reviewed"}]}}
+            for rev, rc in ((ok, 0), (dict(ok, coverage={"chunks": [{"status": "failed", "reason": lim}]}), 3),
+                            # R4's first launch: no credential, every pass failed, findings left by the cheap tier
+                            (dict(ok, coverage={"chunks": [{"status": "failed", "reason": "model call failed: Not logged in"}]}), 3),
+                            (dict(ok, status="failed", reason="boom"), 3)):
                 json.dump(rev, open(os.path.join(t, "reviews", "r", "h1", "review.json"), "w"))
                 with mock.patch.dict(os.environ, env), mock.patch("sys.stdout", io.StringIO()) as out, \
                         mock.patch("sys.stderr", io.StringIO()):

@@ -22,6 +22,7 @@ nits are told apart from findings when reading the judge's output).
 A PR whose review hit an account spend or usage limit exits 3 (rerun it): findings are still written, but any
 failure reason in review.json, or a line in the review log, that names a limit marks the run failed. A Fable 5.2 call
 refused for a limit moves to Opus for that call alone (`model_fallbacks` in review.json) and doesn't fail the PR.
+A review that failed, or reviewed no pass at all (a missing credential), exits 3 the same way.
 
 Credential at run time: `CLAUDE_CODE_OAUTH_TOKEN` (or `ANTHROPIC_API_KEY`). Configuration: `RB_CONFIG_BUDGET` (USD
 per PR, default 5; was 8, which one PR hit), `RB_CONFIG_TIMEOUT` (seconds, default 3300).

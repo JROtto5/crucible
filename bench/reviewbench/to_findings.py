@@ -30,6 +30,19 @@ def limit_reasons(node, key=None):
     return []
 
 
+def not_run(review):
+    """Why the review didn't run at all, or None. R4's first launch had an empty credential: every pass failed with
+    $0 spent, crucible exited 1, and all 25 PRs still reported "passed" with whatever the cheap tier left."""
+    if not review:
+        return "no review.json"
+    if review.get("status") != "done":
+        return f"review {review.get('status')}: {str(review.get('reason'))[:160]}"
+    chunks = (review.get("coverage") or {}).get("chunks") or []
+    if chunks and not any(c.get("status") == "reviewed" for c in chunks):
+        return f"no pass was reviewed ({str(chunks[0].get('reason'))[:160]})"
+    return None
+
+
 def find_review(home, head):
     paths = glob.glob(os.path.join(home, "reviews", "*", head, "review.json")) or \
         sorted(glob.glob(os.path.join(home, "reviews", "*", "*", "review.json")), key=os.path.getmtime)[-1:]
@@ -67,11 +80,14 @@ def main(home):
     hit = limit_reasons(review) if review else []
     if hit:
         print(f"FAILED: {len(hit)} step(s) ended on an account limit ({hit[0][:160]}); rerun this PR", file=sys.stderr)
+    why = not_run(review)
+    if why:
+        print(f"FAILED: {why}; rerun this PR", file=sys.stderr)
     pr = json.load(open(os.environ["RB_PR_JSON"]))
     print(json.dumps({"pr": {"repo": pr.get("repo") or f"https://github.com/{os.environ['RB_NWO']}",
                              "pr_number": int(os.environ["RB_PR_NUMBER"]), "base": os.environ["RB_BASE"], "head": head},
                       "agent": agent, "findings": findings}))
-    return LIMIT_EXIT if hit else 0
+    return LIMIT_EXIT if hit or why else 0
 
 
 if __name__ == "__main__":
