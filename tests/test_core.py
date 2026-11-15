@@ -4327,6 +4327,39 @@ class TestAnchorReplay(unittest.TestCase):
         self.assertEqual(A.tally(rows)["with"]["false_alarms_kept"], 1)
 
 
+class TestCheckExitStatus(unittest.TestCase):
+    """DRG-114: a learned check `nose2 2>&1 | tail -5; nose2 other` reported pass while the suite failed."""
+
+    def run_cmd(self, cmd):
+        from crucible import checks as C
+        with tempfile.TemporaryDirectory() as d:
+            return C._run(cmd, d, 30)
+
+    def test_failing_command_piped_to_tail_fails(self):
+        res = self.run_cmd("sh -c 'echo boom; exit 3' | tail -5")
+        self.assertEqual((res["status"], res["code"]), ("fail", 3))
+        self.assertIn("boom", res["tail"])
+
+    def test_failure_before_a_semicolon_is_not_hidden_by_a_later_pass(self):
+        res = self.run_cmd("rm -f nothing; sh -c 'exit 2' 2>&1 | tail -5; true")
+        self.assertEqual((res["status"], res["code"]), ("fail", 2))
+
+    def test_passing_pipelines_and_guarded_failures_still_pass(self):
+        self.assertEqual(self.run_cmd("printf 'a\\nb\\n' | tail -1; true")["status"], "pass")
+        self.assertEqual(self.run_cmd("false || echo tolerated")["status"], "pass")
+        self.assertEqual(self.run_cmd("cd . && test -d .")["status"], "pass")
+
+    def test_without_bash_errexit_still_applies(self):
+        from unittest import mock
+        from crucible import checks as C
+        with mock.patch.object(C.shutil, "which", return_value=None):
+            args, use_shell = C._shell("false; true")
+        self.assertTrue(use_shell)
+        with tempfile.TemporaryDirectory() as d:
+            r = subprocess.run(args, shell=True, cwd=d)
+        self.assertNotEqual(r.returncode, 0)
+
+
 class TestLengthLeftToHouseCheck(unittest.TestCase):
     """2026-11-08: 45 model findings on upstream reviews complained about the PR body's length, and the verifier
     dropped 36 of them. The measured check (style.ai_tells) owns length; the reviewer is no longer asked to judge it,

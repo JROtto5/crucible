@@ -81,10 +81,21 @@ def detect(repo, project, paths=None):
     return {"checks": checks, "hints": hints[:20], "source": "package.json" if pkg else "auto"}
 
 
+def _shell(cmd):
+    """-> (args, shell) for subprocess.run. bash with errexit + pipefail: under plain sh, `nose2 | tail -5` and
+    `nose2; other` report the status of tail / of the last command, so a failing suite showed as a pass
+    (DRG-114, a learned Lutris check). Without bash, errexit alone still covers `a; b`."""
+    bash = shutil.which("bash")
+    if bash:
+        return [bash, "-e", "-o", "pipefail", "-c", cmd], False
+    return "set -e\n" + cmd, True
+
+
 def _run(cmd, cwd, timeout, watch=(), repo=None, rel_cwd=None):
     """watch: paths to look for in the full output (not just the kept tail) -> "mentions"."""
+    args, use_shell = _shell(cmd)
     try:
-        r = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True, timeout=timeout,
+        r = subprocess.run(args, shell=use_shell, cwd=cwd, capture_output=True, text=True, timeout=timeout,
                            stdin=subprocess.DEVNULL, env=dict(os.environ, CI="1", FORCE_COLOR="0", NO_COLOR="1"))
         out = (r.stdout + "\n" + r.stderr).strip()
         res = {"status": "pass" if r.returncode == 0 else "fail", "code": r.returncode, "tail": out[-2500:]}
