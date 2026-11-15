@@ -788,6 +788,19 @@ small PRs; watch it), reliability 42.3, testing 45.1, performance 43.8, accessib
 54.5, medium 44.5 → 48.4, low 30.8 → 46.2. Judged true: findings 94.6%, high nits 96.7%, medium nits 94.9%.
 Without nits: GR 27.1, so nits now carry about 21 points of recall.
 
+Judged true in run 4, with n (2026-11-15, from the stored `runs/r4` judge output sha256 784ab0cf9d42… joined to each
+PR's review.json by file + title; all 486 sent candidates matched exactly one kept item, $0, no re-run):
+
+| | candidates | judged true | 95% Wilson |
+|---|---|---|---|
+| findings | 167 | 158 (94.6%) | [90.1, 97.1] |
+| nits, high confidence | 183 | 177 (96.7%) | [93.0, 98.5] |
+| nits, medium confidence | 136 | 129 (94.9%) | [89.8, 97.5] |
+| all sent | 486 | 464 (95.5%) | [93.2, 97.0] |
+
+The three intervals overlap, so this run cannot tell nit and finding precision apart; "nits are more precise" is not supported. Kept but not
+sent: 32 findings and 6 nits (no line, or on the PR text).
+
 **The nit sweep** ran on 19 PRs (skipped on 6 that spent over half their budget), cost $5.32 over the run ($0.21/PR),
 and kept 54 nits (32 dropped by the verifier). The judge called 50 of the 54 true (17 matched, 33 novel) and they are
 the only cover for 15 golden issues: macro GR without the sweep's nits would be 43.1 instead of 48.1.
