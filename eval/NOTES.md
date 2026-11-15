@@ -745,7 +745,7 @@ Reading: the planted issues were found in both arms (ceiling again), so the +4 k
 recall, and with `--no-write` the eval kept no per-nit titles, so nobody has checked whether those 4 are true or
 golden-shaped. The sweep cannot add findings: the cross case's false blocking came from the first pass, and the same
 fixture produced one on 11-13. Cost per case went up $0.15 (about +54% on small cases). Projected effect on
-ReviewBench: PRs that spent under $2.50 of $5 get at most $0.75 of sweep plus about one verification batch (~$0.20).
+ReviewBench: PRs that spent under $2.50 of $5 get about $0.75 of sweep at most (each call is cut at what the cap leaves, give or take what the CLI spends past it) plus about one verification batch (~$0.20).
 The worst case pushes run 3's $1.56 mean to about $2.5, under the $3 ceiling; the typical case adds about $0.2-0.4.
 The recall claim waits for ReviewBench run 4. Count `sweep: true` nits in the kept set and in the judge's matches.
 
