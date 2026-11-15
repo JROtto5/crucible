@@ -759,3 +759,44 @@ checks the findings are unchanged). But 2/3 vs 0/3 is not evidence of that eithe
 a sweep, and keep review.json from the next local run of this case to read the blocking finding. On this case the
 sweep added 2-3 kept nits per round.
 Spend this shift: $4.15 + $1.63 local eval, $1.13 + $0.55 self-review rounds 1-2 ($2.34 over all 4 rounds).
+
+### 2026-11-15 · ReviewBench run 4 (R4 code, 6dce5d4 before rebase): past the #5 bar on both measures
+
+Same 25 test PRs, same adapter (`--nits`, `RB_CONFIG_BUDGET=5`, `RB_CONFIG_KEEP_REVIEW=1`), same Sonnet 5 judge
+(ReviewBench @ f223ce3), 1 round. Image `crucible-rb:r4` installed from a `git archive` of the unpushed stack: docs
+and comments outside the diff (focus 2), callers outside the diff (focus 3), the nit sweep (focus 4), the Fable → Opus
+fallback on a limit, and the adapter failing a PR that hit a limit or reviewed no pass. Account #17, 6% → 19% weekly.
+3.28 h of reviews, $53.08 total. A first launch with an empty credential reviewed nothing and still reported 25 PRs
+"passed" at $0, which is why the adapter now also fails a review that ran no pass; that launch was discarded.
+
+| | run 3, 23 clean PRs | **run 4, same 23** | run 3 as run (25) | **run 4 (25)** |
+|---|---|---|---|---|
+| grounded R macro | 41.3 | **48.9** | 38.0 | **48.1** |
+| grounded R micro [Wilson] | | | 37.5 [32.6, 42.7] | 47.7 [42.6, 52.9] |
+| grounded P macro | 88.9 | 87.8 | 85.2 | 88.3 |
+| aug P / R macro | 94.1 / 56.6 | 93.7 / 66.3 | 93.7 / 55.3 | 94.0 / 68.3 |
+| aug F1 (macro P, R) | 70.7 | **77.6** | 69.6 | **79.1** |
+| $ / PR mean | 1.48 | 1.87 | 1.55 | 2.12 (median 1.49, max 5.00) |
+
+ReviewBench's #5 (Laude RevEngine) is grounded R 46.3 / aug F1 75.4: run 4 is above both, privately and on one
+round. PRs 1 and 13 ran in full this time (53 and 39 comments, both at the $5 cap). No fallback fired: #17's Fable
+5.2 worked (2 PRs reviewed on Fable, 19 on Opus, 4 on Sonnet), so the fallback is still untested on a real limit.
+
+By category (macro GR, run 3 as run → run 4): maintainability 30.1 → 54.9, documentation 25.0 → 54.2, correctness
+44.0 → 51.7, api-architecture 25.0 → 29.2, security 45.5 → 33.0 (micro 59.3 → 55.6, n=27: the macro drop is a few
+small PRs; watch it), reliability 42.3, testing 45.1, performance 43.8, accessibility 33.3. By severity: high 42.5 →
+54.5, medium 44.5 → 48.4, low 30.8 → 46.2. Judged true: findings 94.6%, high nits 96.7%, medium nits 94.9%.
+Without nits: GR 27.1, so nits now carry about 21 points of recall.
+
+**The nit sweep** ran on 19 PRs (skipped on 6 that spent over half their budget), cost $5.32 over the run ($0.21/PR),
+and kept 54 nits (32 dropped by the verifier). The judge called 50 of the 54 true (17 matched, 33 novel) and they are
+the only cover for 15 golden issues: macro GR without the sweep's nits would be 43.1 instead of 48.1.
+
+**The cross-file false-blocking question** (sweep, 2026-11-15 above): blocking findings judged false were 1 of 8 on
+the 19 PRs with a sweep and 1 of 33 on the 6 without (run 3: 1 of 28). No sign the sweep adds false blocking; too few
+to prove it doesn't. The local case's review.json is still the place to read the one blocking finding.
+
+What it doesn't say: one round, private, n=25 PRs (the official run is 219 PRs × 3 rounds). Cost rose $0.57/PR, about
+two thirds of it the sweep and the extra nit verification, and stays under the $3 ceiling. Next weakest: api-
+architecture (29.2, n=12), security (33.0 macro), accessibility (33.3, n=10), reliability (42.3, n=58, the largest
+category below 45).
