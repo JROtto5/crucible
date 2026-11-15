@@ -834,3 +834,18 @@ So 3 distinct issues, not 4: the two Mcp-Docker entries are one bug filed twice.
 PRs both runs reviewed in full; with n=27 and 1 round each, a net −1 is noise, not a regression. The one worth a
 look is the PKCE miss: R4 raised 8 findings in handler.go and none on the discovery-vs-handler mismatch, which is a
 cross-function spec check (what the server advertises vs what it enforces) that the security checklist doesn't name.
+
+## 2026-11-15: "no testing evidence" before DRG-105 (read-only, $0)
+
+Baseline for b06cb2a..9451ca3 (prose results count as testing evidence). Population: the 240 stored reviews
+`crucible stats` reads (`stats._load`, self-reviews excluded); 187 of them reviewed a PR_DRAFT.
+
+- `PR description: no testing evidence` fired in **20 of 240** (20 of the 187 with a draft), kept every time
+  (deterministic style check, never sent to verification).
+- By project: three-mesh-bvh 16, MangoHud 2, three.js 2. The bvh share is gkjohnson's 5-line cap: short drafts
+  that state results in one prose sentence and carry no "Tested:" line.
+- The draft text at review time isn't stored, so the new rule can't be replayed on exactly what was reviewed. On
+  the 8 drafts as they are on disk now: 2 fail the old rule and pass the new one (bvh-981, bvh-961: both say
+  "fails on master ... passes here" in prose); the other 6 pass both, having gained a testing line in later rounds.
+- So the check's pre-DRG-105 false-positive floor is at least 2 of the 20 fires (bvh-981 02584fc1 is the DRG-105 case);
+  the next 20 drafted reviews show whether the fire rate drops from 20/187 (10.7%).
