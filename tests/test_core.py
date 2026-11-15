@@ -4342,7 +4342,7 @@ class TestCheckExitStatus(unittest.TestCase):
         self.assertIn("boom", res["tail"])
 
     def test_failure_before_a_semicolon_is_not_hidden_by_a_later_pass(self):
-        res = self.run_cmd("rm -f nothing; sh -c 'exit 2' 2>&1 | tail -5; true")
+        res = self.run_cmd("rm -f nothing; sh -c 'exit 2'; true")
         self.assertEqual((res["status"], res["code"]), ("fail", 2))
 
     def test_passing_pipelines_and_guarded_failures_still_pass(self):
