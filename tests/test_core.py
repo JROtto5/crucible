@@ -6428,6 +6428,8 @@ class TestNitTier(unittest.TestCase):
                                       log=lambda *_: None)
                 self.assertEqual(len(seen), 3)                    # pass 2 came from the cache, pass 1 was retried
                 self.assertEqual((st["passes"], st["failed"]), (2, 0))
+                self.assertEqual([f["title"] for f in got], ["off by one", "off by one"])   # the cached pass's too
+                self.assertTrue(all(f["sweep"] and f["source"] == "nit" for f in got))
                 V.nit_sweep(chs, [], ".", "m", sw, "o__r", "a" * 40, "b" * 40, "", ["a.py"], ["", ""], fresh=True,
                             log=lambda *_: None)
                 self.assertEqual(len(seen), 5)                    # --fresh bypasses the cache

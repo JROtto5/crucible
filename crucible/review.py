@@ -292,8 +292,8 @@ def sweep_prompt(project, sha, base, ch, raised, rules, all_files, docs=""):
 def nit_sweep(sweep_chunks, raised, repo, model, budget, project, sha, base, rules, all_files, notes, fresh=False,
               log=print):
     """-> (nit candidates, {passes, of, failed, cost_usd}); the caller adds `nits`, the new ones sent to verification.
-    One nit-only call per pass, in order, until `budget` (the sweep's own SubBudget) runs out. `notes` holds each pass's docs/call-site note, so the second look sees what
-    the first did."""
+    One nit-only call per pass, in order, until `budget` (the sweep's own SubBudget) runs out. `notes` holds each
+    pass's docs/call-site note, so the second look sees what the first did."""
     out_nits, ran, failed = [], 0, 0
     for ch, docs in zip(sweep_chunks, notes):
         files = set(ch["files"])

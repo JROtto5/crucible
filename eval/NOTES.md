@@ -748,4 +748,13 @@ fixture produced one on 11-13. Cost per case went up $0.15 (about +54% on small 
 ReviewBench: PRs that spent under $2.50 of $5 get at most $0.75 of sweep plus about one verification batch (~$0.20).
 The worst case pushes run 3's $1.56 mean to about $2.5, under the $3 ceiling; the typical case adds about $0.2-0.4.
 The recall claim waits for ReviewBench run 4. Count `sweep: true` nits in the kept set and in the judge's matches.
-Spend this shift: $4.15 local eval + $1.13 self-review round 1.
+
+Re-run of the cross case after self-review round 2 asked about the false blocking (2 rounds per arm, side by side):
+off 3/3 issues, 0 false blocking, 4 and 4 nits kept, $0.37 / $0.32; on 3/3, false blocking 0 then 1, 6 and 7 nits
+kept, $0.48 / $0.46. Over all 3 rounds that is 2 of 3 on vs 0 of 3 off. By the code the sweep can't cause it: it
+runs after the findings are final and appends only to the nit candidates (`test_nit_sweep_runs_when_budget_remains_and_its_nits_are_verified`
+checks the findings are unchanged). But 2/3 vs 0/3 is not evidence of that either way (Fisher p = 0.4), and
+`--no-write` kept no finding titles to compare. Unresolved: in run 4, compare false blocking on PRs with and without
+a sweep, and keep review.json from the next local run of this case to read the blocking finding. On this case the
+sweep added 2-3 kept nits per round.
+Spend this shift: $4.15 + $1.63 local eval, $1.13 + $0.84 self-review rounds 1-2.
