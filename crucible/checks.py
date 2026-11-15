@@ -101,7 +101,7 @@ def _run(cmd, cwd, timeout, watch=(), repo=None, rel_cwd=None):
                            stdin=subprocess.DEVNULL, env=dict(os.environ, CI="1", FORCE_COLOR="0", NO_COLOR="1"))
         out = (r.stdout + "\n" + r.stderr).strip()
         res = {"status": "pass" if r.returncode == 0 else "fail", "code": r.returncode, "tail": out[-2500:]}
-        if r.returncode == 141 and "|" in cmd:
+        if r.returncode == 141 and "|" in cmd and not use_shell:
             res["tail"] += ("\n[crucible] exit 141: a pipeline stage was killed by SIGPIPE, usually because a later "
                             "`head`/`grep -q` stopped reading. Checks run under pipefail; drop the pipe (crucible keeps "
                             "the output's tail itself).")

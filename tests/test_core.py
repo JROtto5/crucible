@@ -4335,6 +4335,7 @@ class TestCheckExitStatus(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             return C._run(cmd, d, 30)
 
+    @unittest.skipUnless(shutil.which("bash"), "pipefail needs bash")
     def test_failing_command_piped_to_tail_fails(self):
         res = self.run_cmd("sh -c 'echo boom; exit 3' | tail -5")
         self.assertEqual((res["status"], res["code"]), ("fail", 3))
@@ -4349,6 +4350,7 @@ class TestCheckExitStatus(unittest.TestCase):
         self.assertEqual(self.run_cmd("false || echo tolerated")["status"], "pass")
         self.assertEqual(self.run_cmd("cd . && test -d .")["status"], "pass")
 
+    @unittest.skipUnless(shutil.which("bash"), "pipefail needs bash")
     def test_head_cutting_off_a_long_producer_fails_with_a_hint(self):
         res = self.run_cmd("seq 1 200000 | head -1")
         self.assertEqual((res["status"], res["code"]), ("fail", 141))
