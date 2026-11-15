@@ -4351,6 +4351,11 @@ class TestCheckExitStatus(unittest.TestCase):
         self.assertEqual(self.run_cmd("cd . && test -d .")["status"], "pass")
 
     @unittest.skipUnless(shutil.which("bash"), "pipefail needs bash")
+    def test_the_lutris_shape_fails(self):
+        res = self.run_cmd("rm -f x; sh -c 'echo 25 errors; exit 1' 2>&1 | tail -5; true")
+        self.assertEqual((res["status"], res["code"]), ("fail", 1))
+
+    @unittest.skipUnless(shutil.which("bash"), "pipefail needs bash")
     def test_head_cutting_off_a_long_producer_fails_with_a_hint(self):
         res = self.run_cmd("seq 1 200000 | head -1")
         self.assertEqual((res["status"], res["code"]), ("fail", 141))
