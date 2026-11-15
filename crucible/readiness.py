@@ -67,7 +67,7 @@ def split_draft(text):
       `<!-- crucible: notes -->` line (the marker itself is not part of the notes).
     - Before that boundary, a `## Body` heading starts the body; whatever precedes it (a metadata preamble, a
       `## Title` section) is kept with the notes. Without `## Body`, a `## Title` section or a leading `# Title`
-      line gives the title and the body follows it.
+      line (or a leading `TITLE: ...` line) gives the title and the body follows it.
     A draft without any markers is all body, as before."""
     lines = (text or "").split("\n")
     open_lines = _unfenced(lines)
@@ -87,6 +87,8 @@ def split_draft(text):
         preamble = lines[:title_at]
     elif body_at is None and lines and re.match(r"^#\s+\S", lines[0]):
         title, start, title_line = lines[0][1:].strip(), 1, 1
+    elif body_at is None and lines and re.match(r"^TITLE:\s*\S", lines[0]):   # the lanes' `TITLE: ...` first line
+        title, start, title_line = lines[0].split(":", 1)[1].strip().strip("`").strip(), 1, 1
     if body_at is not None:
         preamble, start = lines[:body_at], body_at + 1
     body = "\n".join(lines[start:end])

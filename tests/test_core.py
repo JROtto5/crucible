@@ -566,6 +566,14 @@ class TestDraftSplit(unittest.TestCase):
         self.assertNotIn("## Body", d["notes"])
         self.assertNotIn("#999", d["body"])
 
+    def test_leading_title_line_is_the_title(self):
+        # the lanes' layout (heroic-6053): `TITLE: ...` first, then the body
+        d = R.split_draft("TITLE: fix: keep the wine prefix\n\n## Summary\n\nFixes #6053.\n")
+        self.assertEqual((d["title"], d["title_line"]), ("fix: keep the wine prefix", 1))
+        self.assertEqual(d["body"], "## Summary\n\nFixes #6053.")
+        self.assertNotIn("TITLE:", d["body"])
+        self.assertEqual(R.split_draft("Body mentions TITLE: here\n")["title"], "")   # only a first-line marker counts
+
     def test_plain_drafts_unchanged(self):
         d = R.split_draft("# WebGPUBackend: Fix timestamps.\n\n**Description**\n\nFixes #1.\n")
         self.assertEqual((d["title"], d["notes"]), ("WebGPUBackend: Fix timestamps.", ""))
