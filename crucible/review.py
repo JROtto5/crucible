@@ -1544,7 +1544,7 @@ def tokens_note(rev):
 
 
 # A sentence that counts or grades the findings: a count or "only/no" word up to two words before "finding(s)",
-# "only/no" at most one word before "issue(s)" or "N issues found/raised" ("issue" alone is usually the PR's bug), or
+# "only/no/single/sole" at most one word before "issue(s)" or "N issues found/raised" ("issue" alone is usually the PR's bug), or
 # "finding is/are <severity>". Falsifiers (tests/test_core.py TestReportSummary). Replaced: "The only finding is a
 # low-severity PR description format point.", "The only issue is a low-severity ...", "No issues found beyond style.",
 # "Two findings are medium.". Kept: "The finding at line 42 is the only real risk.", "The main finding is that the parser
