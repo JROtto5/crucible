@@ -4349,6 +4349,12 @@ class TestCheckExitStatus(unittest.TestCase):
         self.assertEqual(self.run_cmd("false || echo tolerated")["status"], "pass")
         self.assertEqual(self.run_cmd("cd . && test -d .")["status"], "pass")
 
+    def test_head_cutting_off_a_long_producer_fails_with_a_hint(self):
+        res = self.run_cmd("seq 1 200000 | head -1")
+        self.assertEqual((res["status"], res["code"]), ("fail", 141))
+        self.assertIn("SIGPIPE", res["tail"])
+        self.assertEqual(self.run_cmd("seq 1 10 | head -1")["status"], "pass")      # head read it all
+
     def test_without_bash_errexit_still_applies(self):
         from unittest import mock
         from crucible import checks as C

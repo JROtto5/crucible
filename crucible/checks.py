@@ -84,7 +84,9 @@ def detect(repo, project, paths=None):
 def _shell(cmd):
     """-> (args, shell) for subprocess.run. bash with errexit + pipefail: under plain sh, `nose2 | tail -5` and
     `nose2; other` report the status of tail / of the last command, so a failing suite showed as a pass
-    (DRG-114, a learned Lutris check). Without bash, errexit alone still covers `a; b`."""
+    (DRG-114, a learned Lutris check). Without bash, errexit alone still covers `a; b`. Trade-off: a stage that
+    stops reading early (`| head`, `| grep -q`) kills a long-writing producer with SIGPIPE, and that 141 now
+    fails the check; _run says so in the tail. A visible false fail beats a hidden one."""
     bash = shutil.which("bash")
     if bash:
         return [bash, "-e", "-o", "pipefail", "-c", cmd], False
@@ -99,6 +101,10 @@ def _run(cmd, cwd, timeout, watch=(), repo=None, rel_cwd=None):
                            stdin=subprocess.DEVNULL, env=dict(os.environ, CI="1", FORCE_COLOR="0", NO_COLOR="1"))
         out = (r.stdout + "\n" + r.stderr).strip()
         res = {"status": "pass" if r.returncode == 0 else "fail", "code": r.returncode, "tail": out[-2500:]}
+        if r.returncode == 141 and "|" in cmd:
+            res["tail"] += ("\n[crucible] exit 141: a pipeline stage was killed by SIGPIPE, usually because a later "
+                            "`head`/`grep -q` stopped reading. Checks run under pipefail; drop the pipe (crucible keeps "
+                            "the output's tail itself).")
     except subprocess.TimeoutExpired as e:
         out = "\n".join(x.decode(errors="replace") if isinstance(x, bytes) else (x or "") for x in (e.stdout, e.stderr))
         res = {"status": "timeout", "code": None, "tail": f"timed out after {timeout}s"}
