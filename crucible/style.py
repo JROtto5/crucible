@@ -58,14 +58,16 @@ CHECKBOX_RX = re.compile(r"^([-*+]\s+)\[[ xX]\]")
 TESTED_RX = re.compile(r"(?i)\b(tested|test plan|how to test|repro|verified|checked|confirmed|measured|benchmark|ran\b|"
                        r"npm test|pytest|unittest|screenshot|before|after|tests? pass|passing)")
 # Results told in prose (bvh-981 PR_DRAFT was flagged as untested, DRG-105). Falsifiers (tests/test_core.py
-# test_m_results_told_in_prose_are_evidence). Counts: "on master it fails ... here both pass (29/29)", "It fails on main
-# and passes with the change", "All three cases now pass.", "12/12 pass on the branch". Doesn't: "Rebased against main",
-# "Pass `x: true`", "It passes the raw buffer to the worker", "Refactor the loader (1/2)", "Split the loader (2/2)",
-# "Add tests for the cache key (2/2)", "Pass the signal through (2/2)", "Rendering fails on main thread", "The recursion fails on the base case".
+# test_m_results_told_in_prose_are_evidence). Counts: "on master it fails ... here both pass (29/29)", "It fails on
+# main and passes with the change", "All three cases now pass.", "12/12 pass on the branch". Doesn't: "Rebased against
+# main", "Pass `x: true`", "It passes the raw buffer to the worker", "Make it pass on Windows", "Refactor the loader
+# (1/2)", "Split the loader (2/2)", "Add tests for the cache key (2/2)", "Pass the signal through (2/2)", "Rendering
+# fails on main thread", "The recursion fails on the base case".
 _BASE = r"(?:master|main|trunk|the base)\b(?!\s+(?:thread|loop|process|window|menu|screen|page|function|case|cases|class))"
 RESULT_RX = re.compile(r"(?i)\b(?:on|against) " + _BASE + r"[^.\n]{0,60}?\b(?:fail|pass|break|throw|crash)"
                        r"|\b(?:fail|pass)(?:s|ed|es|ing)?\b[^.\n]{0,30}?\b(?:on|against) " + _BASE +
-                       r"|\b(?:all|both|they|it|tests?|cases?|suite) (?:now |still )?pass(?:es)?"
+                       r"|(?<!make )(?<!ensure )(?<!should )(?<!must )(?<!to )(?<!let )(?<!will )(?<!can )"
+                       r"\b(?:all|both|they|it|tests?|cases?|suite) (?:now |still )?pass(?:es)?"
                        r"(?=\s*(?:[.,;:)]|$)|\s+(?:on|with|here|locally|again|too|now|cleanly|along)\b)"
                        r"|\b\d+ ?/ ?\d+ (?:pass|tests)")
 CODE_SPAN_RX = re.compile(r"`([^`\n]+)`")

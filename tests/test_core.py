@@ -3402,7 +3402,8 @@ class TestDescriptionHeuristics(unittest.TestCase):
                      "Refactor the loader (1/2).", "Split the loader (2/2).",
                      "Rendering fails on main thread when the canvas is detached.",
                      "The recursion fails on the base case when n is 0.", "Add tests for the cache key (2/2).",
-                     "Pass the abort signal through to fetch (2/2)."):
+                     "Pass the abort signal through to fetch (2/2).",
+                     "Make it pass on Windows (2/2)."):
             self.assertFalse(S.has_testing_evidence(line), line)
 
     def test_m_no_evidence_is_still_flagged(self):
