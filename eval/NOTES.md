@@ -720,3 +720,32 @@ Reading: ceiling in both arms again. In a 7-file fixture the reviewer greps for 
 for a large repo split over passes, where it doesn't, and no local case shows that. Cost +10% on these 4 cases ($1.99 vs $1.82 over both rounds)
 (+$0.04-0.06 on the stale-caller case, where the note appears). The claim waits for ReviewBench run 4's
 api-architecture category. Spend this shift: $3.81 local eval.
+
+### 2026-11-15 · nit sweep (ReviewBench focus item 4, low severity): a second nit-only look when budget remains, local A/B
+
+Change: with `--nits` and a `--budget`, a review that spent at most half its budget makes one more nit-only call per
+reviewed pass after the findings are verified. The call uses the review model at medium effort. It is shown the same
+diff and notes, plus the findings and nits already raised in those files, and asked for what isn't on the list. The
+sweep's nits go through the normal nit verifier. Cap: $0.75 (`CRUCIBLE_NITS_SWEEP_USD`); off with
+`CRUCIBLE_NITS_SWEEP=0`. Run 3's low-severity grounded recall was 30.8, and nits carried ~15 points of recall at ~92%
+true; run 3 spent a mean of $1.56/PR of $5 (median $0.99).
+
+`crucible eval --nits --no-write --budget 5`, 3 nit cases + 3 clean cases, 1 round per arm, run side by side at
+0ea52ea's code:
+
+| | sweep off | sweep on |
+|---|---|---|
+| planted issues (nit-py-maintainability 4, nit-py-docs-stale 4, nit-py-maintainability-cross 3) | 11/11 | 11/11 |
+| nits kept / dropped | 14 / 8 | 18 / 2 |
+| nits on the 3 clean cases | 1 | 1 |
+| false blocking | 0 | 1 (cross case, a first-pass finding) |
+| $ for the 6 cases | $1.63 | $2.52 |
+
+Reading: the planted issues were found in both arms (ceiling again), so the +4 kept nits are the only sign of more
+recall, and with `--no-write` the eval kept no per-nit titles, so nobody has checked whether those 4 are true or
+golden-shaped. The sweep cannot add findings: the cross case's false blocking came from the first pass, and the same
+fixture produced one on 11-13. Cost per case went up $0.15 (about +54% on small cases). Projected effect on
+ReviewBench: PRs that spent under $2.50 of $5 get at most $0.75 of sweep plus about one verification batch (~$0.20).
+The worst case pushes run 3's $1.56 mean to about $2.5, under the $3 ceiling; the typical case adds about $0.2-0.4.
+The recall claim waits for ReviewBench run 4. Count `sweep: true` nits in the kept set and in the judge's matches.
+Spend this shift: $4.15 local eval + $1.13 self-review round 1.

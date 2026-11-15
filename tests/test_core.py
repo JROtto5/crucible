@@ -6399,6 +6399,39 @@ class TestNitTier(unittest.TestCase):
         self.assertAlmostEqual(r["nit_sweep"]["cost_usd"], 0.9)
         self.assertEqual(r["nit_sweep"]["nits"], 0)
 
+    def test_nit_sweep_failed_pass_cached_pass_and_cost_booking(self):
+        from unittest import mock
+        r, calls = self._run([self._f("magic number 30", 5)], budget=5.0, passes=2, sweep_cost=0.2,
+                             sweep_out=[self._f("off by one in range end", 9, "important")])
+        self.assertEqual(r["nit_sweep"]["passes"], 2)
+        self.assertEqual({f["severity"] for f in r["nits"] if f.get("sweep")}, {"low"})   # verifier's; proposed coerced
+        self.assertEqual({f["proposed_severity"] for f in r["nits"] if f.get("sweep")}, {"medium"})
+        self.assertAlmostEqual(r["cost_review_usd"], 0.2 + 0.4)  # two review passes ($0.10 each) + the sweep's $0.40
+        # a sweep pass that fails is counted and skipped and the next pass still runs; a re-run takes the cache
+        sw = V.SubBudget(U.Budget(5.0), 0.75)
+        out = {"nits": [self._f("off by one", 9)]}
+        chs = [{"files": ["a.py"], "text": "D1"}, {"files": ["a.py"], "text": "D2"}]
+        home = tempfile.mkdtemp(prefix="crucible-home-")
+        with mock.patch.dict(os.environ, {"CRUCIBLE_CACHE": os.path.join(home, "c")}):
+            seen = []
+
+            def fake(prompt, model, schema, cwd, budget=None, *a, **kw):
+                seen.append(prompt)
+                if len(seen) == 1:                             # pass 1 fails once
+                    raise U.Failed("overloaded")
+                return out, 0.1
+            with mock.patch.object(V, "claude", fake):
+                got, st = V.nit_sweep(chs, [], ".", "m", sw, "o__r", "a" * 40, "b" * 40, "", ["a.py"], ["", ""],
+                                      log=lambda *_: None)
+                self.assertEqual((st["passes"], st["failed"], len(got)), (1, 1, 1))
+                got, st = V.nit_sweep(chs, [], ".", "m", sw, "o__r", "a" * 40, "b" * 40, "", ["a.py"], ["", ""],
+                                      log=lambda *_: None)
+                self.assertEqual(len(seen), 3)                    # pass 2 came from the cache, pass 1 was retried
+                self.assertEqual((st["passes"], st["failed"]), (2, 0))
+                V.nit_sweep(chs, [], ".", "m", sw, "o__r", "a" * 40, "b" * 40, "", ["a.py"], ["", ""], fresh=True,
+                            log=lambda *_: None)
+                self.assertEqual(len(seen), 5)                    # --fresh bypasses the cache
+
     def test_sweep_prompt_lists_only_its_files_and_caps_the_list(self):
         ch = {"files": ["a.py"], "text": "DIFF"}
         raised = [self._f(f"t{i}", i) for i in range(V.SWEEP_RAISED_MAX + 5)]

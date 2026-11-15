@@ -291,8 +291,8 @@ def sweep_prompt(project, sha, base, ch, raised, rules, all_files, docs=""):
 
 def nit_sweep(sweep_chunks, raised, repo, model, budget, project, sha, base, rules, all_files, notes, fresh=False,
               log=print):
-    """-> (nit candidates, {passes, failed, cost_usd}). One nit-only call per pass, in order, until `budget` (the
-    sweep's own SubBudget) runs out. `notes` holds each pass's docs/call-site note, so the second look sees what
+    """-> (nit candidates, {passes, of, failed, cost_usd}); the caller adds `nits`, the new ones sent to verification.
+    One nit-only call per pass, in order, until `budget` (the sweep's own SubBudget) runs out. `notes` holds each pass's docs/call-site note, so the second look sees what
     the first did."""
     out_nits, ran, failed = [], 0, 0
     for ch, docs in zip(sweep_chunks, notes):
@@ -1390,6 +1390,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 new_swept = len(nit_pool(swept, cands + carried + reverify + nit_cands, dlabel, measured))
                 record["nit_sweep"]["nits"] = new_swept
                 extra = NIT_BATCH_EST_USD * -(-new_swept // NIT_BATCH)
+                review_cost += sub.own                 # a review call: booked as review cost, not verification
                 nit_cands += swept
             record.update(run_nits(nit_cands, cands + carried + reverify, repo, sha, dctx, dlabel, measured, budget,
                                    authors, fresh, log, extra))
