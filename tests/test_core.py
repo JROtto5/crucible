@@ -6585,7 +6585,11 @@ class TestReviewBenchAdapter(unittest.TestCase):
         lim = "model call failed (success): You've hit your monthly spend limit"
         self.assertTrue(m.limit_reasons({"coverage": {"chunks": [{"status": "failed", "reason": lim}]}}))
         self.assertTrue(m.limit_reasons({"findings": [{"verification": {"status": "unverified", "reason": lim}}]}))
-        self.assertTrue(m.limit_reasons({"status": "failed", "reason": "Failed: Claude usage limit reached"}))
+        self.assertTrue(m.limit_reasons({"status": "failed", "reason": "Failed: model call failed: Claude usage limit reached"}))
+        self.assertEqual(m.LIMIT_RX.pattern, U.LIMIT_RX.pattern)               # the two copies agree
+        # a salvaged verdict's reason is the verifier's prose: on quota code it can say "usage limit" and still ran
+        salv = {"status": "unverified", "reason": "its prose says the claim does not hold: check_quota enforces the usage limit"}
+        self.assertEqual(m.limit_reasons({"findings": [{"verification": salv}]}), [])
         self.assertEqual(m.limit_reasons({"model_fallbacks": [{"reason": lim}], "findings": [{"title": "spend limit"}],
                                           "coverage": {"chunks": [{"status": "failed", "reason": "file too big"}]}}), [])
         import io, tempfile

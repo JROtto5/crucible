@@ -7,14 +7,17 @@ SEV = ["critical", "important", "medium", "low"]
 MAX_FINDINGS = int(os.environ.get("RB_CONFIG_MAX_FINDINGS") or 0)
 
 
-# Same wording as crucible.util.LIMIT_RX (this file runs without crucible on the path in tests).
+# Same wording as crucible.util.LIMIT_RX (a test checks they match; this file runs without crucible on the path).
 LIMIT_RX = re.compile(r"hit your [\w -]*limit|spend limit|usage limit", re.I)
+# A model call's own failure as crucible records it ("model call failed (success): You've hit your monthly spend limit").
+# Only those count: a salvaged verdict's reason carries the verifier's prose, which can say "usage limit" about the code.
+FAILED_CALL = "model call failed"
 LIMIT_EXIT = 3
 
 
 def limit_reasons(node, key=None):
-    """Every failure reason in a review.json that names an account spend/usage limit. model_fallbacks is skipped: a
-    call that moved to another model after a limit did run. ReviewBench run 3 scored PR 13 (every pass refused) and
+    """Every model-call failure in a review.json that names an account spend/usage limit. model_fallbacks is skipped:
+    a call that moved to another model after a limit did run. ReviewBench run 3 scored PR 13 (every pass refused) and
     PR 1 (some passes refused) as finished reviews with 0.00 recall; a reason found here makes the PR fail instead."""
     if key == "model_fallbacks":
         return []
@@ -22,7 +25,7 @@ def limit_reasons(node, key=None):
         return [r for k, v in node.items() for r in limit_reasons(v, k)]
     if isinstance(node, list):
         return [r for v in node for r in limit_reasons(v, key)]
-    if key == "reason" and isinstance(node, str) and LIMIT_RX.search(node):
+    if key == "reason" and isinstance(node, str) and FAILED_CALL in node and LIMIT_RX.search(node):
         return [node]
     return []
 
