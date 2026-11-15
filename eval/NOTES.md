@@ -545,6 +545,41 @@ at scale. A first try at `--budget 0.12` (not in the table) verified nothing in 
 (~$0.17) used the whole budget, which no reserve can fix. The real test is PRs 1 and 13 on the next ReviewBench run (a borrowed account, not this lane): count
 their kept nits (run 2: 0 on PR 1) and their unverified findings. Spend this shift: $2.00 over 4 self-review rounds + $4.72 local eval (both budgets, both arms).
 
+### 2026-11-12 · R3 changes (2708fc1, c3c9a5f, 6ed8d12, 4e069a8) and their local eval
+
+What changed, from run 2's judge verdicts and review.json sidecars (general patterns only, nothing keyed on the 25 PRs):
+- **Nit reserve over the passes too** (2708fc1). Run 2's PR 1 spent $4.91 of $5 on 24 review passes before any
+  verification, so the 11c0059 reserve (medium/low verification only) could not help it. PR 13 was not affected (22
+  nits kept). Passes after the first now stop at budget less `min(nit cap, 15%)`, and blocking findings verify within the
+  hold too (run 2's unverified findings were judged true 30 of 31 times, and they stay kept).
+- **20 nits per pass** (c3c9a5f). The cap of 10 never bound in run 2 (at most 7 from a one-pass PR). Estimate: about
+  $0.02 per extra candidate, +$0.08–0.16 per PR at 11–15 candidates, bounded by the $0.75 nit cap.
+- **Maintainability false positives** (6ed8d12). 70 of the 72 false maintainability findings were the unverified
+  house-style comment checks (0 of 70 judged true, 43 on one PR); the reviewer's own were 6 true and 2 false. With
+  `--nits` those checks are now verified nit candidates, at most 3 per review. The secret scanner also skips elided
+  example keys: run 2's only 2 critical scanner findings were doc-comment placeholders.
+- **Security** (4e069a8). 9 of 27 golden security issues were caught. The 18 misses were mostly hardening gaps with no
+  full exploit path (partial or skippable guards, unbounded state, leaky error text, permissions set only at creation,
+  secrets left behind on delete, running as root), plus sibling sites of a flaw that was found once. The nit note now
+  asks for both, one nit per site. The findings' bar and the base prompt are unchanged.
+
+Local eval (`crucible eval --nits`, 20 cases, one round, 2026-11-12 07:35, account #17), next to the 11-11 `--nits` run:
+
+| | 11-11 (f1c4081+) | R3 changes |
+|---|---|---|
+| bug recall at blocking severity | 0.857 (12/14) | 0.929 (13/14) |
+| false blocking on clean cases | 0 (6) | 0 (6) |
+| true findings dropped | 1 | 3 |
+| extra blocking on bug cases | 2 | 2 |
+| nits kept (on clean) / dropped | 13 (3) / 10 | 18 (5) / 19 |
+| $ per case (nit verification) | $0.213 ($0.027) | $0.252 ($0.033) |
+| total | $4.27 | $5.03 |
+
+No regression in precision on the planted set (0 false blocks, same extra blocking). Recall is up one case (py-race,
+a coin-flip severity call, so it isn't evidence). Cost is up $0.04 per case, mostly review-side (more nits written).
+"True dropped" rose 1 → 3 at one round, which is in the noise range of earlier runs (5 on 11-08). The ReviewBench
+result of these changes is the run-3 section below.
+
 ### 2026-11-12 · ReviewBench run 3 (R3 code, 10df5ca): better on the 23 clean PRs, 2 PRs lost to a Fable spend limit
 
 Same 25 test PRs, same adapter (`--nits`, `RB_CONFIG_BUDGET=5`, `RB_CONFIG_KEEP_REVIEW=1`), image `crucible-rb:r3`
