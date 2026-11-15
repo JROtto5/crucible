@@ -1,4 +1,5 @@
 import atexit, json, os, re, shutil, subprocess, sys, tempfile, time, unittest
+from unittest import mock as _mock  # noqa: F401  (makes unittest.mock importable as an attribute under any test order)
 
 # Every temp dir the suite makes (fixture repos, clones, homes, and those of crucible subprocesses through TMPDIR)
 # goes under one root that is removed at exit. Each run used to leave ~80 git repos in /tmp, and the pytest check of
@@ -4561,6 +4562,52 @@ class TestTokenMetering(unittest.TestCase):
                          (153, 14, 12, 100, 27))
         self.assertEqual(s["unmetered_calls"], 4)
 
+    def test_fable_limit_falls_back_to_opus_for_that_call(self):
+        """ReviewBench run 3: Fable 5.2 answered "You've hit your monthly spend limit" while Opus worked on the same
+        account. That call alone moves to Opus and the budget notes it; other failures and other models don't move."""
+        from unittest import mock
+        fable, opus = U.MODELS["fable"], U.MODELS["opus"]
+        limit = {"is_error": False, "subtype": "success", "result": "You've hit your monthly spend limit"}
+        ok = {"structured_output": {"x": 1}, "total_cost_usd": 0.2}
+
+        def run(payloads, model, env=None):
+            seen, it = [], iter(payloads)
+
+            def fake_run(cmd, **kw):
+                seen.append(cmd[cmd.index("--model") + 1])
+                return subprocess.CompletedProcess(cmd, 0, json.dumps(next(it)), "")
+            b = U.Budget(None)
+            with mock.patch.object(U.subprocess, "run", fake_run), mock.patch.dict(os.environ, env or {}):
+                if env is None:
+                    os.environ.pop("CRUCIBLE_FABLE_FALLBACK", None)
+                try:
+                    out = U.claude("p", model, {"type": "object"}, ".", b, kind="review")
+                except U.Failed as e:
+                    out = e
+            return out, seen, b
+
+        out, seen, b = run([limit, ok], fable)
+        self.assertEqual(out, ({"x": 1}, 0.2)); self.assertEqual(seen, [fable, opus])
+        self.assertEqual(b.fallback_snapshot(), [{"kind": "review", "from": fable, "to": opus,
+                                                  "reason": "model call failed (success): You've hit your monthly spend limit"}])
+        # a limit on Opus itself, or a non-limit failure on Fable: no retry
+        for model, first in ((opus, limit), (fable, {"is_error": True, "subtype": "error_max_turns"})):
+            out, seen, b = run([first, ok], model)
+            self.assertIsInstance(out, U.Failed); self.assertEqual(seen, [model]); self.assertEqual(b.fallback_snapshot(), [])
+        # the fallback limited too: the second failure is the one raised
+        out, seen, _ = run([limit, limit], fable)
+        self.assertIsInstance(out, U.Failed); self.assertEqual(seen, [fable, opus])
+        # switched off, or pointed at another model by short name
+        out, seen, _ = run([limit, ok], fable, {"CRUCIBLE_FABLE_FALLBACK": "off"})
+        self.assertIsInstance(out, U.Failed); self.assertEqual(seen, [fable])
+        out, seen, _ = run([limit, ok], fable, {"CRUCIBLE_FABLE_FALLBACK": "sonnet"})
+        self.assertEqual(seen, [fable, U.MODELS["sonnet"]])
+        # SubBudget/HeldBudget views note it on the parent
+        b = U.Budget(5.0)
+        V.HeldBudget(V.SubBudget(b, 1.0), 0.1).note_fallback("verify", fable, opus, "spend limit")
+        self.assertEqual(len(b.fallback_snapshot()), 1)
+        self.assertEqual(V.token_fields(b, None)["model_fallbacks"][0]["kind"], "verify")
+
     def test_tool_less_calls_run_uncached(self):
         """A one-request call never re-reads its cache, so it runs with prompt caching off; tool loops keep it, and
         CRUCIBLE_NO_TOOLS_CACHE=1 turns it back on for tool-less calls."""
@@ -6530,6 +6577,30 @@ class TestReviewBenchAdapter(unittest.TestCase):
         self.assertEqual([o["start_line"] for o in m.to_findings(rev)], [2, 3, 1, 4])
         self.assertEqual([o["start_line"] for o in m.to_findings(rev, cap=3)], [2, 3, 1])
         self.assertEqual(len(self._mod({"RB_CONFIG_MAX_FINDINGS": "2"}).to_findings(rev)), 2)
+
+    def test_a_limit_failure_fails_the_pr(self):
+        """Run 3 scored PR 13 (every pass refused) as a finished review with 0 recall. A failure reason naming an account
+        limit anywhere in review.json now exits 3 (rerun); a call that fell back to another model did run."""
+        m = self._mod()
+        lim = "model call failed (success): You've hit your monthly spend limit"
+        self.assertTrue(m.limit_reasons({"coverage": {"chunks": [{"status": "failed", "reason": lim}]}}))
+        self.assertTrue(m.limit_reasons({"findings": [{"verification": {"status": "unverified", "reason": lim}}]}))
+        self.assertTrue(m.limit_reasons({"status": "failed", "reason": "Failed: Claude usage limit reached"}))
+        self.assertEqual(m.limit_reasons({"model_fallbacks": [{"reason": lim}], "findings": [{"title": "spend limit"}],
+                                          "coverage": {"chunks": [{"status": "failed", "reason": "file too big"}]}}), [])
+        import io, tempfile
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as t:
+            os.makedirs(os.path.join(t, "reviews", "r", "h1"))
+            pr = os.path.join(t, "pr.json"); json.dump({"repo": "https://github.com/o/r"}, open(pr, "w"))
+            env = {"RB_HEAD": "h1", "RB_PR_JSON": pr, "RB_PR_NUMBER": "1", "RB_BASE": "b", "RB_NWO": "o/r"}
+            for rev, rc in (({"findings": [self._f("low", 1)]}, 0),
+                            ({"findings": [self._f("low", 1)], "coverage": {"chunks": [{"reason": lim}]}}, 3)):
+                json.dump(rev, open(os.path.join(t, "reviews", "r", "h1", "review.json"), "w"))
+                with mock.patch.dict(os.environ, env), mock.patch("sys.stdout", io.StringIO()) as out, \
+                        mock.patch("sys.stderr", io.StringIO()):
+                    self.assertEqual(m.main(t), rc)
+                self.assertEqual(len(json.loads(out.getvalue())["findings"]), 1)    # findings still written
 
     def test_pr_text_and_lineless_findings_left_out(self):
         m = self._mod()

@@ -230,6 +230,16 @@ class Budget:
         self.limit, self.spent, self.lock = limit, 0.0, threading.Lock()
         self.tokens, self.unmetered, self.cached = {}, 0, 0   # model -> counts; calls with no usage; cache hits
         self.kinds = {}                                       # call kind -> calls, cost, tokens (kind_snapshot)
+        self.fallbacks = []                                   # model swaps after a limit (fallback_snapshot)
+
+    def note_fallback(self, kind, frm, to, reason):
+        with self.lock:
+            self.fallbacks.append({"kind": kind, "from": frm, "to": to, "reason": reason[:200]})
+
+    def fallback_snapshot(self):
+        """-> review.json's model_fallbacks: one entry per call that moved off its model after a spend/usage limit."""
+        with self.lock:
+            return [dict(f) for f in self.fallbacks]
 
     def _kind(self, kind, tools):
         k = self.kinds.setdefault(kind, {"calls": 0, "no_tools": True, "cost_usd": 0.0, "unmetered_calls": 0,
@@ -297,9 +307,39 @@ TOOLS_RUN = TOOLS_READ + ["Bash(node:*)", "Bash(npx vitest:*)", "Bash(npx jest:*
 BUDGET_EXHAUSTED = "budget exhausted"     # claude()'s refusal before a call starts (review.py tells holds apart by it)
 
 
+# A spend or usage limit on the account, as the CLI words it ("You've hit your monthly spend limit", "...5-hour limit",
+# "Claude usage limit reached"). Only these move a call to another model: any other failure is the model's own.
+LIMIT_RX = re.compile(r"hit your [\w -]*limit|spend limit|usage limit", re.I)
+
+
+def fable_fallback():
+    """The model a Fable call moves to when the account's Fable spend runs out (CRUCIBLE_FABLE_FALLBACK, default
+    Opus; empty/0/off turns it off). ReviewBench run 3 lost PR 13 whole and PR 1 in part to "You've hit your monthly
+    spend limit" on Fable 5.2 while Opus and Sonnet worked on the same account (eval/NOTES.md, 2026-11-12)."""
+    v = os.environ.get("CRUCIBLE_FABLE_FALLBACK", MODELS["opus"]).strip()
+    return None if v.lower() in ("", "0", "off", "no", "false") else MODELS.get(v, v)
+
+
+def is_limit(err):
+    return bool(LIMIT_RX.search(str(err)))
+
+
 def claude(prompt, model, schema, cwd, budget=None, tools=TOOLS_READ, effort="high", timeout=1500, kind="other"):
     """One isolated, structured model call. Raises Failed on any problem. `kind` labels its tokens and cost in the
-    budget (Budget.kind_snapshot)."""
+    budget (Budget.kind_snapshot). A Fable call refused for a spend/usage limit is retried once, on its own, on
+    fable_fallback() and noted in the budget (review.json model_fallbacks); the rest of the review keeps its models."""
+    try:
+        return _claude_once(prompt, model, schema, cwd, budget, tools, effort, timeout, kind)
+    except Failed as e:
+        to = fable_fallback() if model == MODELS["fable"] else None
+        if not to or to == model or not is_limit(e) or str(e) == BUDGET_EXHAUSTED:
+            raise
+        if budget:
+            budget.note_fallback(kind, model, to, str(e))
+        return _claude_once(prompt, to, schema, cwd, budget, tools, effort, timeout, kind)
+
+
+def _claude_once(prompt, model, schema, cwd, budget, tools, effort, timeout, kind):
     if budget and budget.exhausted():
         raise Failed(BUDGET_EXHAUSTED)
     env = dict(os.environ)

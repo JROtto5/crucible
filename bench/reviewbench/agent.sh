@@ -22,6 +22,11 @@ tail -n 5 /tmp/review.log
 echo "crucible exit $rc"
 python /agent/to_findings.py "$CRUCIBLE_HOME" > "$RB_OUT"
 out_rc=$?
+# a pass refused for an account spend/usage limit is a failed PR, not a finished review (run 3: PRs 1 and 13);
+# to_findings exits 3 when review.json records one, and the log check catches a review that died before writing it
+if [ "$out_rc" = 0 ] && grep -qiE "(hit your [a-z0-9 -]*|claude usage) limit" /tmp/review.log; then
+  echo "FAILED: the review log names an account limit; rerun this PR" >&2; out_rc=3
+fi
 # RB_CONFIG_KEEP_REVIEW=1: leave crucible's review.json beside the findings (for private scoring of the nit tier;
 # the judge reads only findings.json)
 if [ "${RB_CONFIG_KEEP_REVIEW:-0}" = 1 ]; then

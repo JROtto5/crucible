@@ -818,7 +818,7 @@ def token_fields(budget, split):
     return {"tokens_review": token_summary(rev, after[1] - before[1], after[2] - before[2]),
             "tokens_verify": token_summary(token_diff(end[0], rev), end[1] - (after[1] - before[1]),
                                            end[2] - (after[2] - before[2])),
-            "tokens_by_kind": budget.kind_snapshot()}
+            "tokens_by_kind": budget.kind_snapshot(), "model_fallbacks": budget.fallback_snapshot()}
 
 
 def needs_escalation(v):

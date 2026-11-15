@@ -1,10 +1,30 @@
 """Map crucible's stored review.json (kept, verified findings) to ReviewBench's findings format."""
-import glob, json, os, sys
+import glob, json, os, re, sys
 
 SEV = ["critical", "important", "medium", "low"]
 # No cap by default: every finding here is verified, and the first run's 60-per-PR cap cut PR 1 from 122 to 60.
 # RB_CONFIG_MAX_FINDINGS=N caps it again; findings are ordered by severity, so a cap drops the lowest first.
 MAX_FINDINGS = int(os.environ.get("RB_CONFIG_MAX_FINDINGS") or 0)
+
+
+# Same wording as crucible.util.LIMIT_RX (this file runs without crucible on the path in tests).
+LIMIT_RX = re.compile(r"hit your [\w -]*limit|spend limit|usage limit", re.I)
+LIMIT_EXIT = 3
+
+
+def limit_reasons(node, key=None):
+    """Every failure reason in a review.json that names an account spend/usage limit. model_fallbacks is skipped: a
+    call that moved to another model after a limit did run. ReviewBench run 3 scored PR 13 (every pass refused) and
+    PR 1 (some passes refused) as finished reviews with 0.00 recall; a reason found here makes the PR fail instead."""
+    if key == "model_fallbacks":
+        return []
+    if isinstance(node, dict):
+        return [r for k, v in node.items() for r in limit_reasons(v, k)]
+    if isinstance(node, list):
+        return [r for v in node for r in limit_reasons(v, key)]
+    if key == "reason" and isinstance(node, str) and LIMIT_RX.search(node):
+        return [node]
+    return []
 
 
 def find_review(home, head):
@@ -41,11 +61,15 @@ def main(home):
         n, nits = len(review.get("findings") or []), len(review.get("nits") or [])
         print(f"kept {len(findings)} of {n} findings + {nits} nits; cost ${review.get('cost_usd', 0):.2f} "
               f"(nits ${review.get('cost_nits_usd', 0):.2f})", file=sys.stderr)
+    hit = limit_reasons(review) if review else []
+    if hit:
+        print(f"FAILED: {len(hit)} step(s) ended on an account limit ({hit[0][:160]}); rerun this PR", file=sys.stderr)
     pr = json.load(open(os.environ["RB_PR_JSON"]))
     print(json.dumps({"pr": {"repo": pr.get("repo") or f"https://github.com/{os.environ['RB_NWO']}",
                              "pr_number": int(os.environ["RB_PR_NUMBER"]), "base": os.environ["RB_BASE"], "head": head},
                       "agent": agent, "findings": findings}))
+    return LIMIT_EXIT if hit else 0
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    sys.exit(main(sys.argv[1]))
