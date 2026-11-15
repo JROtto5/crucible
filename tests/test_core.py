@@ -4051,6 +4051,24 @@ class TestAIAttribution(unittest.TestCase):
         # the summary judges the text that was written, which no longer has the footer (or its emoji)
         self.assertIn("remaining tells: none", logs[-1])
 
+    def test_polish_prompt_forbids_adding_attribution(self):
+        """DRG-69: the guard strips a footer the rewrite added, but the prompt should not invite one either."""
+        d = make_repo({"a.js": "1\n"})
+        with open(os.path.join(d, "PR_DRAFT.md"), "w") as fh:
+            fh.write("# Fix a\n\nThe worker swallowed errors.\n")
+        orig, seen = S.claude, []
+        def fake(prompt, *a, **k):
+            seen.append(prompt)
+            return {"title": "Fix a", "body": "Worker errors now reject.\n", "removed": [], "kept_facts": []}, 0.0
+        S.claude = fake
+        try:
+            S.polish(d, "t__polish_prompt", log=lambda *_: None)
+        finally:
+            S.claude = orig
+        flat = " ".join(seen[0].split())
+        self.assertIn('Do not add any AI or tool attribution (no "Generated with ..." footer', flat)
+        self.assertIn("keep such a line only if the original has it", flat)
+
     def test_polish_matches_the_upstream_issue_url_to_hash_form(self):
         """self-review b6c5466: polish() must pass the upstream slug, or a reworded URL line comes back twice."""
         d = make_repo({"a.js": "1\n"})

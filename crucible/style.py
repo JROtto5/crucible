@@ -448,7 +448,9 @@ def polish(repo, project, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-
         are referenced). Keep EVERY factual statement, number, command and test result from the original; do not add any
         claim that isn't in the original or provable from the checkout (you may read the code). Add a short
         "Note for reviewers" style call-out only if the original or the code shows a real trade-off or risky spot.
-        No emoji, no "This PR ..." openers, no filler words, no marketing tone. {'Required template sections: ' + str(heads) if heads else ''}
+        No emoji, no "This PR ..." openers, no filler words, no marketing tone. Do not add any AI or tool attribution
+        (no "Generated with ..." footer, no AI Co-authored-by trailer); keep such a line only if the original has it.
+        {'Required template sections: ' + str(heads) if heads else ''}
         Return the new title and body, a list of anything you removed (so the author can check), and the facts you kept.
 
         House style:
