@@ -57,6 +57,11 @@ CHECKBOX_RX = re.compile(r"^([-*+]\s+)\[[ xX]\]")
 # file name (`python`, `yarn.lock`, `Cargo.toml`) is not a command, so it doesn't count.
 TESTED_RX = re.compile(r"(?i)\b(tested|test plan|how to test|repro|verified|checked|confirmed|measured|benchmark|ran\b|"
                        r"npm test|pytest|unittest|screenshot|before|after|tests? pass|passing)")
+# results told in prose: "on master it fails ... here both pass (29/29)" (bvh-981 PR_DRAFT, flagged as untested, DRG-105)
+RESULT_RX = re.compile(r"(?i)\b(?:on|against) (?:master|main|trunk|the base)\b[^.\n]{0,60}?\b(?:fail|pass|break|throw|crash)"
+                       r"|\b(?:fail|pass)(?:s|ed|es|ing)?\b[^.\n]{0,30}?\b(?:on|against) (?:master|main|trunk|the base)\b"
+                       r"|\b(?:all|both|they|it|tests?|cases?|suite) (?:now |still )?pass(?:es)?\b"
+                       r"|\b\d+ ?/ ?\d+ (?:pass|tests)|\(\d+/\d+\)")
 CODE_SPAN_RX = re.compile(r"`([^`\n]+)`")
 COMMAND_RX = re.compile(r"(?i)^\s*(\$\s*)?(sudo\s+)?(\w+=\S*\s+)*(npm|pnpm|yarn|npx|bun|deno|make|cargo|go|pytest|python3?|"
                         r"tox|nox|meson|ninja|ctest|gradle|mvn|dotnet|rake|mix)\s+\S")
@@ -65,7 +70,7 @@ COMMAND_RX = re.compile(r"(?i)^\s*(\$\s*)?(sudo\s+)?(\w+=\S*\s+)*(npm|pnpm|yarn|
 def has_testing_evidence(text):
     """Code spans are paired left to right, so prose between two spans ("`a` go through `b`") is never a command;
     each `&&`/`;`/`|` part of a span is tried, so a chained command counts."""
-    return bool(TESTED_RX.search(text or "")) or any(
+    return bool(TESTED_RX.search(text or "") or RESULT_RX.search(text or "")) or any(
         COMMAND_RX.match(part) for span in CODE_SPAN_RX.findall(text or "") for part in re.split(r"&&|\|\||[;|]", span))
 
 

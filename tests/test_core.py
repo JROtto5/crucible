@@ -3386,6 +3386,17 @@ class TestDescriptionHeuristics(unittest.TestCase):
                      "Moved `a` go through `b`.", "`int | None` is accepted.", "`a || b` short-circuits."):
             self.assertFalse(S.has_testing_evidence(line), line)
 
+    def test_m_results_told_in_prose_are_evidence(self):
+        # bvh-981 PR_DRAFT.md was flagged "no testing evidence" (DRG-105)
+        for line in ("The new Workers test builds a torus: on master it fails (array length 180000 instead of 90000), "
+                     "here both pass along with the rest of Workers (29/29).",
+                     "It fails on main and passes with the change.", "All three cases now pass.",
+                     "12/12 pass on the branch.", "Against trunk this throws a RangeError."):
+            self.assertTrue(S.has_testing_evidence(line), line)
+        for line in ("Rebased against main.", "Pass `transferBuffers: true` to keep the old behaviour.",
+                     "Bumps the version to 1/2.", "On master the helper is private."):
+            self.assertFalse(S.has_testing_evidence(line), line)
+
     def test_m_no_evidence_is_still_flagged(self):
         d = make_repo({"a.txt": "x"})
         text = "Fixes #12.\n\nThe `parse()` helper dropped the last `token` of a line, so use `split()` instead."
@@ -7014,6 +7025,26 @@ class TestCallSites(unittest.TestCase):
         lines, _ = callsites.sites(make_repo({"b.py": body}), names)
         self.assertEqual(lines[callsites.MAX_LINES], f"({35 - callsites.MAX_LINES} more lines not listed)")
 
+
+
+class TestReportSummary(unittest.TestCase):
+    """The reviewer's summary predates verification; its finding tally gives way to the kept list (DRG-105)."""
+
+    def test_stale_tally_sentence_replaced_by_kept_findings(self):
+        rev = {"summary": "The one-line fix is correct. The style matches the file (tabs, padded blocks). "
+                          "The only finding is a low-severity PR description format point.",
+               "findings": [{"severity": "low"}, {"severity": "medium"}]}
+        out = V.report_summary(rev)
+        self.assertNotIn("low-severity", out)
+        self.assertTrue(out.startswith("The one-line fix is correct. The style matches the file"))
+        self.assertTrue(out.endswith("2 findings kept after verification (1 medium, 1 low)."))
+        self.assertEqual(V.report_summary({"summary": "Correct. No issues found.", "findings": []}),
+                         "Correct. No findings kept after verification.")
+
+    def test_summary_without_a_tally_is_untouched(self):
+        text = "The parser drops one token per line, so `split()` is the right call."
+        self.assertEqual(V.report_summary({"summary": text, "findings": [{"severity": "low"}]}), text)
+        self.assertEqual(V.report_summary({"summary": "", "findings": []}), "")
 
 if __name__ == "__main__":
     unittest.main()

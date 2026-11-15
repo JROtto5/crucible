@@ -1541,6 +1541,31 @@ def tokens_note(rev):
             f"verify {tv['total']:,}{'; ' + ', '.join(extra) if extra else ''})")
 
 
+_TALLY_SENT_RX = re.compile(r"(?i)\bfindings?\b|\bissues? (?:found|raised)\b")
+_TALLY_WORD_RX = re.compile(r"(?i)\b(?:no|none|only|one|two|three|single|\d+|critical|high|medium|low|important|blocking|"
+                            r"low-severity|medium-severity|high-severity)\b")
+
+
+def report_summary(rev):
+    """The reviewer writes its summary before verification and the deterministic checks, so a sentence that counts or
+    grades the findings can contradict the list below it (bvh-981 review2: "The only finding is a low-severity PR
+    description format point" over a kept medium and that point dropped, DRG-105). Such sentences give way to the
+    kept tally."""
+    text = rev.get("summary", "") or ""
+    sents = re.split(r"(?<=[.!?])\s+", text.strip())
+    kept = [x for x in sents if not (_TALLY_SENT_RX.search(x) and _TALLY_WORD_RX.search(x))]
+    if len(kept) == len(sents):
+        return text
+    sev = {}
+    for f in rev.get("findings", []):
+        sev[f["severity"]] = sev.get(f["severity"], 0) + 1
+    n = len(rev.get("findings", []))
+    tally = (f"{n} finding{'s' if n != 1 else ''} kept after verification ("
+             + ", ".join(f"{c} {k}" for k, c in sorted(sev.items(), key=lambda kv: SEV.index(kv[0]) if kv[0] in SEV else len(SEV))) + ")."
+             if n else "No findings kept after verification.")
+    return " ".join(kept + [tally]).strip()
+
+
 def report(rev, ans, waivers=None):
     """waivers: {readiness item name: reason} for this branch. A waived failing item no longer blocks readiness."""
     waivers = waivers or {}
@@ -1574,7 +1599,7 @@ def report(rev, ans, waivers=None):
     icon = {"pass": "✅", "fail": "❌", "warn": "⚠️", "na": "·"}
     L += [f"- ⏭️ {i['item']}: waived ({waivers[i['item']]})" if i["status"] == "fail" and i["item"] in waivers
           else f"- {icon[i['status']]} {i['item']}: {i['evidence']}" for i in ready["items"]]
-    L += ["", "## Summary", "", rev.get("summary", ""), "", "## Findings", ""]
+    L += ["", "## Summary", "", report_summary(rev), "", "## Findings", ""]
     if not rev["findings"]:
         L.append("None. 🎉")
     for f in rev["findings"]:
