@@ -2915,7 +2915,8 @@ class TestVerifyFailedRetried(unittest.TestCase):
         def fake(prompt, model, schema, cwd, *a, **kw):
             if "findings" in schema["properties"]:
                 hit = "+++ b/a.js" in prompt
-                return {"summary": "s", "findings": [{"severity": "medium", "file": "a.js", "line": 2,
+                return {"summary": "Reads past the end. The only finding is low." if hit else "s",
+                        "findings": [{"severity": "medium", "file": "a.js", "line": 2,
                         "title": "f reads past the end", "problem": "p", "caused_by_this_change": True,
                         "reachable_in_real_use": True, "wrong_if": "w", "fix": "x"}] if hit else []}, 0.01
             verifies.append(prompt)
@@ -2938,6 +2939,8 @@ class TestVerifyFailedRetried(unittest.TestCase):
             self.assertTrue(r["summary"].startswith("1 finding(s) couldn't be verified (model call failed (success): "
                                                     "You've hit your 5-hour limit); they are kept as unverified: a plain "
                                                     "re-run retries 1."), r["summary"])
+            # crucible's note leads as written; the reviewer's stale tally follows the kept finding (DRG-105)
+            self.assertTrue(r["summary"].endswith("re-run retries 1. Reads past the end. 1 finding kept (1 medium)."), r["summary"])
             self.assertTrue(any("verification FAILED for 1 finding(s)" in l for l in logs), logs)
             limited[0] = False
             logs, n = [], len(verifies)
@@ -3394,7 +3397,9 @@ class TestDescriptionHeuristics(unittest.TestCase):
                      "12/12 pass on the branch.", "Against trunk this throws a RangeError."):
             self.assertTrue(S.has_testing_evidence(line), line)
         for line in ("Rebased against main.", "Pass `transferBuffers: true` to keep the old behaviour.",
-                     "Bumps the version to 1/2.", "On master the helper is private."):
+                     "Bumps the version to 1/2.", "On master the helper is private.",
+                     "It passes the raw buffer to the worker instead of a copy.", "They pass through unchanged.",
+                     "Refactor the loader (1/2).", "Rendering fails on main thread when the canvas is detached."):
             self.assertFalse(S.has_testing_evidence(line), line)
 
     def test_m_no_evidence_is_still_flagged(self):
@@ -7031,20 +7036,18 @@ class TestReportSummary(unittest.TestCase):
     """The reviewer's summary predates verification; its finding tally gives way to the kept list (DRG-105)."""
 
     def test_stale_tally_sentence_replaced_by_kept_findings(self):
-        rev = {"summary": "The one-line fix is correct. The style matches the file (tabs, padded blocks). "
-                          "The only finding is a low-severity PR description format point.",
-               "findings": [{"severity": "low"}, {"severity": "medium"}]}
-        out = V.report_summary(rev)
-        self.assertNotIn("low-severity", out)
-        self.assertTrue(out.startswith("The one-line fix is correct. The style matches the file"))
-        self.assertTrue(out.endswith("2 findings kept after verification (1 medium, 1 low)."))
-        self.assertEqual(V.report_summary({"summary": "Correct. No issues found.", "findings": []}),
-                         "Correct. No findings kept after verification.")
+        kept = [{"severity": "low"}, {"severity": "medium"}]
+        out = V.reviewer_summary(["The one-line fix is correct. The style matches the file (tabs, padded blocks). "
+                                  "The only finding is a low-severity PR description format point."], kept)
+        self.assertEqual(out, "The one-line fix is correct. The style matches the file (tabs, padded blocks). "
+                              "2 findings kept (1 medium, 1 low).")
+        self.assertEqual(V.reviewer_summary(["Correct.", "No issues found beyond style."], []), "Correct. No findings kept.")
+        self.assertEqual(V.reviewer_summary(["Two findings are medium."], kept[:1]), "1 finding kept (1 low).")
 
     def test_summary_without_a_tally_is_untouched(self):
-        text = "The parser drops one token per line, so `split()` is the right call."
-        self.assertEqual(V.report_summary({"summary": text, "findings": [{"severity": "low"}]}), text)
-        self.assertEqual(V.report_summary({"summary": "", "findings": []}), "")
+        for text in ("The parser drops one token per line, so `split()` is the right call.",
+                     "The finding at line 42 is the only real risk.", "The main finding is that the parser has no test.", ""):
+            self.assertEqual(V.reviewer_summary([text] if text else [], [{"severity": "low"}]), text)
 
 if __name__ == "__main__":
     unittest.main()

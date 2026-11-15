@@ -57,11 +57,16 @@ CHECKBOX_RX = re.compile(r"^([-*+]\s+)\[[ xX]\]")
 # file name (`python`, `yarn.lock`, `Cargo.toml`) is not a command, so it doesn't count.
 TESTED_RX = re.compile(r"(?i)\b(tested|test plan|how to test|repro|verified|checked|confirmed|measured|benchmark|ran\b|"
                        r"npm test|pytest|unittest|screenshot|before|after|tests? pass|passing)")
-# results told in prose: "on master it fails ... here both pass (29/29)" (bvh-981 PR_DRAFT, flagged as untested, DRG-105)
-RESULT_RX = re.compile(r"(?i)\b(?:on|against) (?:master|main|trunk|the base)\b[^.\n]{0,60}?\b(?:fail|pass|break|throw|crash)"
-                       r"|\b(?:fail|pass)(?:s|ed|es|ing)?\b[^.\n]{0,30}?\b(?:on|against) (?:master|main|trunk|the base)\b"
-                       r"|\b(?:all|both|they|it|tests?|cases?|suite) (?:now |still )?pass(?:es)?\b"
-                       r"|\b\d+ ?/ ?\d+ (?:pass|tests)|\(\d+/\d+\)")
+# Results told in prose (bvh-981 PR_DRAFT was flagged as untested, DRG-105). Falsifiers (tests/test_core.py
+# test_m_results_told_in_prose_are_evidence). Counts: "on master it fails ... here both pass (29/29)", "It fails on main
+# and passes with the change", "All three cases now pass.", "12/12 pass on the branch". Doesn't: "Rebased against main",
+# "Pass `x: true`", "It passes the raw buffer to the worker", "Refactor the loader (1/2)", "Rendering fails on main thread".
+_BASE = r"(?:master|main|trunk|the base)\b(?!\s+(?:thread|loop|process|window|menu|screen|page|function))"
+RESULT_RX = re.compile(r"(?i)\b(?:on|against) " + _BASE + r"[^.\n]{0,60}?\b(?:fail|pass|break|throw|crash)"
+                       r"|\b(?:fail|pass)(?:s|ed|es|ing)?\b[^.\n]{0,30}?\b(?:on|against) " + _BASE +
+                       r"|\b(?:all|both|they|it|tests?|cases?|suite) (?:now |still )?pass(?:es)?"
+                       r"(?=\s*(?:[.,;:)]|$)|\s+(?:on|with|here|locally|again|too|now|cleanly|along)\b)"
+                       r"|\b\d+ ?/ ?\d+ (?:pass|tests)|\((\d+)/\1\)")
 CODE_SPAN_RX = re.compile(r"`([^`\n]+)`")
 COMMAND_RX = re.compile(r"(?i)^\s*(\$\s*)?(sudo\s+)?(\w+=\S*\s+)*(npm|pnpm|yarn|npx|bun|deno|make|cargo|go|pytest|python3?|"
                         r"tox|nox|meson|ninja|ctest|gradle|mvn|dotnet|rake|mix)\s+\S")

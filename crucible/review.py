@@ -1394,7 +1394,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 nit_cands += swept
             record.update(run_nits(nit_cands, cands + carried + reverify, repo, sha, dctx, dlabel, measured, budget,
                                    authors, fresh, log, extra))
-        unsettled = [f for f in kept if verify_failed(f)]
+        unsettled, lead, tail = [f for f in kept if verify_failed(f)], [], []
         if unsettled:                                  # inserted first, so a failed review pass still leads
             why = (unsettled[0]["verification"].get("reason") or "no reason recorded")[:300]
             log(f"  verification FAILED for {len(unsettled)} finding(s): {why}")
@@ -1403,8 +1403,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 f"a plain re-run retries {len(unsettled) - spent}" if spent < len(unsettled) else "",
                 f"{spent} failed {VERIFY_ATTEMPTS}+ times and won't be retried by a plain re-run (--force does)" if spent else ""
             ) if x)
-            summaries.insert(0, f"{len(unsettled)} finding(s) couldn't be verified ({why}); they are kept as unverified: "
-                                f"{again}.")
+            lead.insert(0, f"{len(unsettled)} finding(s) couldn't be verified ({why}); they are kept as unverified: "
+                               f"{again}.")
         # an incremental round summarizes only its own changes: repeating the earlier round's summary restated
         # problems that were already fixed (seen in the bug j self-review)
         failed = [p for c in chunk_status if c["status"] == "failed" for p in c["files"]]
@@ -1412,11 +1412,13 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             why = next(c.get("reason") for c in chunk_status if c["status"] == "failed") or "no reason recorded"
             log(f"  review pass FAILED for {len(failed)} file(s): {why[:300]}")
             again = "a re-run with a bigger --budget covers it" if why == HELD_PASS_REASON else "a plain re-run retries it"
-            summaries.insert(0, f"The review pass failed for {', '.join(failed)[:300]} ({why[:300]}), so this review is "
-                                f"incomplete; {again}.")
+            lead.insert(0, f"The review pass failed for {', '.join(failed)[:300]} ({why[:300]}), so this review is "
+                               f"incomplete; {again}.")
         elif prev_sha and not chunks:
-            summaries.append(f"No code changed since {prev_sha[:10]}; its findings were carried or re-checked.")
-        record.update(status="done", summary=" ".join(summaries)[:3000], findings=kept, dropped=dropped,
+            tail.append(f"No code changed since {prev_sha[:10]}; its findings were carried or re-checked.")
+        # crucible's own notes stay as written; only the reviewer's text is re-tallied against the kept findings
+        summary = " ".join(x for x in (*lead, reviewer_summary(summaries, kept), *tail) if x)
+        record.update(status="done", summary=summary[:3000], findings=kept, dropped=dropped,
                       cost_usd=round(budget.spent, 4), cost_review_usd=round(review_cost, 4),
                       cost_verify_usd=round(budget.spent - review_cost, 4), finished=dt.datetime.now().isoformat(timespec="seconds"),
                       budget_exhausted=budget.exhausted())
@@ -1541,29 +1543,33 @@ def tokens_note(rev):
             f"verify {tv['total']:,}{'; ' + ', '.join(extra) if extra else ''})")
 
 
-_TALLY_SENT_RX = re.compile(r"(?i)\bfindings?\b|\bissues? (?:found|raised)\b")
-_TALLY_WORD_RX = re.compile(r"(?i)\b(?:no|none|only|one|two|three|single|\d+|critical|high|medium|low|important|blocking|"
-                            r"low-severity|medium-severity|high-severity)\b")
+# A sentence that counts or grades the findings: a count or "only/no" word up to two words before "finding(s)", or
+# "finding is/are <severity>". Falsifiers (tests/test_core.py TestReportSummary). Replaced: "The only finding is a
+# low-severity PR description format point.", "No issues found beyond style.", "Two findings are medium.". Kept: "The
+# finding at line 42 is the only real risk.", "The main finding is that the parser has no test.", and every note crucible
+# writes itself (verification failed, review pass failed, nothing changed since), which never go through this filter.
+_TALLY_RX = re.compile(r"(?i)\b(?:no|only|one|two|three|four|five|single|sole|\d+)\b(?:[\s-]+[a-z-]+){0,2}?[\s-]+"
+                       r"(?:findings?|issues? (?:found|raised))\b"
+                       r"|\bfindings? (?:is|are|was|were) (?:a |an |all |both )?(?:critical|important|high|medium|low)\b")
 
 
-def report_summary(rev):
-    """The reviewer writes its summary before verification and the deterministic checks, so a sentence that counts or
-    grades the findings can contradict the list below it (bvh-981 review2: "The only finding is a low-severity PR
-    description format point" over a kept medium and that point dropped, DRG-105). Such sentences give way to the
-    kept tally."""
-    text = rev.get("summary", "") or ""
+def reviewer_summary(summaries, kept):
+    """The reviewer passes write their summaries before verification and the deterministic checks, so a sentence that
+    tallies the findings can contradict the list below it (bvh-981 review2: "The only finding is a low-severity PR
+    description format point" over a kept medium, that point dropped; DRG-105). Such sentences give way to the kept
+    tally; a summary with none is returned as written."""
+    text = " ".join(summaries)
     sents = re.split(r"(?<=[.!?])\s+", text.strip())
-    kept = [x for x in sents if not (_TALLY_SENT_RX.search(x) and _TALLY_WORD_RX.search(x))]
-    if len(kept) == len(sents):
+    rest = [x for x in sents if not _TALLY_RX.search(x)]
+    if len(rest) == len(sents):
         return text
     sev = {}
-    for f in rev.get("findings", []):
+    for f in kept:
         sev[f["severity"]] = sev.get(f["severity"], 0) + 1
-    n = len(rev.get("findings", []))
-    tally = (f"{n} finding{'s' if n != 1 else ''} kept after verification ("
-             + ", ".join(f"{c} {k}" for k, c in sorted(sev.items(), key=lambda kv: SEV.index(kv[0]) if kv[0] in SEV else len(SEV))) + ")."
-             if n else "No findings kept after verification.")
-    return " ".join(kept + [tally]).strip()
+    tally = (f"{len(kept)} finding{'s' if len(kept) != 1 else ''} kept ("
+             + ", ".join(f"{c} {k}" for k, c in sorted(sev.items(), key=lambda kv: SEV.index(kv[0]) if kv[0] in SEV else len(SEV)))
+             + ")." if kept else "No findings kept.")
+    return " ".join(rest + [tally]).strip()
 
 
 def report(rev, ans, waivers=None):
@@ -1599,7 +1605,7 @@ def report(rev, ans, waivers=None):
     icon = {"pass": "✅", "fail": "❌", "warn": "⚠️", "na": "·"}
     L += [f"- ⏭️ {i['item']}: waived ({waivers[i['item']]})" if i["status"] == "fail" and i["item"] in waivers
           else f"- {icon[i['status']]} {i['item']}: {i['evidence']}" for i in ready["items"]]
-    L += ["", "## Summary", "", report_summary(rev), "", "## Findings", ""]
+    L += ["", "## Summary", "", rev.get("summary", ""), "", "## Findings", ""]
     if not rev["findings"]:
         L.append("None. 🎉")
     for f in rev["findings"]:
