@@ -800,3 +800,24 @@ What it doesn't say: one round, private, n=25 PRs (the official run is 219 PRs �
 two thirds of it the sweep and the extra nit verification, and stays under the $3 ceiling. Next weakest: api-
 architecture (29.2, n=12), security (33.0 macro), accessibility (33.3, n=10), reliability (42.3, n=58, the largest
 category below 45).
+
+### 2026-11-15 · security golden issues R3 found and R4 missed (no re-run, $0)
+
+From the stored judge output on blaze-3: ReviewBench @ f223ce3, `runs/r3` (crucible 10df5ca) and `runs/r4` (6dce5d4),
+`scoring/results.details.json` sha256 e58bf907a3e1… (r3) and 784ab0cf9d42… (r4); a golden issue counts as found when
+any candidate lists it in `covered_golden_indices`. Same 25 PRs in both runs, 27 golden security TPs.
+
+Found: R3 16, R4 15 (micro 59.3 → 55.6, as above). R3 found and R4 missed 4; R4 found and R3 missed 3.
+
+| PR key | golden # | sev | file:line | what | R4 in that file |
+|---|---|---|---|---|---|
+| DisciplinedSoftware_Codebase-Conversion_1-4b46d68c | 27 | low | .devcontainer/Dockerfile:33 | last USER is root (a semgrep rule) | 0 candidates (75 elsewhere) |
+| mheuss_chronicle_14-04ac4c02 | 14 | low | chronicle-daemon/crates/storage/src/media.rs:238 | `DirBuilder::mode` leaves an existing, looser directory unchanged | 5, none on it |
+| scottlz0310_Mcp-Docker_29-e7705d26 | 24 | medium | services/copilot-review-mcp/internal/auth/handler.go:90 | PKCE advertised (S256) but optional at /authorize and /token | 8, none on it |
+| scottlz0310_Mcp-Docker_29-e7705d26 | 29 | medium | same line | the same PKCE gap, second golden entry | (same) |
+
+So 3 distinct issues, not 4: the two Mcp-Docker entries are one bug filed twice. R4's gains: statswales-frontend_626
+#3 (publisher-api.ts:924), Mcp-Docker_29 #0 (session.go:111) and #30 (handler.go:74). All are one-round differences on
+PRs both runs reviewed in full; with n=27 and 1 round each, a net −1 is noise, not a regression. The one worth a
+look is the PKCE miss: R4 raised 8 findings in handler.go and none on the discovery-vs-handler mismatch, which is a
+cross-function spec check (what the server advertises vs what it enforces) that the security checklist doesn't name.
