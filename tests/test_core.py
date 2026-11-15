@@ -6082,7 +6082,7 @@ class TestNitTier(unittest.TestCase):
                 "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "w", "fix": "x"}
 
     def _run(self, nits_out, verdicts=None, nits=True, env=None, fail_batch=False, budget=None, findings=1, verify_cost=0.0,
-             review_cost=0.0, verify_error=None, passes=1, repo_files=None):
+             review_cost=0.0, verify_error=None, passes=1, repo_files=None, sweep_out=(), sweep_cost=0.0):
         """-> (review.json, calls). `passes` > 1 splits the diff into that many review passes. The fake reviewer returns one important finding and `nits_out` as nits; the nit
         verifier answers `verdicts` (index -> (keep, confidence)), default keep/high for every nit."""
         from unittest import mock
@@ -6103,6 +6103,10 @@ class TestNitTier(unittest.TestCase):
                 if budget is not None:
                     budget.add(review_cost)
                 return out, 0.1
+            if kw.get("kind") == "nit_sweep":
+                if budget is not None:
+                    budget.add(sweep_cost)
+                return {"nits": list(sweep_out)}, sweep_cost
             if "verdicts" in schema["properties"]:
                 if fail_batch:
                     raise U.Failed("usage limit")
@@ -6350,6 +6354,58 @@ class TestNitTier(unittest.TestCase):
         sub.add(0.1)
         self.assertTrue(sub.exhausted())
         self.assertAlmostEqual(V.SubBudget(U.Budget(None), 0.5).remaining(), 0.5)
+
+    def test_nit_sweep_runs_when_budget_remains_and_its_nits_are_verified(self):
+        first = [self._f("magic number 30", 5)]
+        swept = [self._f("magic number 30", 5), self._f("off by one in range end", 9), self._f("stale docstring", 2)]
+        r, calls = self._run(first, budget=5.0, sweep_out=swept, sweep_cost=0.2)
+        sw = [c for c in calls if c["kind"] == "nit_sweep"]
+        self.assertEqual(len(sw), 1)
+        self.assertEqual(sw[0]["model"], r["review_model"])
+        self.assertIn("a.py:5 magic number 30", sw[0]["prompt"])      # told what was already raised
+        self.assertIn("a.py:1 division by zero in f", sw[0]["prompt"])
+        self.assertEqual(r["nit_sweep"], {"passes": 1, "of": 1, "failed": 0, "cost_usd": 0.2, "nits": 2})
+        self.assertEqual(sorted(f["title"] for f in r["nits"]),
+                         ["magic number 30", "off by one in range end", "stale docstring"])
+        self.assertEqual(sorted(f["title"] for f in r["nits"] if f.get("sweep")), ["off by one in range end", "stale docstring"])
+        self.assertTrue(all(f["verification"]["status"] == "verified" for f in r["nits"]))
+        self.assertLess(calls.index(sw[0]), [c["kind"] for c in calls].index("verify_nits"))
+        self.assertEqual([f["title"] for f in r["findings"]], ["division by zero in f"])
+        self.assertIn("Nit sweep: second look at 1 of 1 pass(es), 2 new nit(s)", V.report(r, {}))
+
+    def test_nit_sweep_skips(self):
+        nits = [self._f("magic number 30", 5)]
+        r, calls = self._run(nits, sweep_out=[self._f("x", 9)])        # auto: no --budget, no sweep
+        self.assertNotIn("nit_sweep", [c["kind"] for c in calls])
+        self.assertIn("no --budget", r["nit_sweep"]["skipped"])
+        self.assertIn("Nit sweep skipped: no --budget", V.report(r, {}))
+        r, calls = self._run(nits, sweep_out=[self._f("off by one", 9)], env={"CRUCIBLE_NITS_SWEEP": "1"})
+        self.assertIn("nit_sweep", [c["kind"] for c in calls])
+        self.assertIn("off by one", [f["title"] for f in r["nits"]])
+        r, calls = self._run(nits, budget=5.0, env={"CRUCIBLE_NITS_SWEEP": "0"})
+        self.assertNotIn("nit_sweep", [c["kind"] for c in calls]); self.assertIn("off", r["nit_sweep"]["skipped"])
+        r, calls = self._run(nits, budget=1.0, review_cost=0.6)       # spent over half the budget already
+        self.assertNotIn("nit_sweep", [c["kind"] for c in calls]); self.assertIn("over 50%", r["nit_sweep"]["skipped"])
+        r, calls = self._run(nits, budget=0.5)                        # too little left after the nit reserve
+        self.assertNotIn("nit_sweep", [c["kind"] for c in calls]); self.assertIn("under $0.30", r["nit_sweep"]["skipped"])
+        r, calls = self._run([], nits=None, budget=5.0)               # without --nits: nothing, not even the key
+        self.assertNotIn("nit_sweep", r); self.assertNotIn("nit_sweep", [c["kind"] for c in calls])
+
+    def test_nit_sweep_stops_at_its_cap(self):
+        # 4 passes, each sweep call $0.30: the $0.75 cap stops it after 3 (the third starts with $0.15 left)
+        r, calls = self._run([self._f("magic number 30", 5)], budget=5.0, passes=4, sweep_cost=0.3)
+        self.assertEqual(sum(c["kind"] == "nit_sweep" for c in calls), 3)
+        self.assertEqual((r["nit_sweep"]["passes"], r["nit_sweep"]["of"]), (3, 4))
+        self.assertAlmostEqual(r["nit_sweep"]["cost_usd"], 0.9)
+        self.assertEqual(r["nit_sweep"]["nits"], 0)
+
+    def test_sweep_prompt_lists_only_its_files_and_caps_the_list(self):
+        ch = {"files": ["a.py"], "text": "DIFF"}
+        raised = [self._f(f"t{i}", i) for i in range(V.SWEEP_RAISED_MAX + 5)]
+        p = V.sweep_prompt("o__r", "a" * 40, "b" * 40, ch, raised, "RULES", ["a.py", "b.py"], "DOCS NOTE")
+        self.assertIn("... and 5 more", p); self.assertIn("DIFF", p); self.assertIn("DOCS NOTE", p)
+        self.assertIn("Maintainability, when it is concrete", p)       # the same nit categories as the first pass
+        self.assertIn("(nothing)", V.sweep_prompt("o__r", "a" * 40, "b" * 40, ch, [], "", ["a.py"]))
 
     def test_a_review_without_nits_is_redone_for_nits_not_the_reverse(self):
         prev = {"status": "done", "inputs": {"base": "b", "draft": None, "draft_sha": None}, "findings": []}

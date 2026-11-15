@@ -229,7 +229,9 @@ def main(argv=None):
     r.add_argument("--no-tiers", action="store_true", help="verify every finding with the strong model only")
     r.add_argument("--nits", action="store_true", help="also report verified non-blocking nits as a separate tier (they "
                    "never change the verdict; CRUCIBLE_NITS=1; their verification is capped by CRUCIBLE_NITS_MAX_USD, "
-                   "default $0.75)")
+                   "default $0.75). With a --budget, a review that spent at most half of it also gets a nit-only "
+                   "second look at each pass (CRUCIBLE_NITS_SWEEP=0 turns it off, =1 runs it without a budget; "
+                   "capped by CRUCIBLE_NITS_SWEEP_USD, default $0.75)")
     r.add_argument("--route", action="store_true", help="route by change type: a docs/PR-text-only round gets one cheaper "
                    "pass (also CRUCIBLE_ROUTE=1); see `crucible routing-replay`")
     st = s.add_parser("status", help="print the stored report for HEAD (exit 0 when GREEN)")

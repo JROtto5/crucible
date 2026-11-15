@@ -213,6 +213,111 @@ class HeldBudget:
         return getattr(self.parent, name)
 
 
+# ---------- the nit sweep: a second, nit-only look when budget remains ----------
+# ReviewBench run 3 found 30.8% of low-severity golden issues, and nits carried ~15 points of recall at ~92% true.
+# One review call asks for findings and nits together, and a pass that found a few stops looking. So after the
+# findings are verified, a review that spent at most SWEEP_SPENT_SHARE of its budget gets a second look at each
+# reviewed pass, nit-only, told what was already raised and asked for what isn't on that list. Its nits go through
+# the same verifier as the first pass's (deduped against them and the findings), and never change the verdict.
+# CRUCIBLE_NITS_SWEEP: auto (default: with --nits and a --budget), 1 (with --nits, even without a budget), 0 (off).
+# Run 3's mean was $1.56/PR on a $5 budget (median $0.99): the cap and the spent share keep the mean under $3.
+SWEEP_SPENT_SHARE = 0.5
+SWEEP_MIN_USD = 0.30                 # less than this left for the sweep: skip it (a pass costs ~$0.15-0.40)
+SWEEP_RAISED_MAX = 60                # items already raised, listed per sweep pass
+SWEEP_SCHEMA = {"type": "object", "properties": {"nits": NITS_SCHEMA}, "required": ["nits"]}
+
+
+def sweep_mode():
+    v = os.environ.get("CRUCIBLE_NITS_SWEEP", "auto").strip().lower()
+    return "off" if v in ("0", "false", "no", "off") else "on" if v in ("1", "true", "yes", "on") else "auto"
+
+
+def sweep_cap_usd():
+    """USD the nit sweep of one review may spend on its passes (CRUCIBLE_NITS_SWEEP_USD, default 0.75)."""
+    try:
+        return max(0.0, float(os.environ.get("CRUCIBLE_NITS_SWEEP_USD", "0.75")))
+    except ValueError:
+        return 0.75
+
+
+def sweep_skip_reason(limit, spent, remaining):
+    """None when the sweep may run; else why not. `remaining` is what's left after the nit reserve (None: no limit)."""
+    mode = sweep_mode()
+    if mode == "off":
+        return "off (CRUCIBLE_NITS_SWEEP=0)"
+    if sweep_cap_usd() < SWEEP_MIN_USD:
+        return f"its cap (CRUCIBLE_NITS_SWEEP_USD) is under ${SWEEP_MIN_USD:.2f}"
+    if limit is None:
+        return None if mode == "on" else "no --budget (CRUCIBLE_NITS_SWEEP=1 runs it anyway)"
+    if spent > SWEEP_SPENT_SHARE * limit:
+        return f"the review already spent ${spent:.2f}, over {SWEEP_SPENT_SHARE:.0%} of its ${limit:.2f} budget"
+    if remaining is not None and remaining < SWEEP_MIN_USD:
+        return f"${remaining:.2f} left after the nit reserve, under ${SWEEP_MIN_USD:.2f}"
+    return None
+
+
+def sweep_prompt(project, sha, base, ch, raised, rules, all_files, docs=""):
+    """The nit-only second look at one pass: the same diff, the items already raised in its files, and the nit
+    categories. Asks only for what isn't on the list."""
+    listed = "\n".join(f"- {f['file']}:{f['line']} {f['title']}" for f in raised[:SWEEP_RAISED_MAX]) or "(nothing)"
+    if len(raised) > SWEEP_RAISED_MAX:
+        listed += f"\n- ... and {len(raised) - SWEEP_RAISED_MAX} more"
+    return textwrap.dedent(f"""\
+        You are a careful senior maintainer of {project.replace('__', '/')} taking a SECOND look at an outside
+        contributor's change before it is submitted upstream. The checkout is at the change's HEAD ({sha[:10]}); the
+        base is {base[:10]}. A first review of this diff already raised the items listed below. Find the smaller
+        real problems it did NOT raise. Read the whole enclosing function of each hunk, its callers and its tests
+        before you claim anything; an empty list is a good answer.
+
+        Already raised (don't repeat these, or restate them in other words):
+        {listed}
+
+        Look in particular at what a first look skims: each branch and edge of the new code (empty, None or zero,
+        a failure path, a second call, an off-by-one); every error path and what it reports; each name, comment and
+        docstring the change adds or leaves next to changed code; tests that don't check what they claim to.
+        """) + textwrap.dedent(NITS_NOTE) + textwrap.dedent(f"""
+        Report only nits (the "nits" list). Something that should block the PR goes in as a medium nit with its
+        evidence; it is checked like any other.
+
+        Project rules:
+        {rules}
+
+        All files in the change: {', '.join(all_files)}
+        This pass covers: {', '.join(ch['files'])}
+        Diff for this pass:
+        {ch['text']}
+        """) + (f"\n{docs}" if docs else "")
+
+
+def nit_sweep(sweep_chunks, raised, repo, model, budget, project, sha, base, rules, all_files, notes, fresh=False,
+              log=print):
+    """-> (nit candidates, {passes, failed, cost_usd}). One nit-only call per pass, in order, until `budget` (the
+    sweep's own SubBudget) runs out. `notes` holds each pass's docs/call-site note, so the second look sees what
+    the first did."""
+    out_nits, ran, failed = [], 0, 0
+    for ch, docs in zip(sweep_chunks, notes):
+        files = set(ch["files"])
+        prompt = sweep_prompt(project, sha, base, ch, [f for f in raised if f["file"] in files], rules, all_files, docs)
+        key = "s-" + hashlib.sha256((model + "\0" + prompt).encode()).hexdigest()[:32]
+        out = None if fresh else cache_hit(key, budget, "nit_sweep")
+        if out is None:
+            if budget.exhausted():
+                break
+            try:
+                out, _ = claude(prompt, model, SWEEP_SCHEMA, repo, budget, effort="medium", kind="nit_sweep")
+                cache_put(key, out)
+            except Failed as e:
+                failed += 1
+                log(f"  nit sweep pass failed: {str(e)[:160]}")
+                continue
+        ran += 1
+        for f in (out.get("nits") or [])[:NITS_MAX_PER_PASS]:
+            if f.get("severity") not in ("medium", "low"):
+                f["severity"] = "medium"
+            out_nits.append(dict(f, source="nit", sweep=True))
+    return out_nits, {"passes": ran, "of": len(sweep_chunks), "failed": failed, "cost_usd": round(budget.own, 4)}
+
+
 def nit_verify_prompt(batch):
     claims = "\n\n".join(
         f"[{i}] {f['title']} (at {f['file']}:{f['line']}, proposed severity {f['severity']})\n"
@@ -277,14 +382,16 @@ def nit_pool(nit_cands, findings, dlabel, measured):
     return [dict(f, source="nit") for f in nits if not (measured and length_only(f, dlabel))]
 
 
-def run_nits(nit_cands, findings, repo, sha, dctx, dlabel, measured, budget, authors, fresh=False, log=print):
+def run_nits(nit_cands, findings, repo, sha, dctx, dlabel, measured, budget, authors, fresh=False, log=print,
+             extra_cap=0.0):
     """-> the record fields of the nit tier. Nits that repeat a finding (kept or not) or each other are left out,
-    so is a description-length nit (the length check owns that), and the rest are verified under their own cap."""
+    so is a description-length nit (the length check owns that), and the rest are verified under their own cap
+    (plus `extra_cap`: the sweep's nits bring their own batches)."""
     nits = nit_pool(nit_cands, findings, dlabel, measured)
     for f in assign_ids(nits):
         f.setdefault("proposed_severity", f["severity"])
         f["id"] = "NIT" + f["id"][2:]              # CR-1a2b3c4d -> NIT-1a2b3c4d: never an answerable finding id
-    model, cap = nits_model(authors), nits_cap_usd()
+    model, cap = nits_model(authors), round(nits_cap_usd() + extra_cap, 4)
     sub = SubBudget(budget, cap)
     if nits:
         log(f"  verifying {len(nits)} nit(s) in batches of {NIT_BATCH} ({model}, read-only, cap ${cap:.2f})")
@@ -1121,6 +1228,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         full_texts = since_texts(files, digested)
         pass_hold = nits_reserve_usd(budget.limit) if nits else 0.0
         pass_budget = HeldBudget(budget, pass_hold) if pass_hold else budget
+        sweep_chunks, sweep_notes = [], []             # the reviewed passes, for the nit sweep's second look
         for i, ch in enumerate(chunks, 1):
             since = since_note(prev_sha, record["incremental"]["amended"], ch, full_texts, base) if prev_sha else ""
             docs = docs_note(repo, sha, dfiles if prev_sha else files, ch, files) if nits else ""
@@ -1151,6 +1259,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                                          "reason": HELD_PASS_REASON if held_pass else str(e)})
                     continue
             chunk_status.append({"files": ch["files"], "status": "reviewed", "cached": bool(hit)})
+            sweep_chunks.append(ch); sweep_notes.append(docs)
             summaries.append(out["summary"])
             for f in out["findings"][:10]:
                 f = cite_draft(dict(f, source="review"), dlabel, repo, tracked)
@@ -1264,8 +1373,26 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                         f["rechecked"] = tiers[0]
         kept.sort(key=lambda f: (SEV.index(f["severity"]), (f.get("verification") or {}).get("method") != "executed"))
         if nits:
+            extra = 0.0
+            hold = nits_reserve_usd(budget.limit, len(nit_pool(nit_cands, cands + carried + reverify, dlabel, measured)))
+            left = None if budget.limit is None else max(0.0, budget.remaining() - hold - NIT_BATCH_EST_USD)
+            skip = sweep_skip_reason(budget.limit, budget.spent, left) if sweep_chunks else "no pass was reviewed"
+            if skip:
+                record["nit_sweep"] = {"skipped": skip}
+            else:
+                # the sweep leaves the current nits' reserve and one more batch for its own nits
+                sub = SubBudget(HeldBudget(budget, hold + NIT_BATCH_EST_USD), sweep_cap_usd())
+                log(f"  nit sweep: a nit-only second look at {len(sweep_chunks)} pass(es) ({review_model}, "
+                    f"cap ${sweep_cap_usd():.2f})")
+                swept, record["nit_sweep"] = nit_sweep(sweep_chunks, cands + carried + reverify + nit_cands, repo,
+                                                       review_model, sub, project, sha, base, rules, all_files,
+                                                       sweep_notes, fresh, log)
+                new_swept = len(nit_pool(swept, cands + carried + reverify + nit_cands, dlabel, measured))
+                record["nit_sweep"]["nits"] = new_swept
+                extra = NIT_BATCH_EST_USD * -(-new_swept // NIT_BATCH)
+                nit_cands += swept
             record.update(run_nits(nit_cands, cands + carried + reverify, repo, sha, dctx, dlabel, measured, budget,
-                                   authors, fresh, log))
+                                   authors, fresh, log, extra))
         unsettled = [f for f in kept if verify_failed(f)]
         if unsettled:                                  # inserted first, so a failed review pass still leads
             why = (unsettled[0]["verification"].get("reason") or "no reason recorded")[:300]
@@ -1476,4 +1603,10 @@ def report(rev, ans, waivers=None):
         nd = rev.get("nits_dropped") or []
         L += ["", f"{len(nd)} nit(s) dropped or unverified · nit verification ${rev.get('cost_nits_usd', 0)} "
                   f"({rev.get('nits_model', '?')})"]
+        sw = rev.get("nit_sweep") or {}
+        if "passes" in sw:
+            L += [f"Nit sweep: second look at {sw['passes']} of {sw['of']} pass(es), {sw.get('nits', 0)} new nit(s) "
+                  f"sent to verification, ${sw['cost_usd']}"]
+        elif sw:
+            L += [f"Nit sweep skipped: {sw['skipped']}"]
     return "\n".join(L) + "\n"
