@@ -1543,15 +1543,17 @@ def tokens_note(rev):
             f"verify {tv['total']:,}{'; ' + ', '.join(extra) if extra else ''})")
 
 
-# A sentence that counts or grades the findings: a count or "only/no" word up to two words before "finding(s)" (or
-# "issue(s)" followed by found/raised/is/are), or "finding/issue is/are <severity>". Falsifiers (tests/test_core.py
-# TestReportSummary). Replaced: "The only finding is a low-severity PR description format point.", "The only issue is a
-# low-severity ...", "No issues found beyond style.", "Two findings are medium.". Kept: "The finding at line 42 is the
-# only real risk.", "The main finding is that the parser has no test.", "It fixes one issue in the parser.", and every
-# note crucible writes itself (verification failed, review pass failed, nothing changed since), which never go through it.
-_TALLY_RX = re.compile(r"(?i)\b(?:no|only|one|two|three|four|five|single|sole|\d+)\b(?:[\s-]+[a-z-]+){0,2}?[\s-]+"
-                       r"(?:findings?|issues? (?:found|raised|is|are|was|were))\b"
-                       r"|\b(?:findings?|issues?) (?:is|are|was|were) (?:a |an |all |both )?(?:critical|important|high|medium|low)\b")
+# A sentence that counts or grades the findings: a count or "only/no" word up to two words before "finding(s)",
+# "only/no" at most one word before "issue(s)" or "N issues found/raised" ("issue" alone is usually the PR's bug), or
+# "finding is/are <severity>". Falsifiers (tests/test_core.py TestReportSummary). Replaced: "The only finding is a
+# low-severity PR description format point.", "The only issue is a low-severity ...", "No issues found beyond style.",
+# "Two findings are medium.". Kept: "The finding at line 42 is the only real risk.", "The main finding is that the parser
+# has no test.", "It fixes one issue in the parser.", "At line 42 the issue is a missing null check.", "The original issue
+# was a low-memory crash.", and every note crucible writes itself (verification failed, review pass failed, nothing
+# changed since), which never go through it.
+_TALLY_RX = re.compile(r"(?i)\b(?:no|only|one|two|three|four|five|single|sole|\d+)\b(?:[\s-]+[a-z-]+){0,2}?[\s-]+findings?\b"
+                       r"|\b(?:no|only|single|sole)\b(?:[\s-]+[a-z-]+)??[\s-]+issues?\b|\b(?:no|one|two|three|\d+) issues? (?:found|raised)\b"
+                       r"|\bfindings? (?:is|are|was|were) (?:a |an |all |both )?(?:critical|important|high|medium|low)(?:-severity)?\b(?!-)")
 
 
 def reviewer_summary(summaries, kept):

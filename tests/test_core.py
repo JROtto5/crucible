@@ -3401,7 +3401,7 @@ class TestDescriptionHeuristics(unittest.TestCase):
                      "It passes the raw buffer to the worker instead of a copy.", "They pass through unchanged.",
                      "Refactor the loader (1/2).", "Split the loader (2/2).",
                      "Rendering fails on main thread when the canvas is detached.",
-                     "The recursion fails on the base case when n is 0."):
+                     "The recursion fails on the base case when n is 0.", "Add tests for the cache key (2/2)."):
             self.assertFalse(S.has_testing_evidence(line), line)
 
     def test_m_no_evidence_is_still_flagged(self):
@@ -7054,7 +7054,9 @@ class TestReportSummary(unittest.TestCase):
     def test_summary_without_a_tally_is_untouched(self):
         for text in ("The parser drops one token per line, so `split()` is the right call.",
                      "The finding at line 42 is the only real risk.", "The main finding is that the parser has no test.",
-                     "It fixes one issue in the parser.", "The issue at line 42 is the only real risk.", ""):
+                     "It fixes one issue in the parser.", "The issue at line 42 is the only real risk.",
+                     "At line 42 the issue is a missing null check.", "The original issue was a low-memory crash on Android.",
+                     ""):
             self.assertEqual(V.reviewer_summary([text] if text else [], [{"severity": "low"}]), text)
 
 if __name__ == "__main__":
