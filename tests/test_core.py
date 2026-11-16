@@ -3162,6 +3162,22 @@ class TestRerunSameCommit(unittest.TestCase):
         self.assertIsNone(V.keep_draft(d, repo, None, V.review_inputs(repo, "b")))
         self.assertFalse(os.path.exists(os.path.join(d, "drafts")))
 
+    def test_keep_draft_rewrites_a_truncated_copy_and_skips_a_draft_edited_since_hashing(self):
+        repo, d = make_repo({"a.js": "x\n"}), tempfile.mkdtemp()
+        p = os.path.join(repo, "PR_DRAFT.md")
+        open(p, "w").write("Fixes #3 by clamping.\n")
+        inputs = V.review_inputs(repo, "b")
+        out = os.path.join(d, "drafts", inputs["draft_sha"] + ".md")
+        os.makedirs(os.path.dirname(out))
+        open(out, "w").write("Fixes #3")                             # left by a write cut short
+        self.assertEqual(V.keep_draft(d, repo, None, inputs), out)
+        self.assertEqual(open(out).read(), "Fixes #3 by clamping.\n")
+        self.assertEqual(os.listdir(os.path.dirname(out)), [os.path.basename(out)])   # no .tmp left behind
+        open(p, "w").write("Fixes #3 by clamping, edited.\n")
+        os.remove(out)
+        self.assertIsNone(V.keep_draft(d, repo, None, inputs))      # not the text that was hashed
+        self.assertFalse(os.path.exists(out))
+
     def test_unreadable_draft_is_a_clean_failure(self):
         repo = make_repo({"a.js": "x\n"})
         with self.assertRaises(U.Failed):
@@ -3202,6 +3218,15 @@ class TestRerunSameCommit(unittest.TestCase):
             self.assertEqual(open(os.path.join(d, r["draft_copy"])).read(), "Bumps a to 2 because the spec says so.\n")
             run(fresh=True)                                         # --fresh alone redoes it and skips the cache
             self.assertEqual(len(seen), 3)
+            shutil.rmtree(os.path.join(d, "drafts"))
+            open(os.path.join(d, "drafts"), "w").close()            # a file in the way: keep_draft raises OSError
+            logs = []
+            V.run_review(repo, "main", offline=True, skip_checks=True, fresh=True, log=logs.append)
+            r = U.read_json(os.path.join(d, "review.json"))
+            self.assertEqual(r["status"], "done")                   # a replay aid never fails the review
+            self.assertNotIn("draft_copy", r)
+            self.assertTrue(any("couldn't keep a copy of the draft" in l for l in logs), logs)
+            os.remove(os.path.join(d, "drafts"))
             rp = os.path.join(d, "review.json")
             r = U.read_json(rp); r.pop("inputs"); U.write_json(rp, r)
             run()                                                   # a review from before inputs were recorded: redone
@@ -5170,6 +5195,33 @@ class TestModelReplay(unittest.TestCase):
             want = hashlib.sha256(R.submitted_text("Fixes #3.\n").encode()).hexdigest()[:16]
             self.assertEqual(M.draft_still_matches({"inputs": {"draft": path, "draft_sha": want}}), path)
             self.assertIsNone(M.draft_still_matches({"inputs": {"draft": path, "draft_sha": "0" * 16}}))
+            copy = os.path.join(tmp, "drafts", want + ".md")
+            os.makedirs(os.path.dirname(copy))
+            with open(copy, "w") as fh:
+                fh.write("Fixes #3.\n")
+            with open(path, "w") as fh:
+                fh.write("Fixes #3 and #4.\n")                     # edited after the round
+            r = {"inputs": {"draft": path, "draft_sha": want}, "draft_copy": copy}
+            self.assertEqual(M.draft_still_matches(r), copy)        # the kept copy is the judged text
+            os.remove(path)
+            self.assertEqual(M.draft_still_matches(r), copy)
+            with open(copy, "w") as fh:
+                fh.write("tampered\n")
+            self.assertIsNone(M.draft_still_matches(r))
+
+    def test_rounds_carry_the_kept_draft_copy(self):
+        from crucible import modelreplay as M
+        with tempfile.TemporaryDirectory() as root:
+            d = os.path.join(root, "o__p", "s" * 40)
+            os.makedirs(d)
+            U.write_json(os.path.join(d, "review.json"), {
+                "status": "done", "review_model": "m", "sha": "s" * 40, "base": "b", "coverage": {"complete": True},
+                "inputs": {"draft": None, "draft_sha": "h"}, "draft_copy": os.path.join("drafts", "h.md"),
+                "findings": [dict(self.L, id="F1", source="review")]})
+            U.write_json(os.path.join(d, "answers.json"), {"F1": {"disposition": "fixed"}})
+            got = M.rounds(root, "m")
+            self.assertEqual(len(got), 1, got)
+            self.assertEqual(got[0]["draft_copy"], os.path.join(d, "drafts", "h.md"))
 
     def test_run_pairs_arms_and_leaves_out_a_round_any_arm_failed(self):
         from crucible import modelreplay as M

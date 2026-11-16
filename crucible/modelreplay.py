@@ -111,7 +111,8 @@ def rounds(root, model, include_self=False, skipped=None):
                 skipped[INCOMPLETE] = skipped.get(INCOMPLETE, 0) + 1
         elif labelled:
             out.append({"repo": repo, "sha": rev["sha"], "base": rev["base"], "started": rev.get("started") or "",
-                        "inputs": rev.get("inputs") or {}, "labelled": labelled})
+                        "inputs": rev.get("inputs") or {}, "labelled": labelled,
+                        "draft_copy": os.path.join(d, rev["draft_copy"]) if rev.get("draft_copy") else None})
     return sorted(out, key=lambda r: r["started"], reverse=True)
 
 
@@ -174,14 +175,14 @@ def _prepare(clone, r, tmp, label):
 
 
 def draft_still_matches(r):
-    """The stored draft's path, when its submitted text still hashes to what the round judged."""
-    from . import readiness
-    import hashlib
-    path, want = r["inputs"].get("draft"), r["inputs"].get("draft_sha")
-    if not (path and want and os.path.exists(path)):
-        return None
-    text = readiness.submitted_text(open(path, errors="replace").read())
-    return path if hashlib.sha256(text.encode()).hexdigest()[:16] == want else None
+    """A path to the text the round judged: the stored draft while its submitted text still hashes to draft_sha,
+    else the review's kept copy (drafts/<draft_sha>.md) under the same check."""
+    from .review import draft_hash
+    want = r["inputs"].get("draft_sha")
+    for path in (r["inputs"].get("draft"), r.get("draft_copy")):
+        if want and path and os.path.exists(path) and draft_hash(open(path, errors="replace").read()) == want:
+            return path
+    return None
 
 
 def run_arm(clone, r, model, tmp, budget=None, log=print):

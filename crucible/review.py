@@ -1044,10 +1044,9 @@ def review_inputs(repo, base, draft=None, no_exec=False, nits=False):
         path, text = readiness.find_draft(repo, draft)
     except OSError as e:
         raise Failed(f"can't read the PR draft: {e}")
-    # only the submitted part is judged, so editing the author's notes alone keeps the verdict
-    text = readiness.submitted_text(text)
+    # only the submitted part is judged (draft_hash), so editing the author's notes alone keeps the verdict
     return {"base": base, "draft": os.path.abspath(path) if path else None,
-            "draft_sha": hashlib.sha256(text.encode()).hexdigest()[:16] if path else None,
+            "draft_sha": draft_hash(text) if path else None,
             **({"no_exec": True} if no_exec else {}), **({"nits": True} if nits else {})}
 
 
@@ -1055,15 +1054,27 @@ def keep_draft(d, repo, draft, inputs):
     """Copy the judged draft to <review dir>/drafts/<draft_sha>.md, so a stored verdict can be replayed against the
     exact text it judged (the hash alone can't be; DRG-133 had to rebuild drafts from mtimes and GitHub edit history).
     Keyed by hash, so re-reviews of the same commit with an edited draft keep every version. -> the copy's path."""
-    if not inputs.get("draft_sha"):
+    want = inputs.get("draft_sha")
+    if not want:
         return None
-    out = os.path.join(d, "drafts", inputs["draft_sha"] + ".md")
-    if not os.path.exists(out):
-        _, text = readiness.find_draft(repo, draft)
-        os.makedirs(os.path.dirname(out), exist_ok=True)
-        with open(out, "w") as fh:
-            fh.write(text)
+    out = os.path.join(d, "drafts", want + ".md")
+    if os.path.exists(out) and draft_hash(open(out, errors="replace").read()) == want:
+        return out
+    _, text = readiness.find_draft(repo, draft)
+    if draft_hash(text) != want:                         # edited since review_inputs hashed it: not the judged text
+        return None
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    # temp + rename: a write cut short must not leave a truncated copy that a later run would reuse
+    tmp = out + ".tmp"
+    with open(tmp, "w") as fh:
+        fh.write(text)
+    os.replace(tmp, out)
     return out
+
+
+def draft_hash(text):
+    """The draft_sha of a draft's full text: only the submitted part counts."""
+    return hashlib.sha256(readiness.submitted_text(text).encode()).hexdigest()[:16]
 
 
 def verify_failed(f):
