@@ -363,9 +363,11 @@ def _claude_once(prompt, model, schema, cwd, budget, tools, effort, timeout, kin
         cmd += ["--tools", ""]
     if budget and budget.remaining() is not None:
         cmd += ["--max-budget-usd", f"{max(budget.remaining(), 0.01):.2f}"]
+    # UTF-8 both ways whatever the locale: the CLI speaks UTF-8 JSON, and drafts carry "→"/CJK
     # prompt goes on stdin: --allowedTools is variadic and would swallow a trailing positional prompt
     try:
-        r = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, input=prompt, timeout=timeout)
+        r = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", input=prompt, timeout=timeout)
     except subprocess.TimeoutExpired:
         if budget:
             budget.meter(None, kind, bool(tools))      # it may well have used tokens; unknown is not zero

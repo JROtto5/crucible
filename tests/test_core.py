@@ -1,4 +1,4 @@
-import atexit, json, os, re, shutil, subprocess, sys, tempfile, time, unittest
+import atexit, json, os, re, shlex, shutil, subprocess, sys, tempfile, time, unittest
 from unittest import mock as _mock  # noqa: F401  (makes unittest.mock importable as an attribute under any test order)
 
 # Every temp dir the suite makes (fixture repos, clones, homes, and those of crucible subprocesses through TMPDIR)
@@ -3209,6 +3209,39 @@ class TestRerunSameCommit(unittest.TestCase):
         txt = open(os.path.join(repo, "PR_DRAFT.polished.md"), encoding="utf-8").read()
         self.assertIn("Fixes a \u2192 b.", txt)
         self.assertTrue(txt.rstrip().endswith(notes), txt)
+
+    def _ascii_locale_run(self, code, *args, path=None):
+        env = {**os.environ, "LC_ALL": "C", "PYTHONCOERCECLOCALE": "0", "PYTHONUTF8": "0",
+               "PYTHONPATH": os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}
+        if path:
+            env["PATH"] = path + os.pathsep + env["PATH"]
+        return subprocess.run([sys.executable, "-X", "utf8=0", "-c", code, *args], env=env, capture_output=True, text=True)
+
+    def test_model_call_speaks_utf8_under_a_non_utf8_locale(self):
+        bindir = tempfile.mkdtemp()
+        seen = os.path.join(bindir, "stdin")
+        stub = os.path.join(bindir, "claude")
+        out = '{"subtype":"success","structured_output":{"t":"a \u2192 b"},"total_cost_usd":0}'
+        open(stub, "wb").write(f"#!/bin/sh\ncat > {shlex.quote(seen)}\nprintf '%s' '{out}'\n".encode("utf-8"))
+        os.chmod(stub, 0o755)
+        code = ("import sys\nfrom crucible import util as U\n"
+                "out, _ = U.claude('draft: a \\u2192 b', 'm', {}, sys.argv[1], tools=None)\n"
+                "sys.exit(0 if out == {'t': 'a \\u2192 b'} else repr(out))\n")
+        r = self._ascii_locale_run(code, bindir, path=bindir)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(open(seen, "rb").read(), "draft: a \u2192 b".encode("utf-8"))
+
+    def test_prep_writes_utf8_under_a_non_utf8_locale(self):
+        repo, d = make_repo({"a.js": "1\n"}), tempfile.mkdtemp()
+        open(os.path.join(repo, "PR_DRAFT.md"), "w", encoding="utf-8").write("# Fix a\n\nFixes a \u2192 b.\n")
+        code = ("import sys\nfrom crucible import assist as A\n"
+                "A.load = lambda repo: ('t__prep', 'f' * 40, sys.argv[2], None, {})\n"
+                "A.claude = lambda *a, **k: ({'explain': ['a \\u2192 b, \\u6f22\\u5b57'], 'questions': []}, 0.0)\n"
+                "A.run_prep(sys.argv[1], log=lambda *_: None)\n")
+        r = self._ascii_locale_run(code, repo, d)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for p in (os.path.join(repo, "PREP.md"), os.path.join(d, "PREP.md")):
+            self.assertIn("- a \u2192 b, \u6f22\u5b57", open(p, encoding="utf-8").read())
 
     def test_unreadable_draft_is_a_clean_failure(self):
         repo = make_repo({"a.js": "x\n"})

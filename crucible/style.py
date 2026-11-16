@@ -266,7 +266,7 @@ def learn_style(repo, slug, project, n=20, model="claude-sonnet-5-5", budget_usd
          f"- avoid: {conv['avoid']}", "", "## Example PR bodies", ""]
     for e in m["examples"]:
         L += [f"### [{e['title']}]({e['url']})", "", "> " + e["body"][:700].replace("\n", "\n> "), ""]
-    open(os.path.join(project_dir(project), "STYLE.md"), "w").write("\n".join(L) + "\n")
+    open(os.path.join(project_dir(project), "STYLE.md"), "w", encoding="utf-8").write("\n".join(L) + "\n")
     log(f"wrote STYLE.md ({len(sample)} PRs, body median {b['median_words']} words) · ${m['cost_usd']}")
     return m
 
@@ -452,7 +452,7 @@ def polish(repo, project, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-
     draft = (f"Title: {parts['title']}\n\n" if parts["title"] else "") + parts["body"]
     if not draft.strip():
         raise SystemExit("no PR_DRAFT.md to polish")
-    style_md = open(os.path.join(project_dir(project), "STYLE.md")).read() if os.path.exists(os.path.join(project_dir(project), "STYLE.md")) \
+    style_md = open(os.path.join(project_dir(project), "STYLE.md"), encoding="utf-8", errors="replace").read() if os.path.exists(os.path.join(project_dir(project), "STYLE.md")) \
         else "(no STYLE.md: run `crucible learn` first; fall back to terse, factual, maintainer-like prose)"
     tpl, heads = template_headings(repo)
     out, cost = claude(textwrap.dedent(f"""\
