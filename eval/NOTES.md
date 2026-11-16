@@ -924,3 +924,59 @@ and silenced gimmes, which removed `volume_spike_ratio` (default 2.0) while addi
 optional parameter with the same default as a removed one is a rename, not a knob. Sweeps re-run after each round:
 0 of 210, R4 gimmes only, eval cases nit-py-unwired-knob only.
 Spend this shift: $2.83 local eval + $3.12 self-review rounds 1-3.
+
+### 2026-11-16 · one flaw at several sites (`also_at`), focus items 1 and 3, local A/B + full eval
+
+Read first ($0, the stored judge output on blaze-3, `runs/r4/scoring/results.details.json` sha256 784ab0cf9d42…, joined
+to `golden/<pr>.json` by index): the api-architecture misses left after the plumbing-gap change (above) are one-offs
+(return shape, validation contract, a removed feature); none is "a second pattern beside the repo's", which the nits
+paragraph already names. So this shift went to the reliability misses (36 of 58), where one shape repeats:
+PaulStSmith_figlet-comment-generator_32 has six golden issues, one per publish workflow, for one flaw ("paths: narrowed
+to source files, so a version bump no longer triggers the release"). R3 and R4 both found it and kept **one** finding
+at one workflow whose text said "all six publish workflows", and each run matched 1 of the 6.
+
+Across all categories R4 missed 184 golden TPs. For each one, I checked whether a kept candidate in another file named
+that file in its message: **8 golden issues on 4 PRs** (figlet 5, statswales_626 #6 consumer-api.ts, fastimage_165 #24
+exif.rb, node-postgres_3650 #2 pg-pool diagnostics.js). Two more on agents-config are siblings of a hit, but nothing
+named them. The reviewer knew the sites and wrote one comment, and ReviewBench, like a reader of inline comments,
+matches by file and line.
+
+Change (only with `--nits`; the no-nits prompt and schemas are byte-identical): findings and nits may carry `also_at`,
+the other sites of the same flaw as "path:line". The nits paragraph now says to write a repeated flaw once and list the
+other sites (it used to say "give each site its own nit", in the security list only). The $0 filter keeps a site only if
+its file is in the change and the line exists at HEAD. The verifier gets "the same flaw is also claimed at …" and returns
+`sites_hold`. Only confirmed sites are kept. A finding with no verdict, a transcribed verdict or a dropped verdict keeps
+no sites (fail closed). A verifier prompt for a claim without sites is unchanged, so cached verdicts still match. The
+ReviewBench adapter writes one row per confirmed site ("… (same flaw as a:8): …"), skipping a site another kept item
+already covers. The eval scorer counts the sites the same way.
+
+New build case `nit-py-sibling-tmp`: three sibling exporters each gain the same temp-file-then-rename write. Each leaves
+a partial `.tmp` behind when the write raises. This is the sibling-site shape in a different form (not a copy of a
+test-set PR). The first fixture version wrote `path + ".tmp"`, which breaks the `pathlib.Path` callers the base
+accepted: an unplanted real bug that "after" rated important in 2 of 3 rounds (counted as false blocking). The fixture
+now uses `f"{path}.tmp"`, and both arms were re-run. `crucible eval --nits --no-write --budget 5 --cases
+nit-py-sibling-tmp`, 3 rounds per arm, side by side:
+
+| | before (ef1bbe9 + case + scorer) | after |
+|---|---|---|
+| planted issues found | 3/3, 3/3, 3/3 | 3/3, 3/3, 3/3 |
+| false blocking | 0 | 0 |
+| nits kept / dropped | 10 / 13 | 13 / 4 |
+| $ (3 rounds) | 1.71 | 1.37 |
+
+Reading: no recall difference on this case, because the reviewer already split the three sites "before". It shows the
+mechanism working (in kept reviews, every csv_out.py item carried `json_out.py`/`ndjson_out.py` sites, all confirmed by
+the verifier) and no loss. Whether it recovers figlet's five waits for ReviewBench run 5. Verification got cheaper here
+because sibling sites are checked inside one claim.
+
+Full `crucible eval --nits --budget 1.5` (26 cases, after only; last nits baseline is 11-12's R3 run, 20 cases): recall
+**0.933** (14/15; build 12/13, holdout 2/2), any severity 1.0, false blocking 0 (clean and nit cases), nit cases 14/15
+planted, $8.73. The blocking miss is js-refcount, rated medium as in every run since 11-04. The nit miss was
+nit-py-maintainability's missed-reuse (4/4 in every earlier run). Rerun 3× after: 4/4, 4/4, 4/4, 0 false blocking
+($1.17), so it was one-round variance. No recall or false-blocking measure is worse than R3's run (0.929, 0).
+
+Risk on ReviewBench: a confirmed site is one more candidate, so a wrong confirmation costs precision once per site. The
+verifier's site check is what holds that; nit precision in run 4 was 95.5%. Count `same flaw as` rows in run 5's judged
+candidates. Not covered: a re-run of a held (budget-refused) finding loses its sites, since they were never confirmed.
+Spend this shift: $19.74 ($8.73 full eval, $8.63 case A/B incl. the discarded fixture, $1.17 maintainability re-runs,
+$1.21 self-review 1; later self-review rounds below).

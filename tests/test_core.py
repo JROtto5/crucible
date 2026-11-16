@@ -6377,7 +6377,7 @@ class TestNitTier(unittest.TestCase):
 
     def _run(self, nits_out, verdicts=None, nits=True, env=None, fail_batch=False, budget=None, findings=1, verify_cost=0.0,
              review_cost=0.0, verify_error=None, passes=1, repo_files=None, sweep_out=(), sweep_cost=0.0,
-             sites_hold=()):
+             sites_hold=(), finding_sites=None):
         """-> (review.json, calls). `passes` > 1 splits the diff into that many review passes. The fake reviewer returns one important finding and `nits_out` as nits; the nit
         verifier answers `verdicts` (index -> (keep, confidence)), default keep/high for every nit."""
         from unittest import mock
@@ -6390,7 +6390,9 @@ class TestNitTier(unittest.TestCase):
             if budget and budget.exhausted():                 # what the real claude() does
                 raise U.Failed("budget exhausted")
             if "findings" in schema["properties"]:
-                out = {"summary": "s", "findings": [self._f("division by zero in f", 1, "important")] +
+                first = dict(self._f("division by zero in f", 1, "important"),
+                             **({"also_at": list(finding_sites)} if finding_sites else {}))
+                out = {"summary": "s", "findings": [first] +
                        [self._f(w, 3 + 2 * i, "medium") for i, w in
                         enumerate(["unclosed socket in g", "README flag renamed", "retry loop never sleeps", "lock held across await", "token logged at info", "timeout default changed", "empty list crashes max"][:findings - 1])]}
                 if "nits" in schema["properties"]:
@@ -6417,7 +6419,7 @@ class TestNitTier(unittest.TestCase):
             if verify_error:
                 raise U.Failed(verify_error)
             return {"keep": True, "severity": "important", "method": "read", "actions": "", "evidence": "e",
-                    "confidence": "high"}, 0.02
+                    "confidence": "high", **({"sites_hold": list(sites_hold)} if "sites_hold" in str(schema) else {})}, 0.02
         home = tempfile.mkdtemp(prefix="crucible-home-")
         real_chunk = V.diff_mod.chunk
 
@@ -6491,6 +6493,28 @@ class TestNitTier(unittest.TestCase):
         r, _ = self._run([nit], repo_files=files, sites_hold=[])
         self.assertNotIn("also_at", r["nits"][0])                     # the nit stands; unconfirmed sites go
 
+    def test_finding_sites_end_to_end_through_review(self):
+        """The finding tier: the $0 filter on cands, the verifier's schema and sites_hold, the fail-closed branch, and
+        report.md for a finding and a nit."""
+        files = ({"a.py": "x = 1\n", "b.py": "y = 1\n"},
+                 {"a.py": "x = 2\n" + "".join(f"y{i} = {i}\n" for i in range(30)), "b.py": "y = 2\nw = 3\n"})
+        sites = ["b.py:2", "b.py:1", "c.py:1", "b.py:50"]
+        r, calls = self._run([dict(self._f("a nit", 3), also_at=["b.py:1"])], repo_files=files, finding_sites=sites,
+                             sites_hold=["b.py:2", "b.py:1"])
+        fv = [c for c in calls if c["kind"] in ("verify", "verify_cheap")]
+        self.assertTrue(fv and all(c["schema"] is V.VERIFY_SITES_SCHEMA for c in fv))
+        self.assertIn("also claimed at: b.py:2, b.py:1.", fv[0]["prompt"])          # c.py and b.py:50 never sent
+        f = next(f for f in r["findings"] if f["line"] == 1)
+        self.assertEqual(f["also_at"], ["b.py:2", "b.py:1"])
+        md = V.report(r, {})
+        self.assertIn("- also at (verified): `b.py:2`, `b.py:1`", md)
+        self.assertIn("Also at: `b.py:1`.", md)
+        self.assertNotIn("Also at:", V.report(dict(r, nits=[{k: v for k, v in r["nits"][0].items() if k != "also_at"}]), {}))
+        r, _ = self._run([], repo_files=files, finding_sites=sites, sites_hold=["b.py:2"], verify_error="usage limit")
+        f = next(f for f in r["findings"] if f["line"] == 1)
+        self.assertEqual(f["verification"]["status"], "unverified")
+        self.assertNotIn("also_at", f)                                               # kept, but no unchecked site
+
     def test_finding_sites_go_through_the_verifier_and_fail_closed(self):
         from unittest import mock
         f = {"severity": "medium", "file": "a.yml", "line": 8, "title": "t", "wrong_if": "w", "also_at": ["b.yml:8"]}
@@ -6530,7 +6554,7 @@ class TestNitTier(unittest.TestCase):
         r, calls = self._run([self._f("a nit", 2)])
         prompt = next(c["prompt"] for c in calls if c["kind"] == "review")
         self.assertIn("Security hardening gaps that miss the findings' bar", prompt)
-        self.assertIn('list every other site in\n"also_at" as "path:line"', prompt)
+        self.assertIn('"also_at" as "path:line"', prompt)
         _, calls = self._run([self._f("a nit", 2)], nits=None)
         self.assertNotIn("hardening", calls[0]["prompt"])           # the findings' bar and the base prompt stay
 
