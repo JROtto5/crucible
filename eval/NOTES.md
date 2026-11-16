@@ -854,7 +854,7 @@ Baseline for b06cb2a..9451ca3 (prose results count as testing evidence). Populat
   matched by review.json mtime to the PR body version in effect then, taken from GitHub's `userContentEdits`
   (13:45Z 315 words, 15:23Z 88 words, 16:15Z 98 words). The old rule fails all three versions, which matches the
   fires; the new rule passes all three ("The new packing test fails on master."). **k = 0 of 6 still fire.**
-  The other 14 (11 bvh #961b/#981 rounds before any PR opened, 2 MangoHud, 2 three.js) have no recoverable text.
+  The other 14 (10 bvh #961b/#981 rounds before any PR opened, 2 MangoHud, 2 three.js) have no recoverable text.
   Caveat: a body version is the nearest posted text, not the byte-exact draft; review.json carries no timestamp,
   so file mtime stands in for review time.
 - Recovery attempt for the rest (2026-11-16, $0): **none recoverable byte-exact.** Searched
@@ -866,7 +866,8 @@ Baseline for b06cb2a..9451ca3 (prose results count as testing evidence). Populat
   text a fired review saw. answers-review1/2 say the review1-2 fires were on drafts with no test line at all, so
   those were true positives under both rules. MangoHud/three.js drafts weren't searched (bvh only, per the
   commitment). DRG-134 stores the judged PR text from here on, so this gap doesn't recur.
-  Count note: "the other 14" above lists 11 + 2 + 2 = 15; 20 − 6 = 14, so one of the three groups is off by one.
+  Count note (fixed 2026-11-16): "11 bvh" above should read 10. All 6 matched fires are bvh (bvh-981, bvh-961, 4 ×
+  #969), so bvh's 16 − 6 = 10, and 10 + 2 MangoHud + 2 three.js = 14 = 20 − 6.
 
 ### 2026-11-16 · api-architecture (focus item 1): new optional parameters no real call passes, local A/B
 
