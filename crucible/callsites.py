@@ -7,6 +7,11 @@ diff never shows, so the prompt's "grep for its callers" is often skipped. This 
 signature at the base and at HEAD, and for every change an existing caller could feel, lists the call and import
 lines outside the change's own added lines. Appending an optional parameter is not listed. The reviewer still judges
 each line (a caller may pass only what still works); nothing here is a finding.
+
+A new optional parameter breaks no caller, but run 4 missed the plumbing gap it can leave: `check_staleness` gained
+`volume_floor=10` and its one real caller, which takes its other arguments from the config, never passes it, so the
+new threshold can't be tuned (gimmes #468). `unpassed` lists such parameters when no call outside the tests passes
+them (Python and JS/TS only, where the parameter model knows positions and keywords).
 """
 import os
 import re
@@ -206,9 +211,23 @@ def breaks(old, new, ext):
     return why
 
 
-def changed_contracts(files, read_old, read_new):
+def new_optional(old, new):
+    """[(name, default, index)] parameters new has and old hadn't, each optional (a default or "?"); index is the
+    position a positional caller fills it at, None for a keyword-only one. *args and **kw are not knobs."""
+    O, N = _param_list(old[0]), _param_list(new[0])
+    on, out, pos = {p[0] for p in O}, [], 0
+    for n, k, d, _keys in N:
+        if k == "pos":
+            pos += 1
+        if n not in on and k != "star" and d is not None and not n.startswith("("):
+            out.append((n, d, pos - 1 if k == "pos" else None))
+    return out
+
+
+def changed_contracts(files, read_old, read_new, knobs=None):
     """{name: (path, reason)} for definitions in the change's code files whose contract a caller could feel.
-    read_old(path)/read_new(path) -> the file at the base / HEAD ("" when absent)."""
+    read_old(path)/read_new(path) -> the file at the base / HEAD ("" when absent). knobs, when a dict, is filled with
+    {name: (path, new_optional(...))} for touched Python/JS definitions that gained an optional parameter."""
     out, new_defs = {}, {}
     code = [f for f in files if not f.get("binary") and CODE_EXT_RX.search(f.get("path") or "")]
     for f in code:
@@ -247,6 +266,8 @@ def changed_contracts(files, read_old, read_new):
                 continue
             if len(old_sigs[name]) != 1 or len(new_sigs[name]) != 1:
                 continue                         # overloads or same-named methods: can't pair them up
+            if knobs is not None and ext in PY_JS and (opt := new_optional(old_sigs[name][0], new_sigs[name][0])):
+                knobs.setdefault(name, (path, opt))
             why = breaks(old_sigs[name][0], new_sigs[name][0], ext)
             if why:
                 out.setdefault(name, (path, "; ".join(why)))
@@ -312,6 +333,100 @@ def sites(repo, contracts, changed_lines=None):
             out.append(f"({label}: {', '.join(group[:20])}{f' and {len(group) - 20} more' if len(group) > 20 else ''})")
             named += group[:20]
     return out, {n: contracts[n] for n in named}
+
+
+MAX_KNOB_NAMES = 6
+MAX_KNOB_CALLS = 4        # call lines shown per name
+CALL_LINES = 30           # a call's argument list is read for at most this many lines
+
+
+def _call_args(text, line_no, name):
+    """The top-level arguments of the first call to name on 1-based line_no of text, or None when there is none."""
+    lines = text.split("\n")
+    if not 0 < line_no <= len(lines):
+        return None
+    m = re.search(rf"(?<![\w$]){re.escape(name)}\s*(?:<[^()]*>)?\s*\(", lines[line_no - 1])
+    if not m:
+        return None
+    buf = "\n".join(lines[line_no - 1:line_no - 1 + CALL_LINES])
+    depth, q = 0, None
+    for j in range(m.end() - 1, len(buf)):
+        c = buf[j]
+        if q:
+            q = None if c == q else q
+        elif c in "\"'`":
+            q = c
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+            if not depth:
+                return _split_top(buf[m.end():j])
+    return None
+
+
+def _passes(args, param, index):
+    """Whether a call with these arguments may set param: by keyword, by position, or through a spread we can't see."""
+    kw = re.compile(rf"^{re.escape(param)}\s*=(?!=)|^\{{.*(?<![\w$]){re.escape(param)}(?![\w$])", re.S)
+    if any(a.startswith("*") or a.startswith("...") or kw.search(a) for a in args):
+        return True
+    positional = [a for a in args if not re.match(r"^\w+\s*=(?!=)", a)]
+    return index is not None and len(positional) > index
+
+
+def unpassed(repo, knobs):
+    """-> ["path:line: text"] the non-test calls of each name in knobs that pass none of its new optional
+    parameters, and {name: (path, [(param, default)])} for those names; a name any non-test call sets a new
+    parameter on, or with no non-test call at all, is dropped. Calls the PR added count: they are the plumbing."""
+    if not knobs:
+        return [], {}
+    texts, calls = {}, {}
+    names = sorted(knobs, key=lambda n: (-len(n), n))[:MAX_SEARCH]
+    for p, no, t in _grep(repo, names, CODE_SPECS):
+        if TEST_PATH_RX.search(p) or COMMENT_RX.match(t):
+            continue
+        rx = DEF_RX.get(os.path.splitext(p)[1].lower())
+        m = rx.match(t) if rx else None
+        defined = {g for g in (m.groups() if m else ()) if g}
+        for n in set(re.findall(r"[\w$]+", t)) & set(names) - defined:
+            if p not in texts:
+                try:
+                    with open(os.path.join(repo, p), encoding="utf-8", errors="replace") as fh:
+                        texts[p] = fh.read()
+                except OSError:
+                    texts[p] = ""
+            args = _call_args(texts[p], no, n)
+            if args is not None:
+                calls.setdefault(n, []).append((p, no, t, args))
+    out, named = [], {}
+    for n in names:
+        path, opt = knobs[n]
+        cs = calls.get(n)
+        if not cs or any(_passes(args, prm, idx) for _p, _no, _t, args in cs for prm, _d, idx in opt):
+            continue
+        if len(named) >= MAX_KNOB_NAMES:
+            break
+        named[n] = (path, [(prm, d) for prm, d, _i in opt])
+        for p, no, t, _a in cs[:MAX_KNOB_CALLS]:
+            t = t.strip()
+            out.append(f"{p}:{no}: {t[:LINE_CHARS] + (' ...' if len(t) > LINE_CHARS else '')}  [{n}]")
+        if len(cs) > MAX_KNOB_CALLS:
+            out.append(f"({len(cs) - MAX_KNOB_CALLS} more calls of {n}, none passing it)")
+    return out, named
+
+
+def knobs_note(lines, names):
+    """The prompt section for unpassed(), or "" when every new optional parameter is passed somewhere."""
+    if not lines:
+        return ""
+    head = "; ".join(f"{n} in {p} gained " + ", ".join(f"{prm} (default {d})" for prm, d in opt)
+                     for n, (p, opt) in names.items())
+    return ("New optional parameters that no call outside the tests passes, so every real call runs with the "
+            "default: " + head + ".\nThe calls, from a whole-word search of the checkout:\n" + "\n".join(lines) +
+            "\nOpen each call. If the value is meant to be set (the PR or the docs call it configurable or a "
+            "threshold to tune, or the call's other arguments come from a config object, settings or a CLI option), "
+            "the missing plumbing is a nit at that call or at the config that lacks the field, naming where the "
+            "sibling arguments come from. If the default is right for every caller, say nothing.\n")
 
 
 def note(lines, names):

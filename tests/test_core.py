@@ -7110,6 +7110,50 @@ class TestCallSites(unittest.TestCase):
         lines, _ = callsites.sites(d, c)
         self.assertIn("c.py:1:", "\n".join(lines))
 
+    def test_a_new_optional_parameter_no_real_call_passes_is_listed(self):
+        # run 4 / gimmes #468: check_staleness gained volume_floor=10 and the CLI's call, whose threshold comes from
+        # the config, never passes it; only the tests do
+        from crucible import callsites
+        base = {"stale.py": "def check_staleness(markets, data, threshold=5):\n    return markets\n",
+                "cli.py": "from stale import check_staleness\nkept = check_staleness(\n    ms, d,\n"
+                          "    threshold=cfg.scanner.cycles,\n)\n",
+                "tests/test_stale.py": "from stale import check_staleness\ncheck_staleness([], {}, volume_floor=3)\n"}
+        new = dict(base, **{"stale.py": "def check_staleness(markets, data, threshold=5, *, volume_floor: int = 10):\n"
+                                        "    return markets\n"})
+        d = make_repo(base, new)
+        files = D.parse(sh(d, "git", "diff", "main..fix") + "\n")
+        knobs = {}
+        self.assertEqual(callsites.changed_contracts(files, lambda p: V.git_blob(d, "main", p),
+                                                     lambda p: V.git_blob(d, "fix", p), knobs), {})
+        self.assertEqual(knobs, {"check_staleness": ("stale.py", [("volume_floor", "10", None)])})
+        sh(d, "git", "checkout", "-q", "fix")
+        lines, names = callsites.unpassed(d, knobs)
+        self.assertEqual(lines, ["cli.py:2: kept = check_staleness(  [check_staleness]"])   # not the test's call
+        self.assertEqual(names, {"check_staleness": ("stale.py", [("volume_floor", "10")])})
+        note = V.callers_note(d, "main", "fix", files, {"files": ["stale.py"]})
+        self.assertIn("check_staleness in stale.py gained volume_floor (default 10)", note)
+        self.assertIn("cli.py:2:", note)
+        self.assertEqual(callsites.knobs_note([], {}), "")
+
+    def test_a_new_optional_parameter_a_real_call_passes_is_not_listed(self):
+        from crucible import callsites
+        knobs = {"fetch_page": ("api.py", [("limit", "10", 1)])}
+        for call, listed in (("fetch_page(u, limit=5)", False),           # by keyword
+                             ("fetch_page(u, 5)", False),                 # by position
+                             ("fetch_page(*args)", False),                # a spread: can't tell, so trusted
+                             ("fetch_page(u, retry=2)", True),            # another keyword only
+                             ("fetch_page(u)", True)):
+            d = make_repo({"api.py": "def fetch_page(url, limit=10, retry=1):\n    return url\n",
+                           "use.py": f"# fetch_page(u) in a comment\nr = {call}\n"})
+            lines, _ = callsites.unpassed(d, knobs)
+            self.assertEqual(bool(lines), listed, call)
+        d = make_repo({"api.py": "def fetch_page(url, limit=10):\n    return url\n",
+                       "tests/test_api.py": "fetch_page(u)\n"})
+        self.assertEqual(callsites.unpassed(d, knobs), ([], {}))           # no real call at all: nothing to wire
+        self.assertEqual(callsites.new_optional(("a, b", ""), ("a, b, c=1, *rest, d?: number", "")),
+                         [("c", "1", 2), ("d", "?", None)])
+        self.assertEqual(callsites.new_optional(("a", ""), ("a, b", "")), [])  # new required: breaks() lists it
+
     def test_callers_note_whole_change_and_never_stops_a_review(self):
         d, files = self._repo()
         note = V.callers_note(d, "main", "fix", files, {"files": ["pkg/api.py"]})

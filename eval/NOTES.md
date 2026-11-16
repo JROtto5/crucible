@@ -857,3 +857,51 @@ Baseline for b06cb2a..9451ca3 (prose results count as testing evidence). Populat
   The other 14 (11 bvh #961b/#981 rounds before any PR opened, 2 MangoHud, 2 three.js) have no recoverable text.
   Caveat: a body version is the nearest posted text, not the byte-exact draft; review.json carries no timestamp,
   so file mtime stands in for review time.
+
+### 2026-11-16 · api-architecture (focus item 1): new optional parameters no real call passes, local A/B
+
+Read first ($0, stored judge output on blaze-3, the same r3/r4 `results.details.json` hashes as above): the 12 golden
+api-architecture TPs on the 25 PRs, found in r3 / r4 when any candidate lists the index in `covered_golden_indices`.
+R4 found 4 (AY2526S2 #7, PROTRIDER #20, fastimage #6, wirechat #5) and missed 8:
+
+| kind | golden | R4 candidates in that file |
+|---|---|---|
+| plumbing gap: added at one layer, not wired through | gimmes #1 (`volume_floor` not passed by cli.py, not in ScannerConfig; **R3 found it**), Mcp-Docker #28 (`AllowedRedirectHosts` has no env var in `loadConfig`), AY2526S2 #1 (`AddressBook.removeNote` has no `Model` method) | 0, 3, 0 |
+| return type / shape | PROTRIDER #28 (annotation says always `GridSearchResult`, may be None), fastimage #23 (class vs instance methods return different shapes) | 4, 4 |
+| public API left producing incompatible data | nebula #2 (exported `encrypt()` writes `key_id = ""`) | 6 |
+| out-of-scope feature removal | PROTRIDER #22 (cross-validation dropped) | 4 |
+| validation contract | TechDebtMCP #4 (flags regex accepts duplicates) | 4 |
+
+The plumbing gap is the largest kind. On gimmes the existing call-site note already listed `cli.py:312` (the PR also
+removed `volume_spike_ratio`), and R4 still raised nothing there: the note told the reviewer the call still works,
+which it does. It never named the new parameter nobody passes.
+
+Change: `callsites.changed_contracts(..., knobs)` also collects the optional parameters a touched Python/JS/TS
+definition gained; `callsites.unpassed` finds every call of it in the checkout (the PR's own calls count, tests don't),
+reads each call's arguments, and lists the definition when no real call passes the parameter by keyword, by position
+or through a spread. The note asks for a nit at the call or the config only when the value is meant to be set (the PR
+or docs call it tunable, or the call's other arguments come from config/settings/CLI), else nothing.
+Go/Java/other languages are not covered (Mcp-Docker's is a struct field, AY2526S2's a missing interface method).
+
+$0 sweeps (new code): last 30 non-merge commits of lutris, colyseus, heroic, schema, supabase-js, umu and crucible
+(210): 7 add an optional parameter, every one passed by a real caller, **fires 0 of 210**. The 25 R4 PRs, at merge-base
+-> head: 3 add optional parameters (gimmes 1, PROTRIDER 7, emdash 7), **fires on gimmes only**, naming `volume_floor
+(default 10)` and `cli.py:312`. All other eval cases: silent (clean-py-bounded-shutdown and clean-ts-option-with-tests
+add one; their callers pass it).
+
+New nit case `nit-py-unwired-knob` (built on the gimmes shape, not copied): `filter_stale` gains `min_volume=10`, the
+tests pass it, `feeds/cli.py`'s call (outside the diff) takes `threshold=cfg.stale_cycles` and doesn't, and
+`ScanConfig` has no field. `crucible eval --nits --no-write --budget 5 --cases nit-py-unwired-knob`, before (4fdc54e +
+the case) vs after, 3 rounds per arm, side by side:
+
+| | before | after |
+|---|---|---|
+| planted gap found | 1, **0**, 1 (2/3) | 1, 1, 1 (3/3) |
+| nits kept / dropped | 9 / 6 | 11 / 6 |
+| false blocking | 0 | 0 |
+| $ per round | 0.56, 0.46, 0.38 ($1.40) | 0.70, 0.40, 0.33 ($1.43) |
+
+Reading: direction only (2/3 vs 3/3, Fisher p = 1.0). The note fires on 1 PR in 25, so its cost on ReviewBench is a
+few hundred prompt tokens on that PR and nothing elsewhere. At most it recovers 1 golden issue of 12 in this
+category (gimmes #1); the claim waits for run 5. Caveat: the shape came from reading a test-set golden issue, so a
+gimmes hit in run 5 is weaker evidence than a hit on a PR outside the 25. Spend this shift: $2.83 local eval.

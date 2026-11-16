@@ -888,12 +888,16 @@ def callers_note(repo, base, sha, files, ch):
     """The --nits prompt's list of call and import lines outside the diff that use a definition whose contract this
     pass's files changed, base -> HEAD (crucible.callsites); "" when there are none or the search fails. files: the
     whole change, also in an incremental round (a caller left stale in round 1 is still stale), whose added lines
-    are left out (the author already updated those)."""
+    are left out (the author already updated those). Then any new optional parameter no non-test call passes
+    (callsites.unpassed): there the PR's own calls count, since they are what would set it."""
     try:
         mine = [f for f in files if f.get("path") in set(ch["files"])]
         added = {f["path"]: {n for h in f["hunks"] for k, _t, _o, n in h["lines"] if k == "+"} for f in files}
-        contracts = callsites.changed_contracts(mine, lambda p: git_blob(repo, base, p), lambda p: git_blob(repo, sha, p))
-        return callsites.note(*callsites.sites(repo, contracts, added))
+        knobs = {}
+        contracts = callsites.changed_contracts(mine, lambda p: git_blob(repo, base, p), lambda p: git_blob(repo, sha, p),
+                                                knobs)
+        return callsites.note(*callsites.sites(repo, contracts, added)) + callsites.knobs_note(
+            *callsites.unpassed(repo, knobs))
     except Exception:
         return ""
 
