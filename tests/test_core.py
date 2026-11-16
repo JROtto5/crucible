@@ -3227,6 +3227,11 @@ class TestRerunSameCommit(unittest.TestCase):
             self.assertNotIn("draft_copy", r)
             self.assertTrue(any("couldn't keep a copy of the draft" in l for l in logs), logs)
             os.remove(os.path.join(d, "drafts"))
+            def unencodable(*a):                                    # a fresh error per call: a kept instance's traceback
+                raise UnicodeEncodeError("ascii", "\ufffd", 0, 1, "x")   # would hold the review's lock file open
+            with _mock.patch.object(V, "keep_draft", side_effect=unencodable):
+                V.run_review(repo, "main", offline=True, skip_checks=True, fresh=True, log=logs.append)
+            self.assertEqual(U.read_json(os.path.join(d, "review.json"))["status"], "done")
             rp = os.path.join(d, "review.json")
             r = U.read_json(rp); r.pop("inputs"); U.write_json(rp, r)
             run()                                                   # a review from before inputs were recorded: redone

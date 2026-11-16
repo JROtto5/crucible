@@ -1058,7 +1058,7 @@ def keep_draft(d, repo, draft, inputs):
     if not want:
         return None
     out = os.path.join(d, "drafts", want + ".md")
-    if os.path.exists(out) and draft_hash(open(out, errors="replace").read()) == want:
+    if os.path.exists(out) and draft_hash(open(out, encoding="utf-8", errors="replace").read()) == want:
         return out
     _, text = readiness.find_draft(repo, draft)
     if draft_hash(text) != want:                         # edited since review_inputs hashed it: not the judged text
@@ -1066,7 +1066,7 @@ def keep_draft(d, repo, draft, inputs):
     os.makedirs(os.path.dirname(out), exist_ok=True)
     # temp + rename: a write cut short must not leave a truncated copy that a later run would reuse
     tmp = out + ".tmp"
-    with open(tmp, "w") as fh:
+    with open(tmp, "w", encoding="utf-8", errors="replace") as fh:   # not the locale's codec: an ASCII one can't encode it
         fh.write(text)
     os.replace(tmp, out)
     return out
@@ -1170,7 +1170,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
     try:
         if keep_draft(d, repo, draft, inputs):
             record["draft_copy"] = os.path.join("drafts", inputs["draft_sha"] + ".md")
-    except OSError as e:                                 # a replay aid only: never fail the review over it
+    except (OSError, ValueError) as e:                   # a replay aid only: never fail the review over it
         log(f"  note: couldn't keep a copy of the draft: {e}")
     try:
         diff_text = git(repo, "diff", "--unified=5", "--no-color", f"{base}..HEAD")
