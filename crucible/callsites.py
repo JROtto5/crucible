@@ -216,10 +216,12 @@ def new_optional(old, new):
     position a positional caller fills it at, None for a keyword-only one. *args and **kw are not knobs."""
     O, N = _param_list(old[0]), _param_list(new[0])
     on, out, pos = {p[0] for p in O}, [], 0
+    # a removed optional parameter with the same default was renamed, not added: its gap (if any) predates the change
+    renamed = {d for n, _k, d, _keys in O if d is not None and n not in {p[0] for p in N}}
     for n, k, d, _keys in N:
         if k == "pos":
             pos += 1
-        if n not in on and k != "star" and d is not None and not n.startswith("("):
+        if n not in on and k != "star" and d is not None and d not in renamed and not n.startswith("("):
             out.append((n, d, pos - 1 if k == "pos" else None))
     return out
 
@@ -426,8 +428,8 @@ def knobs_note(lines, names):
         return ""
     head = "; ".join(f"{n} in {p} gained " + ", ".join(f"{prm} (default {d})" for prm, d in opt)
                      for n, (p, opt) in names.items())
-    return ("New optional parameters that no call outside the tests passes, so every real call runs with the "
-            "default: " + head + ".\nThe calls, from a whole-word search of the checkout:\n" + "\n".join(lines) +
+    return ("New optional parameters that no call outside the tests passes, so every call listed below runs with "
+            "the default: " + head + ".\nThe calls, from a whole-word search of the checkout:\n" + "\n".join(lines) +
             "\nOpen each call. If the value is meant to be set (the PR or the docs call it configurable or a "
             "threshold to tune, or the call's other arguments come from a config object, settings or a CLI option), "
             "the missing plumbing is a nit at that call or at the config that lacks the field, naming where the "

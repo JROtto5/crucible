@@ -7153,6 +7153,12 @@ class TestCallSites(unittest.TestCase):
         self.assertEqual(callsites.new_optional(("a, b", ""), ("a, b, c=1, *rest, d?: number", "")),
                          [("c", "1", 2), ("d", "?", None)])
         self.assertEqual(callsites.new_optional(("a", ""), ("a, b", "")), [])  # new required: breaks() lists it
+        d = make_repo({"lib.py": "def fetch_report(a, timeout=5, retries=3):\n    return a\n"},
+                      {"lib.py": "def fetch_report(a, wait=5, retries=3, limit=10):\n    return a\n"})
+        knobs2 = {}
+        callsites.changed_contracts(D.parse(sh(d, "git", "diff", "main..fix") + "\n"), lambda p: V.git_blob(d, "main", p),
+                                    lambda p: V.git_blob(d, "fix", p), knobs2)
+        self.assertEqual(knobs2, {"fetch_report": ("lib.py", [("limit", "10", 3)], {"timeout"})})  # wait: a rename
         rename = {"fetch_report": ("lib.py", [("wait", "5", 1)], {"timeout"})}
         for call, listed in (("fetch_report(1, timeout=9)", False),     # broken, not defaulted: breaks() lists it
                              ("fetch_report(1)", True)):

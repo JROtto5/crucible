@@ -904,4 +904,13 @@ the case) vs after, 3 rounds per arm, side by side:
 Reading: direction only (2/3 vs 3/3, Fisher p = 1.0). The note fires on 1 PR in 25, so its cost on ReviewBench is a
 few hundred prompt tokens on that PR and nothing elsewhere. At most it recovers 1 golden issue of 12 in this
 category (gimmes #1); the claim waits for run 5. Caveat: the shape came from reading a test-set golden issue, so a
-gimmes hit in run 5 is weaker evidence than a hit on a PR outside the 25. Self-review round 1: `_call_args` re-split the file on every grep hit (20000 hits: 4.97 s, quadratic); each file is now split once (0.10 s). Round 2: a docstring usage example counted as a call (now skipped, as `sites()` does), and a call passing a renamed optional parameter's old name was counted as taking the new default (such calls are now left out: they fail, and `breaks()` lists them; dropping the knob whenever a parameter went was tried first and silenced gimmes, which removed `volume_spike_ratio` while adding `volume_floor`); TS and split-once tests added. Neither changes the sweeps (re-run: 0 of 210, gimmes only). Spend this shift: $2.83 local eval + self-review.
+gimmes hit in run 5 is weaker evidence than a hit on a PR outside the 25.
+
+Self-review (3 rounds): round 1, `_call_args` re-split the file on every grep hit (20000 hits: 4.97 s, quadratic);
+each file is now split once (0.10 s). Round 2: a docstring usage example counted as a call (now skipped, as `sites()`
+does), and a call passing a renamed optional parameter's old name was counted as taking the new default (such calls
+are now left out: they fail, and `breaks()` lists them). Dropping the knob whenever a parameter went was tried first
+and silenced gimmes, which removed `volume_spike_ratio` (default 2.0) while adding `volume_floor` (10). Round 3: a new
+optional parameter with the same default as a removed one is a rename, not a knob. Sweeps re-run after each round:
+0 of 210, R4 gimmes only, eval cases nit-py-unwired-knob only.
+Spend this shift: $2.83 local eval + $3.12 self-review rounds 1-3.
