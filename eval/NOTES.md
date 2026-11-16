@@ -849,3 +849,11 @@ Baseline for b06cb2a..9451ca3 (prose results count as testing evidence). Populat
   "fails on master ... passes here" in prose); the other 6 pass both, having gained a testing line in later rounds.
 - So the check's pre-DRG-105 false-positive floor is at least 2 of the 20 fires (bvh-981 02584fc1 is the DRG-105 case);
   the next 20 drafted reviews show whether the fire rate drops from 20/187 (10.7%).
+- Replay on recovered drafts (2026-11-15, $0, crucible 9451ca3 vs b06cb2a^): 6 of the 20 fires can be matched to a
+  draft. The 2 on-disk drafts above, plus 4 three-mesh-bvh #969 reviews (57f240cb, d86b2ce3, ddea945b, 330a5daa)
+  matched by review.json mtime to the PR body version in effect then, taken from GitHub's `userContentEdits`
+  (13:45Z 315 words, 15:23Z 88 words, 16:15Z 98 words). The old rule fails all three versions, which matches the
+  fires; the new rule passes all three ("The new packing test fails on master."). **k = 0 of 6 still fire.**
+  The other 14 (11 bvh #961b/#981 rounds before any PR opened, 2 MangoHud, 2 three.js) have no recoverable text.
+  Caveat: a body version is the nearest posted text, not the byte-exact draft; review.json carries no timestamp,
+  so file mtime stands in for review time.
