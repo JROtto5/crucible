@@ -7125,7 +7125,7 @@ class TestCallSites(unittest.TestCase):
         knobs = {}
         self.assertEqual(callsites.changed_contracts(files, lambda p: V.git_blob(d, "main", p),
                                                      lambda p: V.git_blob(d, "fix", p), knobs), {})
-        self.assertEqual(knobs, {"check_staleness": ("stale.py", [("volume_floor", "10", None)])})
+        self.assertEqual(knobs, {"check_staleness": ("stale.py", [("volume_floor", "10", None)], set())})
         sh(d, "git", "checkout", "-q", "fix")
         lines, names = callsites.unpassed(d, knobs)
         self.assertEqual(lines, ["cli.py:2: kept = check_staleness(  [check_staleness]"])   # not the test's call
@@ -7137,7 +7137,7 @@ class TestCallSites(unittest.TestCase):
 
     def test_a_new_optional_parameter_a_real_call_passes_is_not_listed(self):
         from crucible import callsites
-        knobs = {"fetch_page": ("api.py", [("limit", "10", 1)])}
+        knobs = {"fetch_page": ("api.py", [("limit", "10", 1)], set())}
         for call, listed in (("fetch_page(u, limit=5)", False),           # by keyword
                              ("fetch_page(u, 5)", False),                 # by position
                              ("fetch_page(*args)", False),                # a spread: can't tell, so trusted
@@ -7153,6 +7153,39 @@ class TestCallSites(unittest.TestCase):
         self.assertEqual(callsites.new_optional(("a, b", ""), ("a, b, c=1, *rest, d?: number", "")),
                          [("c", "1", 2), ("d", "?", None)])
         self.assertEqual(callsites.new_optional(("a", ""), ("a, b", "")), [])  # new required: breaks() lists it
+        rename = {"fetch_report": ("lib.py", [("wait", "5", 1)], {"timeout"})}
+        for call, listed in (("fetch_report(1, timeout=9)", False),     # broken, not defaulted: breaks() lists it
+                             ("fetch_report(1)", True)):
+            d = make_repo({"lib.py": "def fetch_report(a, wait=5):\n    return a\n", "app.py": f"{call}\n"})
+            self.assertEqual(bool(callsites.unpassed(d, rename)[0]), listed, call)
+        d = make_repo({"api.py": 'def fetch_page(url, limit=10):\n    """Fetch one page.\n\n'
+                                 '    page = fetch_page(u, limit=5)\n    """\n    return url\n',
+                       "use.py": "r = fetch_page(u)\n"})
+        lines, _ = callsites.unpassed(d, knobs)                            # the docstring's example is no call
+        self.assertEqual(lines, ["use.py:1: r = fetch_page(u)  [fetch_page]"])
+
+    def test_a_new_optional_parameter_in_typescript(self):
+        from crucible import callsites
+        self.assertEqual(callsites.new_optional(("url: string", ""), ("url: string, limit?: number", "")),
+                         [("limit", "?", 1)])
+        knobs = {"fetchPage": ("api.ts", [("limit", "?", 1)], set())}
+        for call, listed in (("fetchPage<Row>(u)", True), ("fetchPage(u, 5)", False), ("fetchPage(...args)", False),
+                             ("fetchPage(\n  `${base}/x`,\n  { limit },\n)", False)):
+            d = make_repo({"api.ts": "export function fetchPage(url: string, limit?: number) {\n  return url;\n}\n",
+                           "use.ts": f"import {{ fetchPage }} from './api';\nconst r = {call};\n"})
+            lines, _ = callsites.unpassed(d, knobs)
+            self.assertEqual(bool(lines), listed, call)
+
+    def test_unpassed_splits_each_file_once(self):
+        # self-review: re-splitting the file for every hit made 20000 calls take 5 s
+        from crucible import callsites
+        from unittest import mock
+        d = make_repo({"m.py": "".join(f"x{i} = fetch_page(i)\n" for i in range(500))})
+        seen = []
+        real = callsites._call_args
+        with mock.patch.object(callsites, "_call_args", side_effect=lambda ls, *a: seen.append(id(ls)) or real(ls, *a)):
+            callsites.unpassed(d, {"fetch_page": ("api.py", [("limit", "10", 1)], set())})
+        self.assertEqual((len(seen), len(set(seen))), (500, 1))
 
     def test_callers_note_whole_change_and_never_stops_a_review(self):
         d, files = self._repo()

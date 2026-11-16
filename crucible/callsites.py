@@ -227,7 +227,8 @@ def new_optional(old, new):
 def changed_contracts(files, read_old, read_new, knobs=None):
     """{name: (path, reason)} for definitions in the change's code files whose contract a caller could feel.
     read_old(path)/read_new(path) -> the file at the base / HEAD ("" when absent). knobs, when a dict, is filled with
-    {name: (path, new_optional(...))} for touched Python/JS definitions that gained an optional parameter."""
+    {name: (path, new_optional(...), removed parameter names)} for touched Python/JS definitions that gained an
+    optional parameter."""
     out, new_defs = {}, {}
     code = [f for f in files if not f.get("binary") and CODE_EXT_RX.search(f.get("path") or "")]
     for f in code:
@@ -267,7 +268,8 @@ def changed_contracts(files, read_old, read_new, knobs=None):
             if len(old_sigs[name]) != 1 or len(new_sigs[name]) != 1:
                 continue                         # overloads or same-named methods: can't pair them up
             if knobs is not None and ext in PY_JS and (opt := new_optional(old_sigs[name][0], new_sigs[name][0])):
-                knobs.setdefault(name, (path, opt))
+                gone = {p[0] for p in _param_list(old_sigs[name][0][0])} - {p[0] for p in _param_list(new_sigs[name][0][0])}
+                knobs.setdefault(name, (path, opt, gone))
             why = breaks(old_sigs[name][0], new_sigs[name][0], ext)
             if why:
                 out.setdefault(name, (path, "; ".join(why)))
@@ -380,10 +382,11 @@ def unpassed(repo, knobs):
     parameter on, or with no non-test call at all, is dropped. Calls the PR added count: they are the plumbing."""
     if not knobs:
         return [], {}
-    texts, calls = {}, {}
+    texts, calls, spans = {}, {}, {}
     names = sorted(knobs, key=lambda n: (-len(n), n))[:MAX_SEARCH]
     for p, no, t in _grep(repo, names, CODE_SPECS):
-        if TEST_PATH_RX.search(p) or COMMENT_RX.match(t):
+        # a docstring's usage example is not a call (and one passing the parameter would hide a real gap)
+        if TEST_PATH_RX.search(p) or COMMENT_RX.match(t) or no in _in_prose(repo, p, spans):
             continue
         rx = DEF_RX.get(os.path.splitext(p)[1].lower())
         m = rx.match(t) if rx else None
@@ -400,8 +403,10 @@ def unpassed(repo, knobs):
                 calls.setdefault(n, []).append((p, no, t, args))
     out, named = [], {}
     for n in names:
-        path, opt = knobs[n]
-        cs = calls.get(n)
+        path, opt, gone = knobs[n]
+        # a call passing a removed parameter (an optional one renamed) fails rather than taking the default, and the
+        # contracts note already lists it as broken
+        cs = [c for c in calls.get(n, []) if not any(_passes(c[3], g, None) for g in gone)]
         if not cs or any(_passes(args, prm, idx) for _p, _no, _t, args in cs for prm, _d, idx in opt):
             continue
         if len(named) >= MAX_KNOB_NAMES:
