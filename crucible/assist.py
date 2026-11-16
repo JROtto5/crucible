@@ -63,8 +63,8 @@ def run_prep(repo, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-opus-5-
     for q in sorted(out["questions"], key=lambda q: ["high", "medium", "low"].index(q["risk"])):
         L += [f"### ({q['risk']}) {q['question']}", "", q["answer"], "", f"*Evidence:* {q['evidence']}", ""]
     path = os.path.join(repo, "PREP.md")
-    open(path, "w").write("\n".join(L))
-    open(os.path.join(d, "PREP.md"), "w").write("\n".join(L))
+    open(path, "w", encoding="utf-8").write("\n".join(L))
+    open(os.path.join(d, "PREP.md"), "w", encoding="utf-8").write("\n".join(L))
     log(f"wrote {path} (git-excluded) · ${round(cost, 4)}")
     return path
 
@@ -115,6 +115,6 @@ def run_reply(url, repo=None, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "cla
             L += [f"**Code change:** {r['code_change']}", ""]
         L += ["```markdown", r["draft_reply"], "```", ""]
     path = os.path.join(cwd if repo else os.getcwd(), "REPLIES.md")
-    open(path, "w").write("\n".join(L))
+    open(path, "w", encoding="utf-8").write("\n".join(L))
     log(f"wrote {path} · ${round(cost, 4)}")
     return path

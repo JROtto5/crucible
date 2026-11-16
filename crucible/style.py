@@ -482,9 +482,10 @@ def polish(repo, project, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-
         log(f"  restored required line(s) the rewrite dropped: {restored}")
     txt = f"# {out['title']}\n\n{body.strip()}\n"
     # carry the author's notes over, so the polished draft still has them, marked off
-    open(newp, "w").write(txt + (f"\n{NOTES_MARKER}\n\n{parts['notes']}\n" if parts["notes"] else ""))
+    # UTF-8 like find_draft reads it: under an 8-bit locale the locale codec can't encode the notes' "→" or CJK
+    open(newp, "w", encoding="utf-8").write(txt + (f"\n{NOTES_MARKER}\n\n{parts['notes']}\n" if parts["notes"] else ""))
     notes = "\n".join(f"- removed: {r}" for r in out["removed"]) or "- nothing removed"
-    open(os.path.join(repo, "PR_DRAFT.polish-notes.md"), "w").write(f"# Polish notes\n\n{notes}\n\n## Facts kept\n\n"
+    open(os.path.join(repo, "PR_DRAFT.polish-notes.md"), "w", encoding="utf-8").write(f"# Polish notes\n\n{notes}\n\n## Facts kept\n\n"
                                                                     + "\n".join(f"- {k}" for k in out["kept_facts"]) + "\n")
     leftover = ai_tells(body, read_json(os.path.join(project_dir(project), "style.json"), {}), heads,
                         template_text(repo)[1])
