@@ -857,6 +857,16 @@ Baseline for b06cb2a..9451ca3 (prose results count as testing evidence). Populat
   The other 14 (11 bvh #961b/#981 rounds before any PR opened, 2 MangoHud, 2 three.js) have no recoverable text.
   Caveat: a body version is the nearest posted text, not the byte-exact draft; review.json carries no timestamp,
   so file mtime stands in for review time.
+- Recovery attempt for the rest (2026-11-16, $0): **none recoverable byte-exact.** Searched
+  work/next/bvh-961b.review{1..8}.log, bvh-981.review{1,2}.log (they hold the finding text, never the draft; the
+  check fired in 961b review1-4 and 6 and 981 review2), bvh-961b.answers-review{1,2,6}.md (describe each edit,
+  not the text), and the drafts on disk: bvh-961b/PR_DRAFT.polished.md (11-11 07:03, after review4, before
+  review6), bvh-961b/PR_DRAFT.md (11-12 10:48, = review8, which did not fire), bvh-981/PR_DRAFT.md (11-11 22:07,
+  unchanged since, so it is review2's text: already one of the 6 above). All three pass the new rule; none is the
+  text a fired review saw. answers-review1/2 say the review1-2 fires were on drafts with no test line at all, so
+  those were true positives under both rules. MangoHud/three.js drafts weren't searched (bvh only, per the
+  commitment). DRG-134 stores the judged PR text from here on, so this gap doesn't recur.
+  Count note: "the other 14" above lists 11 + 2 + 2 = 15; 20 − 6 = 14, so one of the three groups is off by one.
 
 ### 2026-11-16 · api-architecture (focus item 1): new optional parameters no real call passes, local A/B
 
