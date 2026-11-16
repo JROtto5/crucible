@@ -997,3 +997,19 @@ assertion pinned a line wrap), all fixed in 280968c. Round 2 (4 lows: this parag
 on cost, a dangling reference, and the nit-sweep branch untested), fixed in the next commit.
 Spend this shift: $19.74 ($8.73 full eval, $8.63 case A/B incl. the discarded fixture, $1.17 maintainability re-runs,
 $1.21 self-review 1) + $0.67 self-review 2.
+
+## 2026-11-16: how often the debug-statement check (diff.py `DEBUG_RX`) is wrong (read-only, $0)
+
+Counted every stored "Debug statement left in" finding:
+- `~/.crucible/reviews` (525 reviews, 19 repos): 4 fires, all one line, the planted `print("DEBUG ...")` in
+  eval case nit-py-maintainability (shop/report.py:21, which expected.json lists). 0 wrong. 0 fires on any real
+  upstream review.
+- ReviewBench runs on blaze-3 (r3, r4, nits1, normal, r4-noauth-void; 25 PRs each): 15 fires, all on one PR
+  (simnaut_emdash_2), the same 3 lines every run: `console.log("No tracked files found.")` in i18n/build.ts and two
+  `console.log("[...] Setup complete: created admin user ...")` lines in OAuth callbacks. The judge scored all 12 judged
+  fires (r4-noauth-void has no scoring) `novel_fp`. They are intended logging (a build script's message, server log
+  lines), not leftovers.
+
+So: 4 of 19 fires right (the fixture), 15 of 19 wrong; 3 distinct real-code lines, 3 wrong. n = 19 is too few to quote
+a rate. What it does show: on real code, every fire so far was `console.log` used as a script message or server log,
+and no real debug leftover has been caught. Each costs one low novel_fp per ReviewBench round. Follow-up DRG-146.
