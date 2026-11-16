@@ -953,8 +953,9 @@ already covers. The eval scorer counts the sites the same way.
 New build case `nit-py-sibling-tmp`: three sibling exporters each gain the same temp-file-then-rename write. Each leaves
 a partial `.tmp` behind when the write raises. This is the sibling-site shape in a different form (not a copy of a
 test-set PR). The first fixture version wrote `path + ".tmp"`, which breaks the `pathlib.Path` callers the base
-accepted: an unplanted real bug that "after" rated important in 2 of 3 rounds (counted as false blocking). The fixture
-now uses `f"{path}.tmp"`, and both arms were re-run. `crucible eval --nits --no-write --budget 5 --cases
+accepted: an unplanted real bug that "after" rated important in 2 of 3 rounds. The finding was true, but the eval
+scores any blocking finding on a nit case as false blocking. The fixture now uses `f"{path}.tmp"`, and both arms were
+re-run. `crucible eval --nits --no-write --budget 5 --cases
 nit-py-sibling-tmp`, 3 rounds per arm, side by side:
 
 | | before (ef1bbe9 + case + scorer) | after |
@@ -978,8 +979,7 @@ nit-py-maintainability's missed-reuse (4/4 in every earlier run). Rerun 3× afte
 26. No before arm of the full eval was run (another ~$8.7), so for the changed nits prompt the same-case evidence is
 the new case's A/B and the maintainability re-runs. On bug cases, 2 extra blocking findings (py-fix-reintroduces-hang:
 a "no test for the core behaviour" finding; py-test-deleted: the deleted test, which is the planted bug's other half),
-the same count as R3's run (2). On clean and nit cases, 0. (In the fixture paragraph above, "false blocking" is the
-eval's count on a nit case: any blocking finding there.)
+the same count as R3's run (2). On clean and nit cases, 0.
 
 Risk on ReviewBench: a confirmed site is one more candidate, so a wrong confirmation costs precision once per site. The
 verifier's site check is what holds that; nit precision in run 4 was 95.5%. Count `same flaw as` rows in run 5's judged
