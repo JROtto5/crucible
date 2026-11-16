@@ -3157,6 +3157,11 @@ class TestRerunSameCommit(unittest.TestCase):
         open(p, "w").write("Body, edited.\n\n<!-- crucible: notes -->\nmine, edited\n")
         self.assertNotEqual(V.review_inputs(repo, "b")["draft_sha"], h1)
 
+    def test_keep_draft_skips_reviews_without_a_draft(self):
+        repo, d = make_repo({"a.js": "x\n"}), tempfile.mkdtemp()
+        self.assertIsNone(V.keep_draft(d, repo, None, V.review_inputs(repo, "b")))
+        self.assertFalse(os.path.exists(os.path.join(d, "drafts")))
+
     def test_unreadable_draft_is_a_clean_failure(self):
         repo = make_repo({"a.js": "x\n"})
         with self.assertRaises(U.Failed):
@@ -3183,6 +3188,7 @@ class TestRerunSameCommit(unittest.TestCase):
             d = run()
             self.assertEqual(U.read_json(os.path.join(d, "review.json"))["status"], "done")
             self.assertEqual(len(seen), 1)
+            first_sha = U.read_json(os.path.join(d, "review.json"))["inputs"]["draft_sha"]
             run()                                                   # same inputs: the verdict is reused, no model call
             self.assertEqual(len(seen), 1)
             open(draft, "w").write("Bumps a to 2 because the spec says so.\n")
@@ -3191,6 +3197,9 @@ class TestRerunSameCommit(unittest.TestCase):
             self.assertIn("because the spec says so", seen[-1])
             r = U.read_json(os.path.join(d, "review.json"))
             self.assertEqual(r["inputs"]["draft_sha"], V.review_inputs(repo, r["base"])["draft_sha"])
+            kept = sorted(os.listdir(os.path.join(d, "drafts")))    # both judged versions stay replayable
+            self.assertEqual(kept, sorted({h + ".md" for h in (r["inputs"]["draft_sha"], first_sha)}))
+            self.assertEqual(open(os.path.join(d, r["draft_copy"])).read(), "Bumps a to 2 because the spec says so.\n")
             run(fresh=True)                                         # --fresh alone redoes it and skips the cache
             self.assertEqual(len(seen), 3)
             rp = os.path.join(d, "review.json")

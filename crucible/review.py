@@ -1051,6 +1051,21 @@ def review_inputs(repo, base, draft=None, no_exec=False, nits=False):
             **({"no_exec": True} if no_exec else {}), **({"nits": True} if nits else {})}
 
 
+def keep_draft(d, repo, draft, inputs):
+    """Copy the judged draft to <review dir>/drafts/<draft_sha>.md, so a stored verdict can be replayed against the
+    exact text it judged (the hash alone can't be; DRG-133 had to rebuild drafts from mtimes and GitHub edit history).
+    Keyed by hash, so re-reviews of the same commit with an edited draft keep every version. -> the copy's path."""
+    if not inputs.get("draft_sha"):
+        return None
+    out = os.path.join(d, "drafts", inputs["draft_sha"] + ".md")
+    if not os.path.exists(out):
+        _, text = readiness.find_draft(repo, draft)
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        with open(out, "w") as fh:
+            fh.write(text)
+    return out
+
+
 def verify_failed(f):
     """True when the finding is unverified because its verifier call failed (usage limit, rejected structured output),
     so a re-run can settle it. A transcribed "does not hold" is unverified too, but that was an answer (it has tiers)."""
@@ -1141,6 +1156,11 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
     budget, tok_split = Budget(budget_usd), None
     record = {"repo": project, "sha": sha, "base": base, "base_ref": base_ref, "started": started, "status": "running",
               "inputs": inputs}
+    try:
+        if keep_draft(d, repo, draft, inputs):
+            record["draft_copy"] = os.path.join("drafts", inputs["draft_sha"] + ".md")
+    except OSError as e:                                 # a replay aid only: never fail the review over it
+        log(f"  note: couldn't keep a copy of the draft: {e}")
     try:
         diff_text = git(repo, "diff", "--unified=5", "--no-color", f"{base}..HEAD")
         if not diff_text:
