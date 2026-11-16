@@ -1,0 +1,14 @@
+{
+ "kind": "nit",
+ "split": "build",
+ "source": "shape of ReviewBench run 4's missed sibling sites (one flaw in several sibling files, one site reported); not copied from a test-set PR",
+ "message": "exporters: write each export to a temp file and rename it into place",
+ "issues": [
+  {"name": "tmp-left-csv", "file": "exporters/csv_out.py", "lines": [9, 10, 11, 12, 13, 14],
+   "keywords": ["temp file", ".tmp", "tmp file", "left behind", "leftover", "partial"]},
+  {"name": "tmp-left-json", "file": "exporters/json_out.py", "lines": [6, 7, 8, 9],
+   "keywords": ["temp file", ".tmp", "tmp file", "left behind", "leftover", "partial"]},
+  {"name": "tmp-left-ndjson", "file": "exporters/ndjson_out.py", "lines": [6, 7, 8, 9, 10],
+   "keywords": ["temp file", ".tmp", "tmp file", "left behind", "leftover", "partial"]}
+ ]
+}

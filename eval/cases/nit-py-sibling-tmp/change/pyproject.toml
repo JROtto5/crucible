@@ -1,0 +1,4 @@
+[project]
+name = "exporters"
+version = "1.2.0"
+requires-python = ">=3.10"

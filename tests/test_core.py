@@ -1678,6 +1678,16 @@ class TestEvalScoring(unittest.TestCase):
         s = E.score_case(dict(rev, findings=[dict(rev["findings"][0], severity="important")]), {"kind": "clean"})
         self.assertEqual(s["false_blocking"], 1)
 
+    def test_nit_issues_count_verified_also_at_sites(self):
+        from crucible import evalrun as E
+        exp = {"kind": "nit", "issues": [{"name": n, "file": f"{n}.py", "lines": [5], "keywords": [".tmp"]}
+                                         for n in ("a", "b", "c")]}
+        nit = {"severity": "low", "file": "a.py", "line": 5, "title": "x", "problem": "", "also_at": ["b.py:5", "zzz"]}
+        s = E.score_case({"status": "done", "findings": [], "dropped": [], "nits": [nit]}, exp)
+        self.assertEqual(s["issues_found"], ["a", "b"])
+        bug = {"kind": "bug", "file": "b.py", "lines": [5], "keywords": []}
+        self.assertEqual(E.score_case({"status": "done", "findings": [], "dropped": [], "nits": [nit]}, bug)["nit_hits"], 1)
+
     def test_cases_are_well_formed(self):
         from crucible import evalrun as E
         cases = E.load_cases()
@@ -6366,7 +6376,8 @@ class TestNitTier(unittest.TestCase):
                 "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "w", "fix": "x"}
 
     def _run(self, nits_out, verdicts=None, nits=True, env=None, fail_batch=False, budget=None, findings=1, verify_cost=0.0,
-             review_cost=0.0, verify_error=None, passes=1, repo_files=None, sweep_out=(), sweep_cost=0.0):
+             review_cost=0.0, verify_error=None, passes=1, repo_files=None, sweep_out=(), sweep_cost=0.0,
+             sites_hold=()):
         """-> (review.json, calls). `passes` > 1 splits the diff into that many review passes. The fake reviewer returns one important finding and `nits_out` as nits; the nit
         verifier answers `verdicts` (index -> (keep, confidence)), default keep/high for every nit."""
         from unittest import mock
@@ -6397,8 +6408,9 @@ class TestNitTier(unittest.TestCase):
                 budget.add(0.05)                                 # what the real claude() does with the CLI's cost
                 n = prompt.count("Falsification test:")
                 vs = verdicts or {}
+                held = {"sites_hold": list(sites_hold)} if "sites_hold" in str(schema) else {}
                 return {"verdicts": [{"index": i, "keep": vs.get(i, (True, "high"))[0], "severity": "low",
-                                      "confidence": vs.get(i, (True, "high"))[1], "evidence": f"e{i}"}
+                                      "confidence": vs.get(i, (True, "high"))[1], "evidence": f"e{i}", **held}
                                      for i in range(n) if vs.get(i, (True, "high")) is not None]}, 0.05
             if budget is not None:
                 budget.add(verify_cost)
@@ -6464,11 +6476,61 @@ class TestNitTier(unittest.TestCase):
             r, _ = self._run([], nits=None)                          # without --nits: findings, as before
             self.assertEqual(sum(f.get("source") == "style" for f in r["findings"]), 4)
 
+    def test_also_at_sites_filtered_then_kept_only_when_the_verifier_confirms_them(self):
+        """ReviewBench run 4 kept "all six publish workflows" as one finding at one workflow: one golden site of six.
+        Other sites go in also_at; only a changed file's real line survives the $0 filter, only a confirmed one stays."""
+        files = ({"a.py": "x = 1\n", "b.py": "y = 1\n", "c.py": "z = 1\n"},
+                 {"a.py": "x = 2\n" + "".join(f"y{i} = {i}\n" for i in range(30)), "b.py": "y = 2\nw = 3\n"})
+        nit = dict(self._f("same trigger narrowed", 2),
+                   also_at=["b.py:2", "./b.py:2", "`b.py:1`", "c.py:1", "b.py:99", "a.py:2", "nonsense", 7])
+        r, calls = self._run([nit], repo_files=files, sites_hold=["b.py:2", "c.py:1"])
+        v = next(c for c in calls if c["kind"] == "verify_nits")
+        self.assertIs(v["schema"], V.NIT_VERDICTS_SITES_SCHEMA)
+        self.assertIn("The same flaw is also claimed at: b.py:2, b.py:1.", v["prompt"])
+        self.assertEqual(r["nits"][0]["also_at"], ["b.py:2"])        # c.py isn't changed: never sent, never kept
+        r, _ = self._run([nit], repo_files=files, sites_hold=[])
+        self.assertNotIn("also_at", r["nits"][0])                     # the nit stands; unconfirmed sites go
+
+    def test_finding_sites_go_through_the_verifier_and_fail_closed(self):
+        from unittest import mock
+        f = {"severity": "medium", "file": "a.yml", "line": 8, "title": "t", "wrong_if": "w", "also_at": ["b.yml:8"]}
+        seen = []
+
+        def fake(prompt, model, schema, *a, **kw):
+            seen.append((schema, prompt))
+            return {"keep": True, "severity": "medium", "method": "read", "actions": "", "evidence": "e",
+                    "confidence": "high", "sites_hold": ["b.yml:8", "z.yml:1"]}, 0.0
+        with mock.patch.object(V, "claude", fake), mock.patch.dict(os.environ, {"CRUCIBLE_CACHE_VERIFY": "0"}):
+            v, _ = V.verify_tiered(f, "code", ".", U.Budget(None), ["m"])
+        self.assertIs(seen[0][0], V.VERIFY_SITES_SCHEMA)
+        self.assertIn("also claimed at: b.yml:8", seen[0][1])
+        self.assertEqual(V.sites_from_verdict(dict(f), v)["also_at"], ["b.yml:8"])   # only sites it was asked about
+        for bad in (None, dict(v, keep=False), dict(v, salvaged=True), {k: x for k, x in v.items() if k != "sites_hold"}):
+            self.assertNotIn("also_at", V.sites_from_verdict(dict(f), bad))
+        self.assertEqual(V.sites_note({"title": "t"}), "")
+
+    def test_clean_sites(self):
+        f = {"file": "a.py", "line": 3, "also_at": ["a.py:3", "a.py:4-6", " ./b/c.py:10 ", "b/c.py:10", "b/c.py:11",
+                                                    "d.py:1", "b/c.py:0", "b/c.py", None]}
+        self.assertEqual(V.clean_sites(f, {"a.py": 5, "b/c.py": 10})["also_at"], ["a.py:4", "b/c.py:10"])
+        self.assertNotIn("also_at", V.clean_sites({"file": "a.py", "line": 1, "also_at": ["x.py:1"]}, {"a.py": 5}))
+        many = {"file": "a.py", "line": 1, "also_at": [f"a.py:{i}" for i in range(2, 30)]}
+        self.assertEqual(len(V.clean_sites(many, {"a.py": 40})["also_at"]), V.MAX_SITES)
+
+    def test_no_also_at_leaves_verifier_prompts_and_schemas_as_before(self):
+        r, calls = self._run([self._f("a nit", 2)])
+        v = next(c for c in calls if c["kind"] == "verify_nits")
+        self.assertIs(v["schema"], V.NIT_VERDICTS_SCHEMA)
+        self.assertNotIn("also claimed", v["prompt"])
+        fv = [c for c in calls if c["kind"] in ("verify", "verify_cheap")]
+        self.assertTrue(fv and all(c["schema"] is V.VERIFY_SCHEMA for c in fv))
+        self.assertTrue(all("also claimed" not in c["prompt"] for c in fv))
+
     def test_security_hardening_goes_to_nits(self):
         r, calls = self._run([self._f("a nit", 2)])
         prompt = next(c["prompt"] for c in calls if c["kind"] == "review")
         self.assertIn("Security hardening gaps that miss the findings' bar", prompt)
-        self.assertIn("give each site its own nit or finding", prompt)
+        self.assertIn('list every other site in\n"also_at" as "path:line"', prompt)
         _, calls = self._run([self._f("a nit", 2)], nits=None)
         self.assertNotIn("hardening", calls[0]["prompt"])           # the findings' bar and the base prompt stay
 
@@ -6814,6 +6876,16 @@ class TestReviewBenchAdapter(unittest.TestCase):
         self.assertEqual([o["start_line"] for o in m.to_findings(rev)], [2, 3, 1, 4])
         self.assertEqual([o["start_line"] for o in m.to_findings(rev, cap=3)], [2, 3, 1])
         self.assertEqual(len(self._mod({"RB_CONFIG_MAX_FINDINGS": "2"}).to_findings(rev)), 2)
+
+    def test_also_at_sites_become_rows_at_their_own_lines(self):
+        m = self._mod()
+        f = dict(self._f("medium", 8, "filter narrowed"), file=".github/w1.yml",
+                 also_at=[".github/w2.yml:8", ".github/w3.yml:9", "src/a.py:3", "bad"])
+        rev = {"findings": [f], "nits": [self._f("low", 3, "own nit")]}
+        out = m.to_findings(rev)
+        self.assertEqual([(o["file"], o["start_line"]) for o in out],
+                         [(".github/w1.yml", 8), (".github/w2.yml", 8), (".github/w3.yml", 9), ("src/a.py", 3)])
+        self.assertTrue(out[1]["message"].startswith("[medium] filter narrowed (same flaw as .github/w1.yml:8): p"))
 
     def test_a_limit_failure_fails_the_pr(self):
         """Run 3 scored PR 13 (every pass refused) as a finished review with 0 recall. A failure reason naming an account

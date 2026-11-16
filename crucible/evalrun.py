@@ -110,6 +110,17 @@ def hits(f, exp):
     return False
 
 
+def with_sites(items):
+    """items plus one copy of each at every verified also_at site, as the ReviewBench adapter reports them."""
+    out = list(items)
+    for f in items:
+        for site in f.get("also_at") or []:
+            path, _, n = site.rpartition(":")
+            if path and n.isdigit():
+                out.append(dict(f, file=path, line=int(n), also_at=[]))
+    return out
+
+
 def score_case(rev, exp):
     if not rev or rev.get("status") != "done":
         return {"ok": False, "error": (rev or {}).get("reason", "no review"), "cost": (rev or {}).get("cost_usd", 0)}
@@ -120,11 +131,11 @@ def score_case(rev, exp):
            "blocking": len(blocking)}
     if "nits" in rev:                  # a --nits run: the nit tier never blocks, so it is counted on its own
         out.update(nits=len(rev["nits"]), nits_dropped=len(rev.get("nits_dropped") or []),
-                   cost_nits=rev.get("cost_nits_usd", 0), nit_hits=sum(1 for f in rev["nits"] if hits(f, exp)),
+                   cost_nits=rev.get("cost_nits_usd", 0), nit_hits=sum(1 for f in with_sites(rev["nits"]) if hits(f, exp)),
                    nit_list=[{**{k: f.get(k) for k in ("severity", "file", "line", "title")},   # readable on clean cases
                               "confidence": (f.get("verification") or {}).get("confidence")} for f in rev["nits"]])
     if exp["kind"] == "nit":
-        pool = kept + list(rev.get("nits") or [])
+        pool = with_sites(kept + list(rev.get("nits") or []))
         out["issues"] = len(exp["issues"])
         out["issues_found"] = sorted(i["name"] for i in exp["issues"] if any(hits(f, i) for f in pool))
         out["false_blocking"] = len(blocking)

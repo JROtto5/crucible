@@ -37,6 +37,11 @@ VERIFY_SCHEMA = {"type": "object", "properties": {
     "evidence": {"type": "string"}},
     "required": ["keep", "severity", "confidence", "method", "actions", "evidence"]}
 
+SITES_HOLD = {"type": "array", "items": {"type": "string"},
+              "description": "the also_at sites where the same flaw holds, exactly as listed; [] if none"}
+VERIFY_SITES_SCHEMA = {**VERIFY_SCHEMA, "properties": {**VERIFY_SCHEMA["properties"], "sites_hold": SITES_HOLD},
+                       "required": VERIFY_SCHEMA["required"] + ["sites_hold"]}
+
 SALVAGE_MODEL = MODELS["haiku"]
 
 # ---------- nits: the recall tier (--nits / CRUCIBLE_NITS=1) ----------
@@ -51,12 +56,24 @@ SALVAGE_MODEL = MODELS["haiku"]
 NITS_MAX_PER_PASS = 20
 NIT_BATCH = 12                       # nits per verification call
 NIT_PAD = 15                         # lines of context each side of a nit (findings get 40)
+# "also_at" (--nits only): the other sites of one flaw. ReviewBench run 4 kept one finding that said "all six publish
+# workflows now trigger only on source files" at one workflow, and the benchmark (like a reader of inline comments)
+# counted one site of six; in 4 of the 25 PRs a kept item's text named a file holding a missed golden issue of the
+# same kind (figlet x5, statswales, fastimage, node-postgres). Sites are filtered at $0 (a changed file, a real line),
+# then the verifier confirms each one; only confirmed sites are kept (sites_from_verdict), each reported at its line.
+MAX_SITES = 8
+SITES_FIELD = {"type": "array", "maxItems": MAX_SITES, "items": {"type": "string"},
+               "description": "only when the SAME flaw (same cause, same fix) is also at other places this change "
+                              "touches: each other site as \"path:line\" in the NEW file. Omit otherwise."}
+_ITEM = FINDINGS_SCHEMA["properties"]["findings"]["items"]
 NITS_SCHEMA = {"type": "array", "maxItems": NITS_MAX_PER_PASS, "items": {
-    **FINDINGS_SCHEMA["properties"]["findings"]["items"],
-    "properties": {**FINDINGS_SCHEMA["properties"]["findings"]["items"]["properties"],
-                   "severity": {"type": "string", "enum": ["medium", "low"]}}}}
-FINDINGS_NITS_SCHEMA = {**FINDINGS_SCHEMA, "properties": {**FINDINGS_SCHEMA["properties"], "nits": NITS_SCHEMA},
-                        "required": FINDINGS_SCHEMA["required"] + ["nits"]}
+    **_ITEM, "properties": {**_ITEM["properties"], "severity": {"type": "string", "enum": ["medium", "low"]},
+                            "also_at": SITES_FIELD}}}
+FINDINGS_NITS_SCHEMA = {**FINDINGS_SCHEMA, "properties": {
+    **FINDINGS_SCHEMA["properties"], "nits": NITS_SCHEMA,
+    "findings": {**FINDINGS_SCHEMA["properties"]["findings"],
+                 "items": {**_ITEM, "properties": {**_ITEM["properties"], "also_at": SITES_FIELD}}}},
+    "required": FINDINGS_SCHEMA["required"] + ["nits"]}
 # The security paragraph: ReviewBench run 2 found 9 of 27 golden security issues. The 18 misses were mostly hardening
 # gaps with no full exploit path, which the checklist's "concrete path from untrusted input" line rules out of the
 # findings, so nothing was written down, and sibling sites of a flaw found once. Nits are verified (95% true there),
@@ -83,8 +100,10 @@ NITS_NOTE = f"""
         repeated use, an allowlist that ignores the port or scheme); state an unauthenticated caller can grow
         without bound; error text or logs that echo internals, absolute paths, input or secrets; permissions set
         only when a file or directory is created; secrets left on disk after the thing they belong to is deleted;
-        a container or service left running as root. When one flaw repeats at several sites (the same unchecked
-        cast or guard in sibling handlers), give each site its own nit or finding.
+        a container or service left running as root.
+        When one flaw repeats at several sites (the same unchecked cast or guard in sibling handlers, the same
+        trigger, setting or call changed the same way in sibling files), write it once and list every other site in
+        "also_at" as "path:line"; each site is checked and reported at its own line, so don't stop at the first.
         Maintainability, when it is concrete and checkable: a block the change copies (inside the diff, or from code
         already in the repo) where a shared helper or loop would do, naming both sites; code the change leaves dead
         (a function, branch, parameter, import, variable or config key nothing reaches any more, after you searched
@@ -111,6 +130,10 @@ NIT_VERDICTS_SCHEMA = {"type": "object", "properties": {"verdicts": {"type": "ar
         "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
         "evidence": {"type": "string"}},
     "required": ["index", "keep", "severity", "confidence", "evidence"]}}}, "required": ["verdicts"]}
+NIT_VERDICTS_SITES_SCHEMA = {**NIT_VERDICTS_SCHEMA, "properties": {"verdicts": {
+    **NIT_VERDICTS_SCHEMA["properties"]["verdicts"], "items": {
+        **NIT_VERDICTS_SCHEMA["properties"]["verdicts"]["items"],
+        "properties": {**NIT_VERDICTS_SCHEMA["properties"]["verdicts"]["items"]["properties"], "sites_hold": SITES_HOLD}}}}}
 
 
 def nits_enabled(flag=None):
@@ -321,7 +344,8 @@ def nit_sweep(sweep_chunks, raised, repo, model, budget, project, sha, base, rul
 def nit_verify_prompt(batch):
     claims = "\n\n".join(
         f"[{i}] {f['title']} (at {f['file']}:{f['line']}, proposed severity {f['severity']})\n"
-        f"Falsification test: {f['wrong_if']}\nCode around the cited line at HEAD:\n{code}"
+        f"Falsification test: {f['wrong_if']}\n" + (f"{sites_note(f)}\n" if f.get("also_at") else "")
+        + f"Code around the cited line at HEAD:\n{code}"
         for i, (f, code) in enumerate(batch))
     return textwrap.dedent("""\
         You are verifying {n} small claims ("nits") about a code change in this checkout. Try hard to DISPROVE each.
@@ -352,7 +376,8 @@ def verify_nits(nits, codes, repo, budget, model, fresh=False):
             err = "the nit verification cap (CRUCIBLE_NITS_MAX_USD) or the review budget was reached"
         elif out is None:
             try:
-                out, _ = claude(prompt, model, NIT_VERDICTS_SCHEMA, repo, budget, tools=TOOLS_READ, effort="medium",
+                schema = NIT_VERDICTS_SITES_SCHEMA if any(f.get("also_at") for f, _ in batch) else NIT_VERDICTS_SCHEMA
+                out, _ = claude(prompt, model, schema, repo, budget, tools=TOOLS_READ, effort="medium",
                                 timeout=900, kind="verify_nits")
                 cache_put(key, out)
             except Failed as e:
@@ -360,6 +385,7 @@ def verify_nits(nits, codes, repo, budget, model, fresh=False):
         by_index = {v.get("index"): v for v in (out or {}).get("verdicts") or []}
         for i, (f, _) in enumerate(batch):
             v = by_index.get(i)
+            sites_from_verdict(f, v)
             if v is None:
                 f["verification"] = {"status": "unverified", "reason": err or "no verdict returned"}
                 dropped.append(f)
@@ -511,6 +537,53 @@ def cite_draft(f, label, repo, tracked=()):
     if name != label and (name == "PR_DRAFT.md" or (name == os.path.basename(label) and not real)):
         f["file"] = label
     return f
+
+
+SITE_RX = re.compile(r"^\s*`?(?:\./)*(?P<path>[^\s`:][^`:]*?):(?P<line>\d+)(?:-\d+)?`?\s*$")
+
+
+def clean_sites(f, nlines):
+    """f with its also_at reduced to "path:line" sites that can be checked: a file this change touches (nlines: path ->
+    its line count at HEAD), a line inside it, not f's own site, no repeats, at most MAX_SITES. A site the model wrote
+    any other way is dropped, not guessed at; with none left the key goes, so the verifier's prompt is unchanged."""
+    out = []
+    for s in f.get("also_at") or []:
+        m = SITE_RX.match(s) if isinstance(s, str) else None
+        if not m:
+            continue
+        path, line = m["path"].strip(), int(m["line"])
+        site = f"{path}:{line}"
+        if path in nlines and 1 <= line <= nlines[path] and (path, line) != (f.get("file"), f.get("line")) \
+                and site not in out:
+            out.append(site)
+    f = {k: v for k, v in f.items() if k != "also_at"}
+    return dict(f, also_at=out[:MAX_SITES]) if out else f
+
+
+def site_lines(repo, sha, changed, items):
+    """{path: line count at HEAD} for the changed paths that some item's also_at names (git show only those)."""
+    named = {SITE_RX.match(x)["path"].strip() for f in items for x in f.get("also_at") or []
+             if isinstance(x, str) and SITE_RX.match(x)}
+    return {p: len(git_blob(repo, sha, p).splitlines()) for p in named & set(changed)}
+
+
+def sites_from_verdict(f, v):
+    """Keep only the also_at sites the verifier listed in sites_hold. No verdict, a transcribed one (salvage_verdict
+    has no sites) or a dropped claim keeps none: a site is never reported on the strength of another site's check."""
+    held = set((v or {}).get("sites_hold") or []) if v and v.get("keep") and not v.get("salvaged") else set()
+    sites = [s for s in f.get("also_at") or [] if s in held]
+    f.pop("also_at", None)
+    if sites:
+        f["also_at"] = sites
+    return f
+
+
+def sites_note(f):
+    """The verifier's extra instruction for a claim with also_at; "" without, so those prompts are unchanged."""
+    if not f.get("also_at"):
+        return ""
+    return (f"The same flaw is also claimed at: {', '.join(f['also_at'])}. Check each of those sites the same way; "
+            f"list in sites_hold, exactly as written here, only the sites where it holds.")
 
 
 def similar(a, b):
@@ -730,7 +803,7 @@ def verify_prompt(f, code, since="", draft_label=None, argument=False, no_exec=F
         {since}
         Claim: {f['title']} (at {f['file']}:{f['line']}, proposed severity {f['severity']})
         Falsification test: {f['wrong_if']}
-        {draft_scope(f, draft_label)}
+        {draft_scope(f, draft_label)}{sites_note(f)}
         Code around the cited line at HEAD:
         {code}
 
@@ -846,7 +919,8 @@ def verify_tiered(f, code, repo, budget, tiers, fresh=False, since="", draft_lab
         else:
             try:
                 tools = TOOLS_READ if no_exec else TOOLS_RUN
-                v, cost = claude(prompt, model, VERIFY_SCHEMA, repo, budget, tools=tools, effort="high", kind=kind)
+                schema = VERIFY_SITES_SCHEMA if f.get("also_at") else VERIFY_SCHEMA
+                v, cost = claude(prompt, model, schema, repo, budget, tools=tools, effort="high", kind=kind)
                 v = dict(v, cost=round(cost or 0, 4))
             except NoStructuredOutput as e:
                 v = salvage_verdict(f, e.text, repo, budget)
@@ -1309,6 +1383,9 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                     f["line"] = readiness.draft_file_line(draft_full, f["line"])
                 nit_cands.append(f)
         tok_split = (tok_before, budget.token_snapshot())
+        if any(f.get("also_at") for f in cands + nit_cands):
+            nl = site_lines(repo, sha, [f["path"] for f in files], cands + nit_cands)
+            cands, nit_cands = [clean_sites(f, nl) for f in cands], [clean_sites(f, nl) for f in nit_cands]
         nit_cands += [dict(f, source="nit", house=True) for f in house_nits[:HOUSE_NITS_MAX]]   # after the reviewer's
         reviewed = {p for c in chunk_status if c["status"] == "reviewed" for p in c["files"]}
         if prev_sha:                                   # files untouched since the previous complete review stay covered
@@ -1360,6 +1437,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             log(f"  verifying {len(to_verify)} finding(s), one per call" + (f" (tiers: {' → '.join(tiers)})" if len(tiers) > 1 else ""))
             with cf.ThreadPoolExecutor(max_workers=4) as ex:
                 for f, v, trail, err in ex.map(verify, to_verify):
+                    sites_from_verdict(f, v)
                     if v is None:                      # fail closed: keep, marked unverified
                         # re-runs of this commit split against the same earlier review every time, so its count
                         # alone would never grow: this commit's own stored count wins when larger
@@ -1426,6 +1504,9 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 record["nit_sweep"]["nits"] = new_swept
                 extra = NIT_BATCH_EST_USD * -(-new_swept // NIT_BATCH)
                 review_cost += sub.own                 # a review call: booked as review cost, not verification
+                if any(f.get("also_at") for f in swept):
+                    nl = site_lines(repo, sha, [f["path"] for f in files], swept)
+                    swept = [clean_sites(f, nl) for f in swept]
                 nit_cands += swept
             record.update(run_nits(nit_cands, cands + carried + reverify, repo, sha, dctx, dlabel, measured, budget,
                                    authors, fresh, log, extra))
@@ -1653,6 +1734,8 @@ def report(rev, ans, waivers=None):
         vf = f.get("verification") or {}
         L += [f"### {f['id']} · {f['severity']} · `{f['file']}:{f['line']}`", f"**{f['title']}** → {tag}", "", f["problem"], "",
               f"- wrong if: {f['wrong_if']}", f"- fix: {f['fix']}"]
+        if f.get("also_at"):
+            L.append(f"- also at (verified): {', '.join(f'`{x}`' for x in f['also_at'])}")
         if f.get("non_blocking"):
             L.append(f"- capped to low: {f['non_blocking']} (was {f.get('capped_from', f['severity'])})")
         if vf:
@@ -1670,7 +1753,9 @@ def report(rev, ans, waivers=None):
     if "nits" in rev:                      # only reviews run with --nits; they never count toward the verdict
         L += ["", "## Nits (non-blocking, verified; not counted in the verdict)", ""]
         L += [f"- {f['severity']} · `{f['file']}:{f['line']}` · **{f['title']}**: {f.get('problem', '')}"
-              + (f" Fix: {f['fix']}" if f.get("fix") else "") for f in rev["nits"]] or ["None."]
+              + (f" Fix: {f['fix']}" if f.get("fix") else "")
+              + (f" Also at: {', '.join(f'`{x}`' for x in f['also_at'])}." if f.get("also_at") else "")
+              for f in rev["nits"]] or ["None."]
         nd = rev.get("nits_dropped") or []
         L += ["", f"{len(nd)} nit(s) dropped or unverified · nit verification ${rev.get('cost_nits_usd', 0)} "
                   f"({rev.get('nits_model', '?')})"]
