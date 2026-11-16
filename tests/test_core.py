@@ -6515,6 +6515,15 @@ class TestNitTier(unittest.TestCase):
         self.assertEqual(f["verification"]["status"], "unverified")
         self.assertNotIn("also_at", f)                                               # kept, but no unchecked site
 
+    def test_swept_nit_sites_are_filtered_like_the_reviewers(self):
+        files = ({"a.py": "x = 1\n", "b.py": "y = 1\n"},
+                 {"a.py": "x = 2\n" + "".join(f"y{i} = {i}\n" for i in range(30)), "b.py": "y = 2\nw = 3\n"})
+        swept = dict(self._f("swept: same flaw", 5), also_at=["b.py:2", "a.py:5", "c.py:1", "b.py:9"])
+        r, calls = self._run([], repo_files=files, sweep_out=[swept], sites_hold=["b.py:2"], budget=5.0)
+        v = next(c for c in calls if c["kind"] == "verify_nits")
+        self.assertIn("The same flaw is also claimed at: b.py:2.", v["prompt"])      # own site, c.py, b.py:9 gone
+        self.assertEqual(next(f for f in r["nits"] if f["title"] == "swept: same flaw")["also_at"], ["b.py:2"])
+
     def test_finding_sites_go_through_the_verifier_and_fail_closed(self):
         from unittest import mock
         f = {"severity": "medium", "file": "a.yml", "line": 8, "title": "t", "wrong_if": "w", "also_at": ["b.yml:8"]}

@@ -925,7 +925,7 @@ optional parameter with the same default as a removed one is a rename, not a kno
 0 of 210, R4 gimmes only, eval cases nit-py-unwired-knob only.
 Spend this shift: $2.83 local eval + $3.12 self-review rounds 1-3.
 
-### 2026-11-16 · one flaw at several sites (`also_at`), focus items 1 and 3, local A/B + full eval
+### 2026-11-16 · one flaw at several sites (`also_at`), from the api-architecture and reliability misses, local A/B + full eval
 
 Read first ($0, the stored judge output on blaze-3, `runs/r4/scoring/results.details.json` sha256 784ab0cf9d42…, joined
 to `golden/<pr>.json` by index): the api-architecture misses left after the plumbing-gap change (above) are one-offs
@@ -966,17 +966,26 @@ nit-py-sibling-tmp`, 3 rounds per arm, side by side:
 
 Reading: no recall difference on this case, because the reviewer already split the three sites "before". It shows the
 mechanism working (in kept reviews, every csv_out.py item carried `json_out.py`/`ndjson_out.py` sites, all confirmed by
-the verifier) and no loss. Whether it recovers figlet's five waits for ReviewBench run 5. Verification got cheaper here
-because sibling sites are checked inside one claim.
+the verifier) and no loss. Whether it recovers figlet's five waits for ReviewBench run 5. The cost difference is
+direction only: 3 rounds per arm, with no review/verification split recorded. Fewer separate nits to verify is a
+plausible cause, not a shown one.
 
 Full `crucible eval --nits --budget 1.5` (26 cases, after only; last nits baseline is 11-12's R3 run, 20 cases): recall
 **0.933** (14/15; build 12/13, holdout 2/2), any severity 1.0, false blocking 0 (clean and nit cases), nit cases 14/15
 planted, $8.73. The blocking miss is js-refcount, rated medium as in every run since 11-04. The nit miss was
 nit-py-maintainability's missed-reuse (4/4 in every earlier run). Rerun 3× after: 4/4, 4/4, 4/4, 0 false blocking
-($1.17), so it was one-round variance. No recall or false-blocking measure is worse than R3's run (0.929, 0).
+($1.17), so it was one-round variance. Not a same-set comparison: R3's run had 20 cases (14 bug, no nit cases), this one
+26. No before arm of the full eval was run (another ~$8.7), so for the changed nits prompt the same-case evidence is
+the new case's A/B and the maintainability re-runs. On bug cases, 2 extra blocking findings (py-fix-reintroduces-hang:
+a "no test for the core behaviour" finding; py-test-deleted: the deleted test, which is the planted bug's other half),
+the same count as R3's run (2). On clean and nit cases, 0. (In the fixture paragraph above, "false blocking" is the
+eval's count on a nit case: any blocking finding there.)
 
 Risk on ReviewBench: a confirmed site is one more candidate, so a wrong confirmation costs precision once per site. The
 verifier's site check is what holds that; nit precision in run 4 was 95.5%. Count `same flaw as` rows in run 5's judged
 candidates. Not covered: a re-run of a held (budget-refused) finding loses its sites, since they were never confirmed.
+Self-review: round 1 (4 lows: no NOTES entry yet, the finding-tier `also_at` path and the report lines untested, one
+assertion pinned a line wrap), all fixed in 280968c. Round 2 (4 lows: this paragraph's wording on the R3 comparison and
+on cost, a dangling reference, and the nit-sweep branch untested), fixed in the next commit.
 Spend this shift: $19.74 ($8.73 full eval, $8.63 case A/B incl. the discarded fixture, $1.17 maintainability re-runs,
-$1.21 self-review 1; later self-review rounds below).
+$1.21 self-review 1) + $0.67 self-review 2.
