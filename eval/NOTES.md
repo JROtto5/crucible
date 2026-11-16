@@ -887,7 +887,7 @@ $0 sweeps (new code): last 30 non-merge commits of lutris, colyseus, heroic, sch
 (210): 7 add an optional parameter, every one passed by a real caller, **fires 0 of 210**. The 25 R4 PRs, at merge-base
 -> head: 3 add optional parameters (gimmes 1, PROTRIDER 7, emdash 7), **fires on gimmes only**, naming `volume_floor
 (default 10)` and `cli.py:312`. All other eval cases: silent (clean-py-bounded-shutdown and clean-ts-option-with-tests
-add one; their callers pass it).
+add one; their callers pass it). So the review prompt is byte-identical before and after on the other 24 eval cases, and the full `crucible eval` CONTRIBUTING asks for on prompt changes was not run: it would re-measure model variance only (self-review CR-3c50ba15, answered with this).
 
 New nit case `nit-py-unwired-knob` (built on the gimmes shape, not copied): `filter_stale` gains `min_volume=10`, the
 tests pass it, `feeds/cli.py`'s call (outside the diff) takes `threshold=cfg.stale_cycles` and doesn't, and
@@ -904,4 +904,4 @@ the case) vs after, 3 rounds per arm, side by side:
 Reading: direction only (2/3 vs 3/3, Fisher p = 1.0). The note fires on 1 PR in 25, so its cost on ReviewBench is a
 few hundred prompt tokens on that PR and nothing elsewhere. At most it recovers 1 golden issue of 12 in this
 category (gimmes #1); the claim waits for run 5. Caveat: the shape came from reading a test-set golden issue, so a
-gimmes hit in run 5 is weaker evidence than a hit on a PR outside the 25. Spend this shift: $2.83 local eval.
+gimmes hit in run 5 is weaker evidence than a hit on a PR outside the 25. Self-review round 1: `_call_args` re-split the file on every grep hit (20000 hits: 4.97 s, quadratic); each file is now split once (0.10 s). Spend this shift: $2.83 local eval + self-review.

@@ -340,9 +340,9 @@ MAX_KNOB_CALLS = 4        # call lines shown per name
 CALL_LINES = 30           # a call's argument list is read for at most this many lines
 
 
-def _call_args(text, line_no, name):
-    """The top-level arguments of the first call to name on 1-based line_no of text, or None when there is none."""
-    lines = text.split("\n")
+def _call_args(lines, line_no, name):
+    """The top-level arguments of the first call to name on 1-based line_no of a file's lines, or None when there is
+    none (lines: the file split once, since a file can hold thousands of calls)."""
     if not 0 < line_no <= len(lines):
         return None
     m = re.search(rf"(?<![\w$]){re.escape(name)}\s*(?:<[^()]*>)?\s*\(", lines[line_no - 1])
@@ -392,9 +392,9 @@ def unpassed(repo, knobs):
             if p not in texts:
                 try:
                     with open(os.path.join(repo, p), encoding="utf-8", errors="replace") as fh:
-                        texts[p] = fh.read()
+                        texts[p] = fh.read().split("\n")
                 except OSError:
-                    texts[p] = ""
+                    texts[p] = []
             args = _call_args(texts[p], no, n)
             if args is not None:
                 calls.setdefault(n, []).append((p, no, t, args))
