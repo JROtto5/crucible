@@ -45,7 +45,7 @@ def cmd_status(a):
         print(f"NO REVIEW for HEAD {sha[:10]}. Run: crucible review {a.repo}")
         sys.exit(2)
     txt = report(rev, ans, load_waivers(project, waiver_key(_p(a.repo))))
-    open(os.path.join(d, "report.md"), "w").write(txt)
+    open(os.path.join(d, "report.md"), "w", encoding="utf-8").write(txt)
     print(txt)
     print(f"(report: {os.path.join(d, 'report.md')})")
     v = verdict(rev, ans)[0]
@@ -112,7 +112,7 @@ def cmd_vote(a):
         fh.write(json.dumps({"project": project, "id": a.id, "vote": a.vote, "reason": a.reason,
                              "at": dt.datetime.now().isoformat(timespec="seconds")}) + "\n")
     if a.vote == "down":                       # a proposal, not a rule: one bad vote must not silence a class forever
-        with open(os.path.join(project_dir(project), "proposals.md"), "a") as fh:
+        with open(os.path.join(project_dir(project), "proposals.md"), "a", encoding="utf-8") as fh:
             fh.write(f"- {dt.date.today()} ({a.id}): do not flag: {a.reason}\n")
         print(f"recorded; proposed memory entry (accept with: crucible proposals {project} --accept N)")
     else:
@@ -120,7 +120,7 @@ def cmd_vote(a):
 
 
 def cmd_remember(a):
-    with open(os.path.join(project_dir(a.project.replace("/", "__")), "memory.md"), "a") as fh:
+    with open(os.path.join(project_dir(a.project.replace("/", "__")), "memory.md"), "a", encoding="utf-8") as fh:
         fh.write(f"- {dt.date.today()}: {a.lesson}\n")
     print("remembered")
 
@@ -133,15 +133,15 @@ def cmd_eval(a):
 def cmd_proposals(a):
     proj = a.project.replace("/", "__")
     p = os.path.join(project_dir(proj), "proposals.md")
-    items = [l for l in (open(p).read().split("\n") if os.path.exists(p) else []) if l.startswith("- ")]
+    items = [l for l in (open(p, encoding="utf-8", errors="replace").read().split("\n") if os.path.exists(p) else []) if l.startswith("- ")]
     if a.accept:
         i = a.accept - 1
         if not 0 <= i < len(items):
             sys.exit("no such proposal")
-        with open(os.path.join(project_dir(proj), "memory.md"), "a") as fh:
+        with open(os.path.join(project_dir(proj), "memory.md"), "a", encoding="utf-8") as fh:
             fh.write(items[i].replace(": do not flag:", ": DO NOT flag:", 1) + "\n")
         items.pop(i)
-        open(p, "w").write("\n".join(items) + ("\n" if items else ""))
+        open(p, "w", encoding="utf-8").write("\n".join(items) + ("\n" if items else ""))
         print("accepted into memory")
         return
     for n, l in enumerate(items, 1):

@@ -3188,9 +3188,7 @@ class TestRerunSameCommit(unittest.TestCase):
                 "sha = review.draft_hash(text)\n"
                 "out = review.keep_draft(sys.argv[2], sys.argv[1], None, {'draft': p, 'draft_sha': sha})\n"
                 "print(out == modelreplay.draft_still_matches({'inputs': {'draft_sha': sha}, 'draft_copy': out}))\n")
-        env = {**os.environ, "LC_ALL": "C", "PYTHONCOERCECLOCALE": "0", "PYTHONUTF8": "0",
-               "PYTHONPATH": os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}
-        r = subprocess.run([sys.executable, "-X", "utf8=0", "-c", code, repo, d], env=env, capture_output=True, text=True)
+        r = self._ascii_locale_run(code, repo, d)
         self.assertEqual(r.stdout.strip(), "True", r.stderr)
         (copy,) = os.listdir(os.path.join(d, "drafts"))
         self.assertEqual(open(os.path.join(d, "drafts", copy), "rb").read(), body)
@@ -3200,11 +3198,11 @@ class TestRerunSameCommit(unittest.TestCase):
         notes = "a \u2192 b, \u6f22\u5b57"
         open(os.path.join(repo, "PR_DRAFT.md"), "wb").write(f"# Fix a\n\nFixes a.\n\n{R.NOTES_MARKER}\n\n{notes}\n".encode("utf-8"))
         code = ("import sys\nfrom crucible import style as S\n"
-                "S.claude = lambda *a, **k: ({'title': 'Fix a', 'body': 'Fixes a \\u2192 b.', 'removed': [], 'kept_facts': []}, 0.0)\n"
+                "S.claude = lambda prompt, *a, **k: ({'title': 'Fix a', 'body': 'Fixes a \\u2192 b.', 'removed': [], 'kept_facts': []}, 0.0)"
+                " if 'house \\u21d2 style' in prompt else sys.exit('STYLE.md not in the prompt')\n"
                 "S.polish(sys.argv[1], 't__polish_utf8', log=lambda *_: None)\n")
-        env = {**os.environ, "LC_ALL": "C", "PYTHONCOERCECLOCALE": "0", "PYTHONUTF8": "0",
-               "PYTHONPATH": os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}
-        r = subprocess.run([sys.executable, "-X", "utf8=0", "-c", code, repo], env=env, capture_output=True, text=True)
+        open(os.path.join(S.project_dir("t__polish_utf8"), "STYLE.md"), "w", encoding="utf-8").write("- house \u21d2 style\n")
+        r = self._ascii_locale_run(code, repo)
         self.assertEqual(r.returncode, 0, r.stderr)
         txt = open(os.path.join(repo, "PR_DRAFT.polished.md"), encoding="utf-8").read()
         self.assertIn("Fixes a \u2192 b.", txt)
@@ -3242,6 +3240,30 @@ class TestRerunSameCommit(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         for p in (os.path.join(repo, "PREP.md"), os.path.join(d, "PREP.md")):
             self.assertIn("- a \u2192 b, \u6f22\u5b57", open(p, encoding="utf-8").read())
+
+    def test_learned_project_files_round_trip_under_a_non_utf8_locale(self):
+        # rules.md, STYLE.md and memory.md quote PR bodies and model output; each goes into every review prompt
+        up = make_repo({"a.js": "// c\nconst a = 1;\n"})
+        work = tempfile.mkdtemp(prefix="crucible-clone-")
+        sh(work, "git", "clone", "-q", up, "c")
+        code = r"""import sys, types
+from crucible import learn as L, style as S, review as V, cli as C
+repo, proj = sys.argv[1], 't__learned_utf8'
+L.upstream_slug, L.project_key, L.docs_text = (lambda r: 'o/r'), (lambda r: proj), (lambda slug: '')
+L.collect = lambda slug, n, log: ([{}], [{'pr': 1, 'url': 'u', 'path': None, 'body': 'b'}], [(10, 10)])
+L.claude = lambda *a, **k: ({'rules': [{'rule': 'r \u2192 s', 'why': 'w', 'sources': ['u']}]}, 0.0)
+L.run_learn(repo, style=False, log=lambda *_: None)
+pr = lambda n: {'number': n, 'title': 'T', 'body': 'Fixes #5 \u2192 \u6f22\u5b57.', 'merged_at': '2026-11-01T00:00:00Z',
+                'html_url': 'u', 'author_association': 'CONTRIBUTOR', 'user': {'login': 'a%d' % n, 'type': 'User'}}
+S.gh_json = lambda path, check=False: [pr(3), pr(4)] if path.startswith('repos/o/r/pulls?') else []
+S.claude = lambda *a, **k: ({'tone': 't', 'comment_conventions': 'c', 'callouts': 'x', 'avoid': 'y'}, 0.0)
+S.learn_style(repo, 'o/r', proj, log=lambda *_: None)
+C.cmd_remember(types.SimpleNamespace(project=proj, lesson='m \u2192 n'))
+got = ['r \u2192 s' in V.project_rules_text(repo, proj), '\u6f22\u5b57' in V.style_text(proj), 'm \u2192 n' in V.memory_text(proj)]
+sys.exit(0 if all(got) else repr(got))
+"""
+        r = self._ascii_locale_run(code, os.path.join(work, "c"))
+        self.assertEqual(r.returncode, 0, r.stderr)
 
     def test_unreadable_draft_is_a_clean_failure(self):
         repo = make_repo({"a.js": "x\n"})

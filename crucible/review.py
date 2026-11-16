@@ -430,20 +430,20 @@ def project_rules_text(repo, project):
             parts.append(f"--- {name} (excerpt) ---\n" + open(p, errors="replace").read()[:5000])
     learned = os.path.join(project_dir(project), "rules.md")
     if os.path.exists(learned):
-        parts.append("--- maintainer preferences learned from merged PR reviews ---\n" + open(learned).read()[:6000])
+        parts.append("--- maintainer preferences learned from merged PR reviews ---\n" + open(learned, encoding="utf-8", errors="replace").read()[:6000])
     return "\n".join(parts) or "(no contribution guide found)"
 
 
 def style_text(project):
     p = os.path.join(project_dir(project), "STYLE.md")
-    return open(p).read()[:5000] if os.path.exists(p) else "(no STYLE.md yet; run `crucible learn`)"
+    return open(p, encoding="utf-8", errors="replace").read()[:5000] if os.path.exists(p) else "(no STYLE.md yet; run `crucible learn`)"
 
 
 def memory_text(project, limit=40):
     p = os.path.join(project_dir(project), "memory.md")
     if not os.path.exists(p):
         return "(none yet)"
-    lines = [l for l in open(p).read().split("\n") if l.startswith("- ")]
+    lines = [l for l in open(p, encoding="utf-8", errors="replace").read().split("\n") if l.startswith("- ")]
     return "\n".join(lines[-limit:]) or "(none yet)"
 
 

@@ -104,7 +104,7 @@ def run_learn(repo, n=25, model="claude-sonnet-5-5", budget_usd=2.0, style=True,
           + (f" ({src} outside tests)." if (src := meta["median_merged_pr_nontest_lines"]) is not None else "."), ""]
     for r in out["rules"]:
         md.append(f"- **{r['rule']}**: {r['why']} ({', '.join(r['sources'][:3])})")
-    open(os.path.join(project_dir(project), "rules.md"), "w").write("\n".join(md) + "\n")
+    open(os.path.join(project_dir(project), "rules.md"), "w", encoding="utf-8").write("\n".join(md) + "\n")
     meta["rules"] = len(out["rules"]); meta["cost_usd"] = round(budget.spent, 4)
     write_json(os.path.join(project_dir(project), "meta.json"), meta)
     log(f"wrote {len(out['rules'])} rules → {os.path.join(project_dir(project), 'rules.md')}")
