@@ -868,6 +868,13 @@ Baseline for b06cb2a..9451ca3 (prose results count as testing evidence). Populat
   commitment). DRG-134 stores the judged PR text from here on, so this gap doesn't recur.
   Count note (fixed 2026-11-16): "11 bvh" above should read 10. All 6 matched fires are bvh (bvh-981, bvh-961, 4 ×
   #969), so bvh's 16 − 6 = 10, and 10 + 2 MangoHud + 2 three.js = 14 = 20 − 6.
+- MangoHud/three.js follow-up (2026-11-16, $0): **none recoverable either, so recovered 0 of 4.** The 4 fires are
+  work/mangohud.review1.log (11-05 16:12:00), next/mangohud-padding.review.log (11-05 04:11:46) and
+  next/three.js-profiling.review{,2}.log (11-04 18:06:26, 18:07:46). Every matching draft on disk was edited
+  after its fired review: mangohud/PR_DRAFT.md 16:12:19, mangohud-padding/PR_DRAFT.md 04:13:47,
+  three.js-profiling/PR_DRAFT.md 18:15:32. The `.polished.md` copies are polish output written later still. Later
+  reviews of the same drafts (mangohud review4, padding review2-4, profiling review1/3) did not fire. So all 14
+  unmatched fires stay unreplayable, and the floor stays "at least 2 of 20".
 
 ### 2026-11-16 · api-architecture (focus item 1): new optional parameters no real call passes, local A/B
 
