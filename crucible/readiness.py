@@ -25,7 +25,8 @@ def find_draft(repo, draft=None):
     that the author hasn't accepted yet (copy it over PR_DRAFT.md to accept), so it is never picked up implicitly."""
     for p in [draft] if draft else [os.path.join(repo, "PR_DRAFT.md")]:
         if p and os.path.exists(p):
-            return p, open(p, errors="replace").read()
+            # UTF-8, not the locale codec: draft_sha must match the UTF-8 copy keep_draft writes, on any locale
+            return p, open(p, encoding="utf-8", errors="replace").read()
     return None, ""
 
 

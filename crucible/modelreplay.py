@@ -180,7 +180,7 @@ def draft_still_matches(r):
     from .review import draft_hash
     want = r["inputs"].get("draft_sha")
     for path in (r["inputs"].get("draft"), r.get("draft_copy")):
-        if want and path and os.path.exists(path) and draft_hash(open(path, errors="replace").read()) == want:
+        if want and path and os.path.exists(path) and draft_hash(open(path, encoding="utf-8", errors="replace").read()) == want:
             return path
     return None
 

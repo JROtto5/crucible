@@ -3178,6 +3178,23 @@ class TestRerunSameCommit(unittest.TestCase):
         self.assertIsNone(V.keep_draft(d, repo, None, inputs))      # not the text that was hashed
         self.assertFalse(os.path.exists(out))
 
+    def test_kept_draft_copy_replays_under_a_non_utf8_locale(self):
+        # the locale codec is fixed at startup, so an ASCII one needs its own interpreter
+        repo, d = tempfile.mkdtemp(), tempfile.mkdtemp()
+        body = "Corrige l'\u00e9tiquette \u0641\u0627\u0631\u0633\u06cc.\n".encode("utf-8")
+        open(os.path.join(repo, "PR_DRAFT.md"), "wb").write(body)
+        code = ("import sys\nfrom crucible import readiness, review, modelreplay\n"
+                "p, text = readiness.find_draft(sys.argv[1])\n"
+                "sha = review.draft_hash(text)\n"
+                "out = review.keep_draft(sys.argv[2], sys.argv[1], None, {'draft': p, 'draft_sha': sha})\n"
+                "print(out == modelreplay.draft_still_matches({'inputs': {'draft_sha': sha}, 'draft_copy': out}))\n")
+        env = {**os.environ, "LC_ALL": "C", "PYTHONCOERCECLOCALE": "0", "PYTHONUTF8": "0",
+               "PYTHONPATH": os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}
+        r = subprocess.run([sys.executable, "-X", "utf8=0", "-c", code, repo, d], env=env, capture_output=True, text=True)
+        self.assertEqual(r.stdout.strip(), "True", r.stderr)
+        (copy,) = os.listdir(os.path.join(d, "drafts"))
+        self.assertEqual(open(os.path.join(d, "drafts", copy), "rb").read(), body)
+
     def test_unreadable_draft_is_a_clean_failure(self):
         repo = make_repo({"a.js": "x\n"})
         with self.assertRaises(U.Failed):
