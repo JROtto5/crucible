@@ -6736,6 +6736,8 @@ class TestNitTier(unittest.TestCase):
         def prompt(f, *a, **kw):
             if f["line"] == 1:
                 mine["t"] = threading.get_ident()
+            elif mine.get("t") == threading.get_ident():  # the pool reuses the thread for a later medium
+                del mine["t"]
             return real_prompt(f, *a, **kw)
 
         def esc(v):
