@@ -12,12 +12,14 @@ DEBUG_RX = re.compile(r"\b(debugger;|console\.log\(|print\(['\"]DEBUG|pdb\.set_t
 # console.log is a debug leftover in product code, but the intended output of a build/bench/example script and of a
 # tagged server log line: every real-code fire through 2026-11-16 was one of those (eval/NOTES 2026-11-16, DRG-146).
 # Falsifiers (tests/test_core.py test_intended_console_output_is_not_a_debug_leftover). Must flag: console.log(res)
-# in src/, packages/next/src/build/, src/tools/, app/docs/page.tsx; a `[DEBUG]`/`[]` tag; a JS `#private` member line;
+# in src/, packages/next/src/build/, src/tools/, app/docs/page.tsx, packages/@scope/docs/src/; a `[DEBUG]`/`[]` tag;
+# a `[` ... `]` split across string pieces (`"[" + x + "]"`); a JS `#private` member line;
 # debugger and breakpoint calls even in scripts/. Must let through: i18n/build.ts, an `[OAuth]`-tagged line, scripts/,
 # bench/, examples/ at the repo root or a packages|apps/[@scope/]<name>/ root, a commented-out line, a Markdown file.
 CONSOLE_RX = re.compile(r"\bconsole\.log\(")
 TAGGED_LOG_RX = re.compile(r"""console\.log\(\s*['"`]\[(?!(debug|tmp|temp|todo|test)\b)[^\]\s'"`][^\]'"`]*\]""", re.I)
-SCRIPT_DIR_RX = re.compile(r"^((packages|apps)/(@[^/]+/)?[^/]+/)?(scripts?|bin|tools?|bench(marks?)?|examples?|demos?|docs?|build)/", re.I)
+SCRIPT_DIR_RX = re.compile(r"^((packages|apps)/(@[^/]+/[^/]+|[^@/][^/]*)/)?"
+                           r"(scripts?|bin|tools?|bench(marks?)?|examples?|demos?|docs?|build)/", re.I)
 SCRIPT_FILE_RX = re.compile(r"(^|/)(build|bench\w*|cli)\.[cm]?[jt]s$", re.I)
 PROSE_PATH_RX = re.compile(r"\.(md|mdx|markdown|rst|txt|adoc)$", re.I)
 JS_PATH_RX = re.compile(r"\.([cm]?[jt]sx?|vue|svelte)$", re.I)
@@ -127,8 +129,8 @@ def authored_added(hunk):
 
 def script_path(path):
     """A build/bench/example/tool script, where printing is the point. Only a script dir at the repo root or a
-    packages|apps/[@scope/]<name>/ root counts (deeper package layouts are not recognised): tools/ or build/ deeper down is product code (Next.js packages/next/src/build/,
-    an app router's app/docs/)."""
+    packages|apps/[@scope/]<name>/ root counts (deeper package layouts are not recognised): tools/ or build/ deeper
+    down is product code (Next.js packages/next/src/build/, an app router's app/docs/)."""
     return bool(SCRIPT_DIR_RX.search(path) or SCRIPT_FILE_RX.search(path))
 
 

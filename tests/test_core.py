@@ -157,6 +157,7 @@ diff --git a/test/fixtures/keys.js b/test/fixtures/keys.js
                 ("src/a.ts", "console.log('[', a, ']')"),
                 ("app/docs/[slug]/page.tsx", "console.log(res)"),
                 ("pages/tools/index.tsx", "console.log(res)"),
+                ("packages/@scope/docs/src/index.ts", "console.log(res)"),
                 ("src/a.ts", "  #dump() { console.log(this.state) }")]
         for path, line in quiet + loud:
             diff = f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -0,0 +1,1 @@\n+{line}\n"
