@@ -140,6 +140,8 @@ diff --git a/test/fixtures/keys.js b/test/fixtures/keys.js
                  ("src/net.ts", "// console.log(packet);"),
                  ("app/views.py", '# print("DEBUG", row)'),
                  ("packages/core/scripts/gen.ts", "console.log(out);"),
+                 ("packages/@scope/pkg/scripts/gen.ts", "console.log(out);"),
+                 ("apps/web/scripts/seed.ts", "console.log(out);"),
                  ("README.md", "console.log(room.state);"),
                  ("src/a.ts", "// debugger;")]
         loud = [("src/frontend/Login.tsx", "console.log(res)"),
@@ -151,6 +153,8 @@ diff --git a/test/fixtures/keys.js b/test/fixtures/keys.js
                 ("app/views.py", 'print("DEBUG", row)'),
                 ("src/a.ts", "console.log('[]', x);"),
                 ("src/a.ts", "console.log('[DEBUG] x', x);"),
+                ("src/a.ts", 'console.log("[" + JSON.stringify(x) + "]")'),
+                ("src/a.ts", "console.log('[', a, ']')"),
                 ("app/docs/[slug]/page.tsx", "console.log(res)"),
                 ("pages/tools/index.tsx", "console.log(res)"),
                 ("src/a.ts", "  #dump() { console.log(this.state) }")]
