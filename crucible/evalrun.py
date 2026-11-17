@@ -170,6 +170,8 @@ def run_case(name, case_dir, exp, args, cache_dir):
             cmd.append("--no-tiers")
         if getattr(args, "nits", False):
             cmd.append("--nits")
+        if getattr(args, "lens", False):
+            cmd.append("--lens")
         t0 = time.time()
         proc = subprocess.run(cmd, env=env, capture_output=True, text=True, cwd=os.path.dirname(EVAL_DIR), timeout=3600)
         secs = round(time.time() - t0, 1)
@@ -316,6 +318,7 @@ def run_eval(args, log=print):
     settings = {"review": args.review_model or "default", "verify": args.verify_model or "default",
                 "cheap": "off" if args.no_tiers else (args.cheap_model or "default"), "budget": args.budget,
                 **({"nits": True} if getattr(args, "nits", False) else {}),
+                **({"lens": True} if getattr(args, "lens", False) else {}),
                 "cases": len(cases), "split": getattr(args, "split", None) or "all", "subset": bool(args.cases), "shared_cache": bool(cache_dir)}
     log(f"crucible eval: {len(cases)} case(s) · {settings}")
     results = []

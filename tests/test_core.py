@@ -7486,5 +7486,138 @@ class TestReportSummary(unittest.TestCase):
                      ""):
             self.assertEqual(V.reviewer_summary([text] if text else [], [{"severity": "low"}]), text)
 
+class TestLensMode(unittest.TestCase):
+    """--lens (2026-11-17, for use as one lens inside another reviewer): code findings only, stable ids, no draft or
+    temp paths; the small tier caps small changes; ai_attribution: expected silences attribution items."""
+
+    def _repo(self, d, body_lines=2):
+        repo = os.path.join(d, "r")
+        os.makedirs(os.path.join(repo, "src"))
+        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",
+                   GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+        g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True, env=env).stdout.decode().strip()
+        w = lambda p, t: open(os.path.join(repo, p), "w").write(t)
+        g("init", "-q", "-b", "main"); w("src/a.js", "export const a = 1;\n"); g("add", "-A"); g("commit", "-qm", "base")
+        g("checkout", "-qb", "x")
+        w("src/a.js", "export const a = 1;\n" + "".join(f"export const v{i} = {i};\n" for i in range(body_lines)) +
+          "export function f(xs) { console.log(xs); return xs[xs.length]; }\n")
+        g("commit", "-qam", "add f\n\nCo-Authored-By: Claude <noreply@anthropic.com>")
+        draft = os.path.join(d, "scratch", "PR_DRAFT.md")
+        os.makedirs(os.path.dirname(draft)); open(draft, "w").write("Fix f\n\n🤖 Generated with Claude Code\n")
+        return repo, draft
+
+    def _run(self, d, repo, **kw):
+        home, prompts, budgets = os.path.join(d, "home"), [], []
+
+        def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500, kind="other"):
+            prompts.append(prompt); budgets.append(budget.limit if budget is not None else None)
+            if "findings" in schema["properties"]:
+                return {"summary": "s", "findings": [
+                    {"severity": "important", "file": "src/a.js", "line": 3, "title": "f reads past the end",
+                     "problem": "xs[xs.length]", "caused_by_this_change": True, "reachable_in_real_use": True,
+                     "wrong_if": "the index is\n  below length", "fix": "length - 1"},
+                    {"severity": "low", "file": "PR_DRAFT.md", "line": 1, "title": "PR description: no testing evidence",
+                     "problem": "p", "caused_by_this_change": True, "reachable_in_real_use": True,
+                     "wrong_if": "w", "fix": "x"},
+                    {"severity": "low", "file": "/tmp/scratch/PR_DRAFT.md", "line": 1, "title": "body too long",
+                     "problem": "p", "caused_by_this_change": True, "reachable_in_real_use": True,
+                     "wrong_if": "w", "fix": "x"}]}, 0.01
+            return {"keep": True, "severity": "important" if "past the end" in prompt else "low", "method": "read",
+                    "actions": "read", "evidence": "seen", "confidence": "high"}, 0.001
+        olds = (V.HOME, U.HOME, V.claude, os.environ.get("CRUCIBLE_CACHE"))
+        V.HOME = U.HOME = home
+        os.environ["CRUCIBLE_CACHE"] = os.path.join(home, "cache")
+        V.claude = fake
+        try:
+            dd = V.run_review(repo, "main", skip_checks=True, log=lambda *_: None, **kw)
+            return dd, prompts, budgets
+        finally:
+            V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
+            if olds[3] is None:
+                os.environ.pop("CRUCIBLE_CACHE", None)
+            else:
+                os.environ["CRUCIBLE_CACHE"] = olds[3]
+
+    def test_lens_keeps_code_findings_only_with_stable_ids(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo, draft = self._repo(d)
+            dd, prompts, _ = self._run(d, repo, draft=draft, lens=True)
+            lj = U.read_json(os.path.join(dd, "lens.json"))
+            self.assertEqual(lj["status"], "done", lj.get("reason"))
+            files = [f["file"] for f in lj["findings"]]
+            self.assertEqual(files, ["src/a.js"])                       # no draft, temp or debug-scanner rows
+            f = lj["findings"][0]
+            self.assertTrue(re.fullmatch(r"CL-[0-9a-f]{12}", f["id"]))
+            self.assertEqual(f["id"], V.lens_id({"file": "src/a.js", "line": 3, "title": "f  reads past the END"}))
+            self.assertEqual(f["wrong_if"], "the index is below length")  # one line
+            self.assertNotIn("Fix f", prompts[0])                       # the draft is never shown to the reviewer
+            self.assertIn("one lens inside another reviewer", prompts[0])
+            self.assertNotIn("House style.", prompts[0])
+
+    def test_a_plain_rounds_draft_finding_never_reaches_lens_json(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo, _ = self._repo(d)
+            open(os.path.join(repo, "PR_BODY.md"), "w").write("Fix f\n")
+            rows = V.lens_findings({"findings": [
+                {"file": "PR_BODY.md", "line": 1, "title": "missing testing evidence", "source": "review"},
+                {"file": "src/a.js", "line": 3, "title": "Debug statement left in", "source": "scanner"},
+                {"file": "src/a.js", "line": 3, "title": "f reads past the end", "source": "review"}]},
+                repo, tracked={"src/a.js"})["findings"]
+            self.assertEqual([r["title"] for r in rows], ["f reads past the end"])
+
+    def test_lens_and_plain_reviews_dont_reuse_each_other(self):
+        self.assertEqual(V.stale_inputs({"status": "done", "inputs": {"base": "b", "draft": None, "draft_sha": None}},
+                                        {"base": "b", "draft": None, "draft_sha": None, "lens": True}),
+                         "lens mode on since its last review")
+
+    def test_small_tier_caps_the_budget_and_skips_the_sweep(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo, _ = self._repo(d)
+            dd, _, budgets = self._run(d, repo, lens=True, budget_usd=5.0, nits=True)
+            rec = U.read_json(os.path.join(dd, "review.json"))
+            self.assertEqual(rec["small_tier"]["budget_usd"], V.SMALL_BUDGET_USD)
+            self.assertEqual(rec["nit_sweep"], {"skipped": "small tier"})
+            self.assertTrue(all(b == V.SMALL_BUDGET_USD for b in budgets))
+
+    def test_small_tier_leaves_big_changes_alone(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo, _ = self._repo(d, body_lines=V.SMALL_LINES + 5)
+            dd, _, budgets = self._run(d, repo, lens=True, budget_usd=5.0)
+            rec = U.read_json(os.path.join(dd, "review.json"))
+            self.assertNotIn("small_tier", rec)
+            self.assertEqual(budgets[0], 5.0)
+
+    def test_small_tier_flag_and_env(self):
+        self.assertFalse(V.small_tier_enabled(None, False))
+        self.assertTrue(V.small_tier_enabled(None, True))
+        self.assertFalse(V.small_tier_enabled(False, True))
+        with _mock.patch.dict(os.environ, {"CRUCIBLE_SMALL_TIER": "1"}):
+            self.assertTrue(V.small_tier_enabled(None, False))
+        with _mock.patch.dict(os.environ, {"CRUCIBLE_SMALL_TIER": "0"}):
+            self.assertFalse(V.small_tier_enabled(None, True))
+
+    def test_attribution_expected_silences_style_and_readiness(self):
+        text = "Fix f\n\n🤖 Generated with Claude Code\n"
+        hits = [f for f in S.check(".", "HEAD", [], "PR_DRAFT.md", text, {}) if "attribution" in f["title"]]
+        self.assertEqual(len(hits), 1)
+        self.assertEqual([f for f in S.check(".", "HEAD", [], "PR_DRAFT.md", text, {}, attribution_ok=True)
+                          if "attribution" in f["title"]], [])
+        with _mock.patch.dict(os.environ, {"CRUCIBLE_AI_ATTRIBUTION": "expected"}):
+            self.assertTrue(U.attribution_expected())
+        with tempfile.TemporaryDirectory() as d:
+            repo, _ = self._repo(d)
+            base = sh(repo, "git", "merge-base", "main", "HEAD")
+            self.assertEqual(R.commit_attribution(repo, base)["status"], "warn")
+            with _mock.patch.dict(os.environ, {"CRUCIBLE_AI_ATTRIBUTION": "expected"}):
+                self.assertEqual(R.commit_attribution(repo, base)["status"], "na")
+        proj = "o__attr"
+        os.makedirs(U.project_dir(proj), exist_ok=True)
+        U.write_json(os.path.join(U.project_dir(proj), "config.json"), {"ai_attribution": "expected"})
+        with _mock.patch.dict(os.environ, {"CRUCIBLE_AI_ATTRIBUTION": ""}):
+            self.assertTrue(U.attribution_expected(proj))
+            self.assertFalse(U.attribution_expected("o__other"))
+
+
 if __name__ == "__main__":
     unittest.main()
+

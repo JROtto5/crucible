@@ -149,6 +149,19 @@ def norm_words(s):
     return re.findall(r"[a-z0-9]+", (s or "").lower())
 
 
+def attribution_expected(project=None):
+    """True when AI tool attribution lines (a "Generated with ..." footer, an AI Co-authored-by trailer) are expected,
+    so they are never flagged: CRUCIBLE_AI_ATTRIBUTION=expected, or "ai_attribution": "expected" in the project's
+    ~/.crucible/projects/<project>/config.json. Some projects and companies require the disclosure."""
+    env = os.environ.get("CRUCIBLE_AI_ATTRIBUTION", "").strip().lower()
+    if env:
+        return env == "expected"
+    if not project:
+        return False
+    cfg = read_json(os.path.join(project_dir(project), "config.json"), {}) or {}
+    return str(cfg.get("ai_attribution", "")).strip().lower() == "expected"
+
+
 def stable_id(file, title):
     h = hashlib.sha1((file + "|" + " ".join(norm_words(title))).encode()).hexdigest()[:8]
     return f"CR-{h}"

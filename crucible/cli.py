@@ -32,9 +32,16 @@ def cmd_review(a):
     try:
         run_review(_p(a.repo), a.base, a.force, a.budget, a.author, a.draft, a.base_checks, a.offline, a.skip_checks,
                    full=a.full, fresh=a.fresh, no_tiers=a.no_tiers, route=a.route or None, no_exec=a.no_exec,
-                   nits=a.nits or None)
+                   nits=a.nits or None, lens=getattr(a, "lens", False), small_tier=getattr(a, "small_tier", None))
     except Failed as e:
         sys.exit(f"crucible: {e}")
+    if getattr(a, "lens", False):                      # a lens prints its findings file, not the readiness report
+        from .review import load
+        d = load(_p(a.repo))[2]
+        p = os.path.join(d, "lens.json")
+        print(p)
+        lj = read_json(p) or {}
+        sys.exit(0 if lj.get("status") == "done" else 3)
     return cmd_status(a)
 
 
@@ -232,6 +239,14 @@ def main(argv=None):
                    "default $0.75). With a --budget, a review that spent at most half of it also gets a nit-only "
                    "second look at each pass (CRUCIBLE_NITS_SWEEP=0 turns it off, =1 runs it without a budget; "
                    "capped by CRUCIBLE_NITS_SWEEP_USD, default $0.75)")
+    r.add_argument("--lens", action="store_true", help="run as one lens inside another reviewer: code findings only "
+                   "(no PR-description, readiness or house-style items), each with a stable id, file:line and wrong_if, "
+                   "written to lens.json (its path is printed; exit 3 if the review failed). Implies --offline and the "
+                   "small tier")
+    r.add_argument("--small-tier", dest="small_tier", action="store_true", default=None,
+                   help="cap a change under 200 changed lines at $1 with no nit sweep (default: on with --lens; "
+                        "CRUCIBLE_SMALL_TIER=1/0)")
+    r.add_argument("--no-small-tier", dest="small_tier", action="store_false")
     r.add_argument("--route", action="store_true", help="route by change type: a docs/PR-text-only round gets one cheaper "
                    "pass (also CRUCIBLE_ROUTE=1); see `crucible routing-replay`")
     st = s.add_parser("status", help="print the stored report for HEAD (exit 0 when GREEN)")
@@ -293,6 +308,7 @@ def main(argv=None):
     ev.add_argument("--review-model"); ev.add_argument("--verify-model"); ev.add_argument("--cheap-model")
     ev.add_argument("--no-tiers", action="store_true"); ev.add_argument("--budget", type=float, default=1.5)
     ev.add_argument("--nits", action="store_true", help="run the reviews with --nits (scored: nit count, cost, nits on clean cases)")
+    ev.add_argument("--lens", action="store_true", help="run the reviews with --lens (code only; small tier on)")
     ev.add_argument("--jobs", type=int, default=4); ev.add_argument("--label")
     ev.add_argument("--cache", help="shared review/verification cache dir across cases and runs (default: none)")
     ev.add_argument("--no-write", action="store_true", help="don't update eval/RESULTS.md and history")
