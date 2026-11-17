@@ -1063,3 +1063,16 @@ The recall claim waits for ReviewBench run 5's reliability category (run 4: 42.3
 there in the four shapes and how many the judge calls true.
 Spend this shift: $6.94 A/B (incl. the discarded first fixture, $3.91) + about $0.95 for two kept-review reads + $3.51
 regression = about $11.40, before self-review.
+
+## Lens mode and the small tier (2026-11-17, a399276/3c4e5a7)
+`crucible eval` on 21 bug + clean cases (no --nits), the same budget ($1.5) and models, plain vs `--lens`, which turns on the small tier:
+
+| | plain | --lens |
+|---|---|---|
+| recall (blocking) | 0.867 (13/15) | 0.867 (13/15) |
+| recall (any severity) | 1.0 | 1.0 |
+| false blocking on clean cases | 0 | 0 |
+| true findings dropped | 1 | 0 |
+| cost, 21 cases | $4.67 ($0.222/case, max $0.36) | $3.80 ($0.181/case, max $0.31) |
+
+The same two cases were missed in both runs (js-refcount, rated medium; py-race). Every case is under 200 changed lines, so all ran in the small tier. Its $1 cap never bound, because no case cost more than $0.36. The 19% saving comes from the lens prompt: no draft and no house-style section. The cap is a ceiling for the host, not where the saving came from. One round each, so the cost difference is within noise for single cases.
