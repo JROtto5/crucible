@@ -91,13 +91,13 @@ The cases above are the **build** split: crucible's prompts and verifier have be
 
 `crucible review --lens` runs crucible as one reviewer inside another tool, which merges its findings with its own.
 
-- **Code only.** The PR description isn't read or judged. There are no readiness items, no house-style findings and no
+- **Code only.** The reviewer never sees the PR description, and nothing about it is judged. There are no readiness items, no house-style findings and no
   debug-statement scanner rows, and no GitHub calls (it implies `--offline`).
 - **One file for the host:** `lens.json` in the review directory. Its path is printed, and the exit code is 3 if the
   review failed. Each row has:
   - `id`: a stable `CL-` + 12 hex id, from the file, line and normalized title, so the same finding keeps its id across
     runs;
-  - `file` and `line`: always a path inside the repo, never a temp or draft path;
+  - `file` and `line`: always a file tracked in the repo, never a temp or draft path;
   - `severity`, `title`, `problem`, `fix`, and `wrong_if` (one line: the observation that would refute it);
   - `verification`: verified, or unverified when the verifier couldn't settle it; dropped findings never appear.
   

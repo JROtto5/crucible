@@ -1270,13 +1270,15 @@ def _in_repo_path(path, repo):
     return full == os.path.normpath(repo) or full.startswith(os.path.normpath(repo) + os.sep)
 
 
-def lens_findings(record, repo, nits=False):
+def lens_findings(record, repo, nits=False, tracked=None):
     """-> lens.json: the review's code findings (and its verified nits when `nits`), each with a stable id, file:line
     and a one-line wrong_if. Left out: PR-description and readiness items, house-style findings, the debug-statement
     scanner, findings the verifier dropped, and anything anchored outside the repo (a temp or draft path)."""
     def keep(f):
-        return (_in_repo_path(f.get("file"), repo) and f.get("source") not in ("style",) and not f.get("house")
-                and not LENS_DROP_TITLES.match((f.get("title") or "").strip()))
+        title = (f.get("title") or "").strip()
+        return (_in_repo_path(f.get("file"), repo) and (tracked is None or f.get("file") in tracked)
+                and f.get("source") != "style" and not title.lower().startswith("pr description")
+                and not (f.get("source") == "scanner" and LENS_DROP_TITLES.match(title)))
 
     def row(f, tier):
         v = f.get("verification") or {}
@@ -1409,6 +1411,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
 
         # incremental re-review: only what changed since the last complete review of this branch
         prev_sha, prev_rev = (None, None) if full else previous_review(repo, project, sha, base, no_exec)
+        if prev_rev is not None and bool(prev_rev.get("lens")) != lens:   # a plain round's draft findings can't carry into a lens
+            prev_sha, prev_rev = None, None
         carried, carried_dropped, reverify = [], [], []
         if prev_sha:
             delta = git(repo, "diff", "--unified=5", "--no-color", f"{prev_sha}..HEAD")
@@ -1668,7 +1672,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         record["lens"] = True
     write_json(os.path.join(d, "review.json"), record)
     if lens:
-        write_json(os.path.join(d, "lens.json"), lens_findings(record, repo, nits))
+        tracked_now = {p for p in git(repo, "ls-files", "-z", check=False).split("\0") if p}   # an untracked draft never anchors a row
+        write_json(os.path.join(d, "lens.json"), lens_findings(record, repo, nits, tracked_now))
     branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD", check=False)
     idx_p = os.path.join(project_dir(project), "branches.json")
     idx = read_json(idx_p, {}) or {}

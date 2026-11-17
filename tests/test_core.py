@@ -7486,10 +7486,6 @@ class TestReportSummary(unittest.TestCase):
                      ""):
             self.assertEqual(V.reviewer_summary([text] if text else [], [{"severity": "low"}]), text)
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestLensMode(unittest.TestCase):
     """--lens (2026-11-17, for use as one lens inside another reviewer): code findings only, stable ids, no draft or
     temp paths; the small tier caps small changes; ai_attribution: expected silences attribution items."""
@@ -7558,6 +7554,17 @@ class TestLensMode(unittest.TestCase):
             self.assertIn("one lens inside another reviewer", prompts[0])
             self.assertNotIn("House style.", prompts[0])
 
+    def test_a_plain_rounds_draft_finding_never_reaches_lens_json(self):
+        with tempfile.TemporaryDirectory() as d:
+            repo, _ = self._repo(d)
+            open(os.path.join(repo, "PR_BODY.md"), "w").write("Fix f\n")
+            rows = V.lens_findings({"findings": [
+                {"file": "PR_BODY.md", "line": 1, "title": "missing testing evidence", "source": "review"},
+                {"file": "src/a.js", "line": 3, "title": "Debug statement left in", "source": "scanner"},
+                {"file": "src/a.js", "line": 3, "title": "f reads past the end", "source": "review"}]},
+                repo, tracked={"src/a.js"})["findings"]
+            self.assertEqual([r["title"] for r in rows], ["f reads past the end"])
+
     def test_lens_and_plain_reviews_dont_reuse_each_other(self):
         self.assertEqual(V.stale_inputs({"status": "done", "inputs": {"base": "b", "draft": None, "draft_sha": None}},
                                         {"base": "b", "draft": None, "draft_sha": None, "lens": True}),
@@ -7566,9 +7573,10 @@ class TestLensMode(unittest.TestCase):
     def test_small_tier_caps_the_budget_and_skips_the_sweep(self):
         with tempfile.TemporaryDirectory() as d:
             repo, _ = self._repo(d)
-            dd, _, budgets = self._run(d, repo, lens=True, budget_usd=5.0)
+            dd, _, budgets = self._run(d, repo, lens=True, budget_usd=5.0, nits=True)
             rec = U.read_json(os.path.join(dd, "review.json"))
             self.assertEqual(rec["small_tier"]["budget_usd"], V.SMALL_BUDGET_USD)
+            self.assertEqual(rec["nit_sweep"], {"skipped": "small tier"})
             self.assertTrue(all(b == V.SMALL_BUDGET_USD for b in budgets))
 
     def test_small_tier_leaves_big_changes_alone(self):
@@ -7608,3 +7616,8 @@ class TestLensMode(unittest.TestCase):
         with _mock.patch.dict(os.environ, {"CRUCIBLE_AI_ATTRIBUTION": ""}):
             self.assertTrue(U.attribution_expected(proj))
             self.assertFalse(U.attribution_expected("o__other"))
+
+
+if __name__ == "__main__":
+    unittest.main()
+
