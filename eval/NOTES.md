@@ -1013,3 +1013,8 @@ Counted every stored "Debug statement left in" finding:
 So: 4 of 19 fires right (the fixture), 15 of 19 wrong; 3 distinct real-code lines, 3 wrong. n = 19 is too few to quote
 a rate. What it does show: on real code, every fire so far was `console.log` used as a script message or server log,
 and no real debug leftover has been caught. Each costs one low novel_fp per ReviewBench round. Follow-up DRG-146.
+
+DRG-146 (2026-11-17, lane 0200): narrowed as above, see CHANGELOG. All 3 wrong real-code lines go quiet (test); the planted
+fixture `print("DEBUG ...")` still fires. On the 1420-hit corpus (work/next/drg146) 779 go quiet, 641 still fire; none
+of the quieted lines was hand-checked as a leftover except by sampling the 11 tag-rule ones (all intended). Whether
+ReviewBench's novel_fp drops waits for the next run.

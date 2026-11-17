@@ -129,6 +129,29 @@ diff --git a/test/fixtures/keys.js b/test/fixtures/keys.js
         self.assertEqual(hits[("test/fixtures/keys.js", "Possible secret in added line")]["severity"], "medium")
         self.assertEqual(hits[("m.js", "Debug statement left in")]["line"], 3)
 
+    def test_intended_console_output_is_not_a_debug_leftover(self):
+        """DRG-146: every real-code fire was a build-script message or a tagged server log (ReviewBench
+        simnaut_emdash_2); leftovers in product code, debugger;, pdb and print("DEBUG still fire."""
+        quiet = [("i18n/build.ts", 'console.log("No tracked files found.");'),
+                 ("app/api/oauth/route.ts", 'console.log("[OAuth] Setup complete: created admin user", id);'),
+                 ("scripts/release.js", "console.log(`Publishing ${name}`);"),
+                 ("packages/x/bench/run.ts", "console.log(results);"),
+                 ("examples/basic/index.js", "console.log(room.state);"),
+                 ("src/net.ts", "// console.log(packet);"),
+                 ("app/views.py", '# print("DEBUG", row)')]
+        loud = [("src/frontend/Login.tsx", "console.log(res)"),
+                ("packages/next/src/build/index.ts", "console.log(config);"),
+                ("src/tools/parse.ts", "console.log(tokens);"),
+                ("src/worker.js", "console.log( 'done' );"),
+                ("scripts/release.js", "debugger;"),
+                ("tools/gen.py", "breakpoint()"),
+                ("app/views.py", 'print("DEBUG", row)'),
+                ("src/a.ts", "console.log('[]', x);")]
+        for path, line in quiet + loud:
+            diff = f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -0,0 +1,1 @@\n+{line}\n"
+            fired = any(h["title"] == "Debug statement left in" for h in D.scan(D.parse(diff)))
+            self.assertEqual(fired, (path, line) in loud, (path, line))
+
     def test_elided_example_key_is_not_a_secret(self):
         """ReviewBench run 2: two critical "Possible secret" findings were doc-comment placeholders."""
         diff = ("diff --git a/k.rs b/k.rs\n--- a/k.rs\n+++ b/k.rs\n@@ -1,0 +1,4 @@\n"
