@@ -715,11 +715,13 @@ def overlapping_prs(repo, files, me=None):
                                f"({'; '.join(notes)})" + ("" if me else UNKNOWN_ME))
 
 
-def commit_attribution(repo, base):
+def commit_attribution(repo, base, project=None):
     """AI co-author trailers / "Generated with ..." lines in the branch's commits. A warning, not a failure: some
     projects ask for AI disclosure, and then the trailer may be exactly what they want (check their policy)."""
     from .style import attribution_lines
     name = "no AI tool attribution in commits"
+    if util.attribution_expected(project):
+        return _item(name, "na", "AI attribution is expected here (ai_attribution: expected)")
     hits = []
     for b in git(repo, "log", "--format=%H%x00%B%x01", f"{base}..HEAD").split("\x01"):
         sha, _, msg = b.strip().partition("\x00")
@@ -1746,7 +1748,7 @@ def evaluate(repo, project, base, files, draft=None, me=None, offline=False, bas
         changelog(repo, paths),
         commit_style(repo, base, subjects),
         dco(repo, base),
-        commit_attribution(repo, base),
+        commit_attribution(repo, base, project),
         _item("no formatting-only churn", "fail" if fmt else "pass", f"whitespace-only hunks: {fmt[:5]}" if fmt else "none"),
         size(project, files),
         learned_data(project),

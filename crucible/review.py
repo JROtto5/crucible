@@ -5,6 +5,7 @@ from .util import (BLOCKING, BUDGET_EXHAUSTED, HOME, MODELS, PREFERENCE, SEV, TO
                    claude, crucible_build, default_base,
                    exclude_locally, git, is_dirty, norm_words, project_dir, project_key, read_json, review_dir,
                    stable_id, token_diff, token_summary, write_json)
+from .util import attribution_expected
 
 SEVERITY_DEFS = """Severity definitions (use them literally):
 - critical: data loss or corruption, a security hole, or a crash/hang in normal use; or the change does not do what it claims.
@@ -1130,10 +1131,13 @@ def anchor_since(repo, prev_sha, f, base=None):
             f"Changes since {prev_sha[:10]} in those files:\n{patch[:6000]}")
 
 
-def review_inputs(repo, base, draft=None, no_exec=False, nits=False):
+def review_inputs(repo, base, draft=None, no_exec=False, nits=False, lens=False):
     """What a verdict depends on besides the commit. PR_DRAFT.md is untracked, so editing it doesn't move HEAD;
     without this a rerun returned the old verdict for a draft it never read (real-use bug i). `no_exec` is recorded
     only when set, so reviews stored before it existed still match a default run."""
+    if lens:                                           # a lens never reads the draft, so it can't depend on it
+        return {"base": base, "draft": None, "draft_sha": None, "lens": True,
+                **({"no_exec": True} if no_exec else {}), **({"nits": True} if nits else {})}
     try:
         path, text = readiness.find_draft(repo, draft)
     except OSError as e:
@@ -1205,6 +1209,8 @@ def stale_inputs(prev, inputs):
     old = prev.get("inputs")
     if old is None:
         return "the last review didn't record which draft it judged"
+    if bool(old.get("lens")) != bool(inputs.get("lens")):
+        return "lens mode " + ("on" if inputs.get("lens") else "off") + " since its last review"
     why = [n for k, n in (("base", "the base"), ("draft", "the draft path"), ("draft_sha", "the draft")) if old.get(k) != inputs[k]]
     if why:
         return f"{' and '.join(why)} changed since its last review"
@@ -1217,18 +1223,99 @@ def stale_inputs(prev, inputs):
     return None
 
 
+# ---------- lens mode: crucible as one reviewer inside another ----------
+SMALL_LINES = 200                                      # changed lines (added + removed) under which the small tier applies
+SMALL_BUDGET_USD = 1.0
+LENS_NOTE = ("This review runs as one lens inside another reviewer. Report problems in the CODE only: correctness, "
+             "reliability, security, tests, API design, and docs or comments the change made wrong. Do not review the "
+             "PR description, commit messages, or house style (comment density, naming taste).")
+LENS_DROP_TITLES = re.compile(r"^(debug statement left in|pr description\b)", re.I)
+
+
+def small_tier_enabled(flag=None, lens=False):
+    """The small tier: an explicit flag wins, then CRUCIBLE_SMALL_TIER (1/0), then on for a lens, off otherwise."""
+    if flag is not None:
+        return bool(flag)
+    env = os.environ.get("CRUCIBLE_SMALL_TIER", "").strip()
+    if env:
+        return env == "1"
+    return bool(lens)
+
+
+def changed_lines(files):
+    """Added + removed lines over the change's text files."""
+    return sum(1 for f in files if not f.get("binary") for h in f.get("hunks") or []
+               for k, *_ in h.get("lines") or [] if k in ("+", "-"))
+
+
+def lens_prompt(prompt):
+    """The review prompt with its house-style and PR-description sections replaced by LENS_NOTE."""
+    a, b = prompt.find("House style."), prompt.find("Facts from running the project's own checks")
+    if a < 0 or b < a:
+        return prompt + "\n" + LENS_NOTE + "\n"
+    return prompt[:a] + LENS_NOTE + "\n\n        " + prompt[b:]
+
+
+def lens_id(f):
+    """A deterministic id for a lens finding: file, line and normalized title (CL- + 12 hex)."""
+    key = f"{f.get('file')}|{f.get('line')}|{' '.join(norm_words(f.get('title') or ''))}"
+    return "CL-" + hashlib.sha1(key.encode()).hexdigest()[:12]
+
+
+def _in_repo_path(path, repo):
+    """A repo-relative path to a file of this change's repo: never absolute, never outside it, never a draft."""
+    if not path or os.path.isabs(path) or path.startswith(("..", "~")) or os.path.basename(path) == "PR_DRAFT.md":
+        return False
+    full = os.path.normpath(os.path.join(repo, path))
+    return full == os.path.normpath(repo) or full.startswith(os.path.normpath(repo) + os.sep)
+
+
+def lens_findings(record, repo, nits=False):
+    """-> lens.json: the review's code findings (and its verified nits when `nits`), each with a stable id, file:line
+    and a one-line wrong_if. Left out: PR-description and readiness items, house-style findings, the debug-statement
+    scanner, findings the verifier dropped, and anything anchored outside the repo (a temp or draft path)."""
+    def keep(f):
+        return (_in_repo_path(f.get("file"), repo) and f.get("source") not in ("style",) and not f.get("house")
+                and not LENS_DROP_TITLES.match((f.get("title") or "").strip()))
+
+    def row(f, tier):
+        v = f.get("verification") or {}
+        return {"id": lens_id(f), "crucible_id": f.get("id"), "tier": tier, "severity": f.get("severity"),
+                "file": f["file"], "line": f.get("line"), "title": f.get("title"),
+                "problem": f.get("problem"), "wrong_if": " ".join((f.get("wrong_if") or "").split())[:300],
+                "fix": f.get("fix"), "verification": v.get("status"), "also_at": f.get("also_at") or []}
+    out = [row(f, "finding") for f in record.get("findings") or [] if keep(f)]
+    if nits:
+        out += [row(f, "nit") for f in record.get("nits") or []
+                if keep(f) and (f.get("verification") or {}).get("status") != "dropped"]
+    seen, rows = set(), []
+    for r in out:                                      # one row per id: a nit never repeats a finding
+        if r["id"] not in seen:
+            seen.add(r["id"]); rows.append(r)
+    return {"crucible_sha": record.get("crucible_sha"), "sha": record.get("sha"), "status": record.get("status"),
+            "reason": record.get("reason"), "complete": (record.get("coverage") or {}).get("complete"),
+            "small_tier": record.get("small_tier"), "cost_usd": record.get("cost_usd"), "findings": rows}
+
+
 def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, draft=None, base_checks=False,
                offline=False, skip_checks=False, log=print, full=False, fresh=False, no_tiers=False, route=None,
-               no_exec=False, nits=None):
+               no_exec=False, nits=None, lens=False, small_tier=None):
     """full: ignore the previous review of this branch (no incremental re-review).
     fresh: bypass the review/verification cache. no_tiers: verify with the strong model only.
     route: route by change type (routing.py); None reads CRUCIBLE_ROUTE.
     no_exec (or CRUCIBLE_NO_EXEC=1): nothing from the checkout is executed: no project checks, and the verifier
     only reads. skip_checks alone stops the project's lint/test commands but not the verifier's probes.
     nits (or CRUCIBLE_NITS=1): also ask for, verify and store the non-blocking nit tier (record["nits"]); the
-    findings and the verdict are the same as without it. Nits come from this round's passes only (not carried)."""
+    findings and the verdict are the same as without it. Nits come from this round's passes only (not carried).
+    lens: crucible runs as one lens inside another reviewer: the PR description is not read or judged, there are no
+    house-style findings, no GitHub calls, and lens.json (lens_findings) holds the code findings only.
+    small_tier (None: on in lens mode, else CRUCIBLE_SMALL_TIER): a change under SMALL_LINES changed lines is
+    reviewed on a budget capped at SMALL_BUDGET_USD, with no nit sweep."""
     route = routing.enabled(route)
     nits = nits_enabled(nits)
+    lens = bool(lens)
+    small_tier = small_tier_enabled(small_tier, lens)
+    offline = offline or lens                          # a lens judges code only: no issue, claim or overlap lookups
     no_exec = bool(no_exec) or os.environ.get("CRUCIBLE_NO_EXEC", "0") == "1"
     skip_checks = skip_checks or no_exec            # the project's lint/test commands are code from the checkout too
     repo = os.path.abspath(repo)
@@ -1246,7 +1333,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         raise Failed("a review of this commit is already running")
-    inputs = review_inputs(repo, base, draft, no_exec, nits)
+    inputs = review_inputs(repo, base, draft, no_exec, nits, lens)
     before = read_json(os.path.join(d, "review.json")) or {}
     # failed verifier attempts so far, by finding id, so a recurring failure stops being retried (ids are stable)
     attempts = {f["id"]: f["verification"].get("attempts", 1) for f in before.get("findings") or [] if verify_failed(f)}
@@ -1271,6 +1358,11 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         if not diff_text:
             raise Failed("empty diff against base")
         files = diff_mod.parse(diff_text)
+        n_changed = changed_lines(files)
+        if small_tier and n_changed < SMALL_LINES:
+            budget.limit = SMALL_BUDGET_USD if budget.limit is None else min(budget.limit, SMALL_BUDGET_USD)
+            record["small_tier"] = {"changed_lines": n_changed, "budget_usd": budget.limit}
+            log(f"  small change ({n_changed} changed lines): small tier, budget ${budget.limit:.2f}, no nit sweep")
         review_model, verify_model, authors = choose_models(repo, base, author)
         record.update(review_model=review_model, verify_model=verify_model, author_models=authors)
         log(f"  models: review {review_model}, verify {verify_model} (author: {authors or 'unknown'})")
@@ -1285,7 +1377,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         record["checks"] = chk
         ready = readiness.evaluate(repo, project, base, files, draft=draft, offline=offline, base_ref=base_ref)
         record["readiness"] = ready
-        draft_path, draft_full = readiness.find_draft(repo, draft)
+        draft_path, draft_full = (None, "") if lens else readiness.find_draft(repo, draft)
         draft_text = readiness.submitted_text(draft_full)
         cut = readiness.split_draft(draft_full)["notes_line"]
         dlabel = draft_label(repo, draft_path)
@@ -1297,14 +1389,19 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         if cut:
             log(f"  draft: author notes from {os.path.basename(draft_path)}:{cut} on are not judged as the PR body")
         style_json = read_json(os.path.join(project_dir(project), "style.json"), {}) or {}
-        house_findings = style_mod.check(repo, base, files, dlabel, draft_text, style_json,
-                                         title=readiness.split_draft(draft_full)["title"])
+        attr_ok = attribution_expected(project)
+        house_findings = [] if lens else style_mod.check(repo, base, files, dlabel, draft_text, style_json,
+                                                         title=readiness.split_draft(draft_full)["title"],
+                                                         attribution_ok=attr_ok)
         for f in house_findings:                       # a draft finding that names a line names it in the submitted text
             if f["file"] == dlabel and draft_path and f["line"] > 1:
                 f["line"] = readiness.draft_file_line(draft_full, f["line"])
 
         scanner = diff_mod.scan(files)
         rules, mem, facts = project_rules_text(repo, project), memory_text(project), checks_mod.facts(chk)
+        if attr_ok:
+            rules += ("\n- AI tool attribution lines (a \"Generated with ...\" footer, an AI Co-authored-by trailer) are "
+                      "expected in this project: never report them.")
         clog = git(repo, "log", "--format=%h %s", f"{base}..HEAD")
         all_files = [f["path"] for f in files]
         code_files = [f["path"] for f in files if not f["binary"]]
@@ -1366,6 +1463,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             key_prompt = review_prompt(project, sha, base, ch, rules, mem, fkey, clog, all_files, house,
                                        draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured, since, nits,
                                        docs)
+            if lens:
+                prompt, key_prompt = lens_prompt(prompt), lens_prompt(key_prompt)
             key = hashlib.sha256((review_model + "\0" + key_prompt).encode()).hexdigest()[:32]
             hit = None if fresh else cache_hit(key, budget, "review")
             if hit:
@@ -1509,7 +1608,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             extra = 0.0
             hold = nits_reserve_usd(budget.limit, len(nit_pool(nit_cands, cands + carried + reverify, dlabel, measured)))
             left = None if budget.limit is None else max(0.0, budget.remaining() - hold - NIT_BATCH_EST_USD)
-            skip = sweep_skip_reason(budget.limit, budget.spent, left) if sweep_chunks else "no pass was reviewed"
+            skip = ("small tier" if record.get("small_tier") else
+                    sweep_skip_reason(budget.limit, budget.spent, left) if sweep_chunks else "no pass was reviewed")
             if skip:
                 record["nit_sweep"] = {"skipped": skip}
             else:
@@ -1564,7 +1664,11 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
     except Exception as e:  # noqa: BLE001 - never leave a half-written review
         record.update(status="failed", reason=f"{type(e).__name__}: {e}", cost_usd=round(budget.spent, 4))
     record.update(token_fields(budget, tok_split), crucible_sha=crucible_build())
+    if lens:
+        record["lens"] = True
     write_json(os.path.join(d, "review.json"), record)
+    if lens:
+        write_json(os.path.join(d, "lens.json"), lens_findings(record, repo, nits))
     branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD", check=False)
     idx_p = os.path.join(project_dir(project), "branches.json")
     idx = read_json(idx_p, {}) or {}

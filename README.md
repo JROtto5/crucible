@@ -87,6 +87,28 @@ The cases above are the **build** split: crucible's prompts and verifier have be
 
 **GREEN** means coverage is complete, no non-pre-existing check failures remain, no critical or important finding is left unless it's fixed or refuted, and every finding has an answer. **Ready to submit** means GREEN plus no failed readiness item.
 
+## Using crucible as a lens in another reviewer
+
+`crucible review --lens` runs crucible as one reviewer inside another tool, which merges its findings with its own.
+
+- **Code only.** The PR description isn't read or judged. There are no readiness items, no house-style findings and no
+  debug-statement scanner rows, and no GitHub calls (it implies `--offline`).
+- **One file for the host:** `lens.json` in the review directory. Its path is printed, and the exit code is 3 if the
+  review failed. Each row has:
+  - `id`: a stable `CL-` + 12 hex id, from the file, line and normalized title, so the same finding keeps its id across
+    runs;
+  - `file` and `line`: always a path inside the repo, never a temp or draft path;
+  - `severity`, `title`, `problem`, `fix`, and `wrong_if` (one line: the observation that would refute it);
+  - `verification`: verified, or unverified when the verifier couldn't settle it; dropped findings never appear.
+  
+  `--nits` adds the verified nit tier as rows with `"tier": "nit"`.
+- **Small tier, on by default with `--lens`:** a change under 200 changed lines is reviewed on a budget capped at $1,
+  with no nit sweep. Use `--no-small-tier` to turn it off, `--small-tier` to use it without `--lens`, or
+  `CRUCIBLE_SMALL_TIER=1/0`.
+- **AI attribution:** where a project or company requires AI attribution lines, set `"ai_attribution": "expected"` in
+  `~/.crucible/projects/<owner>__<repo>/config.json`, or `CRUCIBLE_AI_ATTRIBUTION=expected`. crucible then never flags
+  a "Generated with ..." footer or an AI Co-authored-by trailer.
+
 ## Answers, re-reviews, memory
 
 - **Stable IDs.** IDs come from a hash of the file and the normalized claim. Answers to findings that no longer exist are dropped automatically.
