@@ -6712,6 +6712,21 @@ class TestNitTier(unittest.TestCase):
         self.assertEqual(imp["verification"]["status"], "verified")   # blocking severity: verified first
         self.assertLessEqual(b.spent, 1.3 + 1e-9)
 
+    def test_a_slow_blocking_finding_still_claims_the_budget_first(self):
+        """DRG-124: the sort only queued it first; when its region read was slow the 7 mediums spent the budget."""
+        from unittest import mock
+        real = V.region
+
+        def slow(repo, sha, file, line, *a, **kw):
+            if line == 1:
+                time.sleep(0.3)
+            return real(repo, sha, file, line, *a, **kw)
+        with mock.patch.object(V, "region", slow):
+            r, _ = self._run([self._f("a nit", 2)], budget=1.3, findings=8, verify_cost=0.15)
+        imp = next(f for f in r["findings"] if f["title"] == "division by zero in f")
+        self.assertEqual(imp["verification"]["status"], "verified")
+        self.assertEqual({f["severity"] for f in r["findings"] if f["verification"]["status"] == "unverified"}, {"medium"})
+
     def test_blocking_findings_are_held_too(self):
         # the review pass leaves $0.02 of $0.30, under the $0.045 hold: both findings are held (kept, unverified)
         # and the nit still gets verified

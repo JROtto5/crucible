@@ -1451,8 +1451,12 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 return f, None, [], str(e)
         if to_verify:
             log(f"  verifying {len(to_verify)} finding(s), one per call" + (f" (tiers: {' → '.join(tiers)})" if len(tiers) > 1 else ""))
+            # under a limit the blocking findings run as a wave of their own: the sort only queues them first, and a
+            # slow one (its region read) could reach the budget check after the others had spent it (DRG-124)
+            waves = ([[f for f in to_verify if f["severity"] in BLOCKING], [f for f in to_verify if f["severity"] not in BLOCKING]]
+                     if budget.limit is not None else [to_verify])
             with cf.ThreadPoolExecutor(max_workers=4) as ex:
-                for f, v, trail, err in ex.map(verify, to_verify):
+                for f, v, trail, err in (r for w in waves for r in list(ex.map(verify, w))):
                     sites_from_verdict(f, v)
                     if v is None:                      # fail closed: keep, marked unverified
                         # re-runs of this commit split against the same earlier review every time, so its count
