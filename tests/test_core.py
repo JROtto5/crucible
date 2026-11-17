@@ -1809,6 +1809,11 @@ class TestEvalScoring(unittest.TestCase):
             self.assertEqual(s["by_split"]["holdout"]["errors"], 1)
             self.assertEqual(s["by_split"]["build"]["errors"], 0)
             self.assertIn("  holdout: recall n/a (no bug cases), false blocking n/a (no clean cases), 1 errored (not scored)", out)
+            # --no-write leaves RESULTS.md and history alone but keeps the per-case output in last-run.json
+            self.assertFalse(os.path.exists(os.path.join(E.EVAL_DIR, "RESULTS.md")))
+            self.assertFalse(os.path.exists(os.path.join(E.EVAL_DIR, "history.jsonl")))
+            kept = json.load(open(os.path.join(E.EVAL_DIR, "last-run.json")))
+            self.assertEqual(sorted(r["case"] for r in kept), ["b", "h"])
             # run_eval's own wiring: --cases and --split runs are partial (history only), a plain run writes RESULTS.md
             args.no_write = False
             for cases, split, subset in ((["b"], None, True), (None, "build", False)):

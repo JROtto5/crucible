@@ -345,6 +345,8 @@ def run_eval(args, log=print):
         write_results(args.label or ("tiers-off" if args.no_tiers else "default"), settings, summary, results, partial)
         if partial:
             log("partial run: history row appended; RESULTS.md keeps the last full run (its history table updates on the next one)")
+    else:   # --no-write keeps RESULTS.md and history untouched, but the per-case findings still land (gitignored)
+        json.dump(results, open(os.path.join(EVAL_DIR, "last-run.json"), "w"), indent=1)
     log(f"recall {summary['recall']} (any severity {summary['recall_any_severity']}) · false blocking "
         f"{summary['false_blocking']} · true dropped {summary['true_dropped']} · ${summary['cost_usd']} · {summary['secs']} s")
     for sp, ss in summary["by_split"].items():

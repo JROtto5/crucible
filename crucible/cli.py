@@ -311,7 +311,7 @@ def main(argv=None):
     ev.add_argument("--lens", action="store_true", help="run the reviews with --lens (code only; small tier on)")
     ev.add_argument("--jobs", type=int, default=4); ev.add_argument("--label")
     ev.add_argument("--cache", help="shared review/verification cache dir across cases and runs (default: none)")
-    ev.add_argument("--no-write", action="store_true", help="don't update eval/RESULTS.md and history")
+    ev.add_argument("--no-write", action="store_true", help="don't update eval/RESULTS.md and history (eval/last-run.json is still written)")
     a = p.parse_args(argv)
     {"review": cmd_review, "status": cmd_status, "answer": cmd_answer, "waive": cmd_waive, "learn": cmd_learn, "prep": cmd_prep,
      "polish": cmd_polish, "reply": cmd_reply, "vote": cmd_vote, "remember": cmd_remember, "proposals": cmd_proposals, "eval": cmd_eval,
