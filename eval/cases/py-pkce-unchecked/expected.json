@@ -1,0 +1,24 @@
+{
+ "kind": "bug",
+ "message": "authsrv: support PKCE (S256) for public clients",
+ "file": "authsrv/server.py",
+ "lines": [
+  31,
+  32,
+  33,
+  34,
+  35,
+  36,
+  37,
+  38
+ ],
+ "keywords": [
+  "code_verifier",
+  "verifier",
+  "pkce",
+  "challenge",
+  "never checked",
+  "not verified",
+  "unused"
+ ]
+}
