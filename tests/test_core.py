@@ -6602,6 +6602,16 @@ class TestNitTier(unittest.TestCase):
         _, calls = self._run([self._f("a nit", 2)], nits=None)
         self.assertNotIn("hardening", calls[0]["prompt"])           # the findings' bar and the base prompt stay
 
+    def test_reliability_goes_to_nits(self):
+        r, calls = self._run([self._f("a nit", 2)])
+        prompt = next(c["prompt"] for c in calls if c["kind"] == "review")
+        self.assertIn("Reliability gaps, the same way", prompt)
+        for shape in ("a failure the code hides", "a resource with no end", "its setup doesn't provide",
+                      "can run twice"):
+            self.assertIn(shape, prompt)
+        _, calls = self._run([self._f("a nit", 2)], nits=None)
+        self.assertNotIn("Reliability gaps", calls[0]["prompt"])    # the no-nits prompt is unchanged
+
     def test_maintainability_goes_to_nits(self):
         r, calls = self._run([self._f("a nit", 2)], verdicts={0: (True, "high")})
         prompt = next(c["prompt"] for c in calls if c["kind"] == "review")

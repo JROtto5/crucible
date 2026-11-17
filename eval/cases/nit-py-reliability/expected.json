@@ -1,0 +1,64 @@
+{
+ "kind": "nit",
+ "split": "build",
+ "source": "shapes of ReviewBench run 4's missed reliability issues (a network call with no timeout, a failure logged then reported as success, a background loop with no stop); not copied from a test-set PR",
+ "message": "mirror: pull, prune and a background index refresher",
+ "issues": [
+  {
+   "name": "download-no-timeout",
+   "file": "mirror/fetch.py",
+   "lines": [
+    13
+   ],
+   "keywords": [
+    "timeout",
+    "hang",
+    "indefinitely",
+    "forever",
+    "stall"
+   ]
+  },
+  {
+   "name": "prune-counts-failures",
+   "file": "mirror/prune.py",
+   "lines": [
+    17
+   ],
+   "keywords": [
+    "len(stale)",
+    "overcount",
+    "over-count",
+    "overstate",
+    "overreport",
+    "failed deletion",
+    "failed removal",
+    "failed to delete",
+    "not actually removed",
+    "were not removed",
+    "wasn't removed",
+    "misreport",
+    "inflated"
+   ]
+  },
+  {
+   "name": "refresher-no-stop",
+   "file": "mirror/refresher.py",
+   "lines": [
+    20
+   ],
+   "keywords": [
+    "no way to stop",
+    "cannot be stopped",
+    "can't be stopped",
+    "stop()",
+    "stop event",
+    "never stopped",
+    "never stops",
+    "leak",
+    "shutdown",
+    "close()",
+    "join"
+   ]
+  }
+ ]
+}

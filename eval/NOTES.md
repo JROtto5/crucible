@@ -1019,3 +1019,47 @@ fixture DEBUG print still fires. On the 1420-hit corpus (work/next/drg146, paths
 688 still fire. Hand-checked: a random 20 (seed 17) of the 573 the path rule quiets (bench/, scripts/, benchmark/, build/,
 example/ output and commented-out lines) and all 11 the tag rule quiets outside script paths: every one deliberate output,
 no leftover. Whether ReviewBench's novel_fp drops waits for the next run.
+
+### 2026-11-17 · reliability (focus item: largest category under 45), a nits paragraph, local A/B
+
+Read first ($0, the stored judge output on blaze-3, `runs/r4/scoring/results.details.json` sha256 784ab0cf9d42…,
+joined to `golden/<pr>.json` by index; found = any candidate lists the index in `covered_golden_indices`): R4 found 22
+of 58 golden reliability TPs; 36 missed. By hand, by shape:
+
+| shape | misses | examples (PR key, golden #) |
+|---|---|---|
+| a failure the code hides (logged, then success; count includes failures; health stays green) | 6 | chronicle_14 #1 #4 #6, LANdalf_88 #3, apilix_12 #14, TechDebtMCP_135 #2 |
+| a resource with no end (no timeout, no stop, cleanup only on success, context replaced) | 7 | Codebase-Conversion_1 #53, jadx_3 #12 #13, CrabTrap_15 #0, agents-config_1 #7, Mcp-Docker_29 #4, wirechat_183 #0 |
+| a need the setup doesn't meet (manifest, minimum runtime, one-OS command, container) | 7 | apilix_12 #0 #18, fastimage_165 #24, agents-config_1 #6 #24, LANdalf_88 #4, Codebase-Conversion_1 #33 |
+| a step unsafe to run twice | 2 | emdash_2 #2, disaster-ninja_1230 #3 |
+| one flaw at sibling sites (already `also_at`, 11-16) | 5 | figlet_32 #2 #5 #6 #8 #9 |
+| one-offs | 9 | |
+
+Most are low or medium, the same seen-but-unsaid pattern as the security misses before 4e069a8. Change (only with
+`--nits`; the no-nits prompt is byte-identical): `NITS_NOTE` gains a "Reliability gaps, the same way" paragraph naming
+the four shapes; the sweep uses the same note. Test: `test_reliability_goes_to_nits`.
+
+New build case `nit-py-reliability` (shapes, not a copy of a test-set PR): a mirror tool gains `fetch()` with no
+timeout beside a `head()` that has one, `prune()` that logs a failed delete and still counts it as removed, and a
+background refresher thread with no way to stop it. The first fixture version wrote the download straight into
+`dest`, an unplanted real bug (a failed transfer leaves a truncated file) that both arms rated important, and the
+refresher died on its first error; both were removed and both arms re-run. `crucible eval --nits --no-write
+--budget 5 --cases nit-py-reliability`, 3 rounds per arm, before = bf1c513 + case:
+
+| | before | after |
+|---|---|---|
+| planted issues found | 3/3, 3/3, 3/3 | 3/3, 3/3, 3/3 |
+| blocking findings (scored as false blocking) | 0, 1, 1 | 1, 1, 1 |
+| nits kept | 11, 9, 8 | 8, 8, 6 |
+| $ per round | 0.46, 0.50, 0.53 | 0.52, 0.50, 0.52 |
+
+Reading: the case is at the ceiling in both arms, like the maintainability cases (11-13), so it guards against a
+regression and shows no gain. The blocking item, read in one kept "after" review, is the planted no-timeout itself
+rated important ("pull and the refresher thread can hang forever"): a severity call on a true issue, seen in both arms;
+3 vs 2 of 3 rounds is not a difference. Cost per round is the same within noise; the paragraph adds ~170 prompt
+tokens per pass. Regression check on the new prompt, 1 round (`--budget 1.5`, the other 5 nit cases and 6 clean
+cases): 15/15 planted, 0 false blocking, 3 nits kept on clean cases (11-16's full run: 1; 11-12 runs: 3 and 5), $3.51.
+The recall claim waits for ReviewBench run 5's reliability category (run 4: 42.3 macro, 22/58). Count kept items
+there in the four shapes and how many the judge calls true.
+Spend this shift: $6.94 A/B (incl. the discarded first fixture, $3.91) + about $0.95 for two kept-review reads + $3.51
+regression = about $11.40, before self-review.

@@ -87,6 +87,12 @@ FINDINGS_NITS_SCHEMA = {**FINDINGS_SCHEMA, "properties": {
 # The API/architecture paragraph: run 3 found 25.0% of golden api-architecture issues (12). Most are a contract
 # change whose callers live in files the diff doesn't show, so each pass also gets those call sites (callers_note,
 # $0); the rest are a new pattern beside the repo's existing one, or a layer crossed, which the paragraph names.
+# The reliability paragraph: run 4 found 22 of 58 golden reliability issues (42.3 macro, the largest category under
+# 45). Of the 36 misses, 5 were one flaw at sibling sites (also_at, above); most of the rest fall in four shapes the
+# paragraph names: a failure logged and reported as success (6), a resource with no end, i.e. no timeout, no stop,
+# cleanup only on success (7), a need the setup doesn't meet (manifest, minimum runtime, OS, container; 7), and a
+# step unsafe to run twice (2); 9 are one-offs. Most were low or medium and seen-but-unsaid, like the security
+# misses.
 NITS_NOTE = f"""
         Second tier, "nits" (at most {NITS_MAX_PER_PASS}, separate from findings): smaller REAL problems a careful
         reviewer would comment on but not block on: an unhandled edge case, a misleading name, comment or docstring,
@@ -101,6 +107,16 @@ NITS_NOTE = f"""
         without bound; error text or logs that echo internals, absolute paths, input or secrets; permissions set
         only when a file or directory is created; secrets left on disk after the thing they belong to is deleted;
         a container or service left running as root.
+        Reliability gaps, the same way (nits unless they break a normal run): a failure the code hides (an error
+        logged and then the caller told it worked, a count or status that includes the items that failed, a health
+        check that stays green when a dependency failed to load, one warning and then every later call quietly
+        failing); a resource with no end (a network or subprocess call with no timeout, a thread, timer, task or
+        goroutine with no way to stop it, a temp file, flag or lock cleaned up only on the success path, a request's
+        context or deadline replaced by a fresh one); something the code needs that its setup doesn't provide (an
+        import or package missing from the manifest, syntax or an API newer than the declared minimum runtime, a
+        command that exists on one OS only, a capability the container isn't given); a step that can run twice
+        and isn't safe to (a CREATE without IF NOT EXISTS where other code creates the same thing, a handler or
+        listener added again on every call).
         When one flaw repeats at several sites (the same unchecked cast or guard in sibling handlers, the same
         trigger, setting or call changed the same way in sibling files), write it once and list every other site in
         "also_at" as "path:line"; each site is checked and reported at its own line, so don't stop at the first.
