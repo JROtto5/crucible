@@ -1015,6 +1015,7 @@ a rate. What it does show: on real code, every fire so far was `console.log` use
 and no real debug leftover has been caught. Each costs one low novel_fp per ReviewBench round. Follow-up DRG-146.
 
 DRG-146 (2026-11-17, lane 0200): narrowed as above, see CHANGELOG. All 3 wrong real-code lines go quiet (test); the planted
-fixture `print("DEBUG ...")` still fires. On the 1420-hit corpus (work/next/drg146) 779 go quiet, 641 still fire; none
-of the quieted lines was hand-checked as a leftover except by sampling the 11 tag-rule ones (all intended). Whether
-ReviewBench's novel_fp drops waits for the next run.
+fixture DEBUG print still fires. On the 1420-hit corpus (work/next/drg146, paths with the clone prefix stripped) 732 go quiet,
+688 still fire. Hand-checked: a random 20 (seed 17) of the 573 the path rule quiets (bench/, scripts/, benchmark/, build/,
+example/ output and commented-out lines) and all 11 the tag rule quiets outside script paths: every one deliberate output,
+no leftover. Whether ReviewBench's novel_fp drops waits for the next run.

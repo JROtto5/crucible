@@ -10,12 +10,17 @@ SECRET_RX = re.compile(r"(sk-ant-[\w-]{10,}|sk-[A-Za-z0-9]{20,}|gh[pousr]_[A-Za-
 PLACEHOLDER_RX = re.compile(r"\.\.\.|\u2026|<[^<>]+>|[xX]{6,}")
 DEBUG_RX = re.compile(r"\b(debugger;|console\.log\(|print\(['\"]DEBUG|pdb\.set_trace\(\)|breakpoint\(\))")
 # console.log is a debug leftover in product code, but the intended output of a build/bench/example script and of a
-# tagged server log line: every real-code fire through 2026-11-16 was one of those (eval/NOTES 2026-11-16, DRG-146)
+# tagged server log line: every real-code fire through 2026-11-16 was one of those (eval/NOTES 2026-11-16, DRG-146).
+# Falsifiers (tests/test_core.py test_intended_console_output_is_not_a_debug_leftover). Must flag: console.log(res)
+# in src/, packages/next/src/build/, src/tools/, app/docs/page.tsx; a `[DEBUG]`/`[]` tag; a JS `#private` member line;
+# debugger and breakpoint calls even in scripts/. Must let through: i18n/build.ts, an `[OAuth]`-tagged line, scripts/,
+# bench/, examples/ at the repo or a packages/<name>/ root, a commented-out line, a Markdown/text file.
 CONSOLE_RX = re.compile(r"\bconsole\.log\(")
-TAGGED_LOG_RX = re.compile(r"""console\.log\(\s*['"`]\[[^\]\s][^\]]*\]""")
-SCRIPT_DIR_RX = re.compile(r"(^|/)(scripts?|bin|tools?|bench(marks?)?|examples?|demos?|docs?|build)/", re.I)
+TAGGED_LOG_RX = re.compile(r"""console\.log\(\s*['"`]\[(?!(debug|tmp|temp|todo|test)\b)[^\]\s][^\]]*\]""", re.I)
+SCRIPT_DIR_RX = re.compile(r"^(packages/[^/]+/)?(scripts?|bin|tools?|bench(marks?)?|examples?|demos?|docs?|build)/", re.I)
 SCRIPT_FILE_RX = re.compile(r"(^|/)(build|bench\w*|cli)\.[cm]?[jt]s$", re.I)
-COMMENT_LINE_RX = re.compile(r"^\s*(//|/\*|\*|#)")
+PROSE_PATH_RX = re.compile(r"\.(md|mdx|markdown|rst|txt|adoc)$", re.I)
+JS_PATH_RX = re.compile(r"\.([cm]?[jt]sx?|vue|svelte)$", re.I)
 CONFLICT_RX = re.compile(r"^(<<<<<<< |>>>>>>> |=======$)")
 HUNK_RX = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
@@ -121,18 +126,20 @@ def authored_added(hunk):
 
 
 def script_path(path):
-    """A build/bench/example/tool script, where printing is the point. A build/ or tools/ dir under src/ or lib/ is
-    product code (Next.js packages/next/src/build/), so only dirs outside those count."""
-    m = SCRIPT_DIR_RX.search(path)
-    if m and not re.search(r"(^|/)(src|lib)/", path[:m.end()]):
-        return True
-    return bool(SCRIPT_FILE_RX.search(path))
+    """A build/bench/example/tool script, where printing is the point. Only a script dir at the repo root or a
+    packages/<name>/ root counts: tools/ or build/ deeper down is product code (Next.js packages/next/src/build/,
+    an app router's app/docs/)."""
+    return bool(SCRIPT_DIR_RX.search(path) or SCRIPT_FILE_RX.search(path))
 
 
 def intended_output(path, text):
-    """True when a DEBUG_RX hit is not a leftover: a commented-out line, or a console.log in a script or with a
-    `[tag]` log prefix. debugger;, pdb, breakpoint() and print("DEBUG are never intended output."""
-    if COMMENT_LINE_RX.match(text):
+    """True when a DEBUG_RX hit is not a leftover: prose (a code sample in docs), a commented-out line of any kind,
+    or a console.log in a script or with a `[tag]` log prefix. Live debugger, pdb and breakpoint calls and DEBUG
+    prints always count."""
+    if PROSE_PATH_RX.search(path):
+        return True
+    s = text.lstrip()
+    if s.startswith(("//", "/*", "*")) or (s.startswith("#") and not JS_PATH_RX.search(path)):
         return True
     if DEBUG_RX.search(CONSOLE_RX.sub("", text)):
         return False

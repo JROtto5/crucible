@@ -138,7 +138,10 @@ diff --git a/test/fixtures/keys.js b/test/fixtures/keys.js
                  ("packages/x/bench/run.ts", "console.log(results);"),
                  ("examples/basic/index.js", "console.log(room.state);"),
                  ("src/net.ts", "// console.log(packet);"),
-                 ("app/views.py", '# print("DEBUG", row)')]
+                 ("app/views.py", '# print("DEBUG", row)'),
+                 ("packages/core/scripts/gen.ts", "console.log(out);"),
+                 ("README.md", "console.log(room.state);"),
+                 ("src/a.ts", "// debugger;")]
         loud = [("src/frontend/Login.tsx", "console.log(res)"),
                 ("packages/next/src/build/index.ts", "console.log(config);"),
                 ("src/tools/parse.ts", "console.log(tokens);"),
@@ -146,7 +149,11 @@ diff --git a/test/fixtures/keys.js b/test/fixtures/keys.js
                 ("scripts/release.js", "debugger;"),
                 ("tools/gen.py", "breakpoint()"),
                 ("app/views.py", 'print("DEBUG", row)'),
-                ("src/a.ts", "console.log('[]', x);")]
+                ("src/a.ts", "console.log('[]', x);"),
+                ("src/a.ts", "console.log('[DEBUG] x', x);"),
+                ("app/docs/[slug]/page.tsx", "console.log(res)"),
+                ("pages/tools/index.tsx", "console.log(res)"),
+                ("src/a.ts", "  #dump() { console.log(this.state) }")]
         for path, line in quiet + loud:
             diff = f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -0,0 +1,1 @@\n+{line}\n"
             fired = any(h["title"] == "Debug statement left in" for h in D.scan(D.parse(diff)))
