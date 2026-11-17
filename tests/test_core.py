@@ -6727,6 +6727,28 @@ class TestNitTier(unittest.TestCase):
         self.assertEqual(imp["verification"]["status"], "verified")
         self.assertEqual({f["severity"] for f in r["findings"] if f["verification"]["status"] == "unverified"}, {"medium"})
 
+    def test_a_blocking_finding_escalating_late_still_reaches_the_strong_tier(self):
+        """DRG-124, the shape users hit: the cheap tier answers fast, the step to the strong tier is slow."""
+        import threading
+        from unittest import mock
+        real_prompt, real_esc, mine = V.verify_prompt, V.needs_escalation, {}
+
+        def prompt(f, *a, **kw):
+            if f["line"] == 1:
+                mine["t"] = threading.get_ident()
+            return real_prompt(f, *a, **kw)
+
+        def esc(v):
+            if mine.get("t") == threading.get_ident():
+                time.sleep(0.3)
+            return real_esc(v)
+        with mock.patch.object(V, "verify_prompt", prompt), mock.patch.object(V, "needs_escalation", esc):
+            r, _ = self._run([self._f("a nit", 2)], budget=1.3, findings=8, verify_cost=0.15)
+        imp = next(f for f in r["findings"] if f["title"] == "division by zero in f")
+        self.assertEqual(imp["verification"]["status"], "verified")
+        self.assertEqual(len(imp["verification"]["tiers"]), 2)               # cheap, then strong
+        self.assertEqual({f["severity"] for f in r["findings"] if f["verification"]["status"] == "unverified"}, {"medium"})
+
     def test_blocking_findings_are_held_too(self):
         # the review pass leaves $0.02 of $0.30, under the $0.045 hold: both findings are held (kept, unverified)
         # and the nit still gets verified
