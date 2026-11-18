@@ -13,13 +13,13 @@ crucible answer  CR-80b53167 fixed "restore for…of; re-added [1,2,3] test"
 crucible status                                  # GREEN / NOT_GREEN + readiness, for this exact commit
 crucible polish                                  # PR_DRAFT.md → PR_DRAFT.polished.md in the project's voice
 crucible prep                                    # likely maintainer questions + evidence-backed answers
-crucible eval                                    # score the reviewer on 24 labelled fixture changes
+crucible eval                                    # score the reviewer on 29 labelled fixture changes
 crucible reply   https://github.com/o/r/pull/12  # draft answers to real review comments (never posted)
 ```
 
 ## Measured, not guessed
 
-`crucible eval` runs the full review on 24 labelled fixture changes in JS, TS and Python: 20 build cases and 4 held-out ones (below). The 13 build bug cases cover off-by-one, a null edge, a missing `await`, refcount/ownership, an API break, a caller the change left stale in a file the diff doesn't touch, shell and SQL injection, a units mix-up, a race, pagination, a deleted test hiding a regression and a committed secret. The 4 build clean cases are a refactor, a docs change, a fix with tests and an opt-in option with tests. The 3 nit cases plant several non-blocking problems each (maintainability, stale docs) and run only with `--nits`. Latest results ([eval/RESULTS.md](eval/RESULTS.md)):
+`crucible eval` runs the full review on 29 labelled fixture changes in JS, TS and Python: 25 build cases and 4 held-out ones (below). The 14 build bug cases cover off-by-one, a null edge, a missing `await`, refcount/ownership, an API break, a caller the change left stale in a file the diff doesn't touch, shell and SQL injection, a units mix-up, a race, pagination, a deleted test hiding a regression, a committed secret and a server that advertises PKCE but never checks `code_verifier`. The 5 build clean cases are a refactor, a docs change, a fix with tests, an opt-in option with tests and the same PKCE server with the check in place. The 6 nit cases plant several non-blocking problems each (maintainability, also across files, stale docs, reliability, a sibling temp file, an unwired knob) and run only with `--nits`. Latest results ([eval/RESULTS.md](eval/RESULTS.md)):
 
 | | recall (blocking) | recall (any severity) | false blocking findings on clean changes | cost, 16 cases |
 |---|---|---|---|---|
@@ -193,7 +193,7 @@ Environment variables:
 - `CRUCIBLE_CATALOG_DIGEST=0`: review big `.po`/`.pot` changes as a raw diff instead of the entry digest.
 - `CRUCIBLE_HOME`: where state is kept (default `~/.crucible`). `CRUCIBLE_CACHE` can point at a shared cache.
 
-Run `crucible eval` (about $5–6 for all 24 cases; 20 of them with `--nits` cost $5.03 on 2026-11-12) after changing prompts or models.
+Run `crucible eval` (about $5–6 when there were 24 cases; on 2026-11-12, 20 of them with `--nits` cost $5.03) after changing prompts or models.
 
 Found a wrong finding, a missed bug or a crash? See [CONTRIBUTING.md](CONTRIBUTING.md): issue templates ask for exactly what's needed to turn it into a regression test.
 
