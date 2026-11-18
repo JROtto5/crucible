@@ -733,6 +733,10 @@ class TestReviewLogic(unittest.TestCase):
         b = {"file": "a.js", "line": 11, "title": "Loop bound off by one", "severity": "critical", "source": "review"}
         out = V.dedupe([a, b])
         self.assertEqual(len(out), 1); self.assertEqual(out[0]["severity"], "critical")
+        # the merged item keeps its own place and severity, not just its title
+        self.assertEqual(out[0]["merged"], [{"title": "Off by one in loop bound", "file": "a.js", "line": 10,
+                                             "severity": "important", "source": "review"}])
+        self.assertEqual(out[0]["also"], ["Off by one in loop bound"])
 
     def test_author_model_switch(self):
         d = make_repo({"a.js": "1\n"}, {"a.js": "2\n"},
