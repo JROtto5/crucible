@@ -498,8 +498,10 @@ def nit_verify_prompt(batch):
 
 
 def verify_nits(nits, codes, repo, budget, model, fresh=False, drop_any=True):
-    """-> (kept, dropped). Batched read-only verification of the nit tier. A nit is kept only on keep=true with high
-    or medium confidence (nits_keep_confidence); one with no verdict (a failed call, the cap reached, a skipped index) is dropped as
+    """-> (kept, dropped). Batched read-only verification of the nit tier. A nit is kept as verified on keep=true with
+    high or medium confidence (nits_keep_confidence). Any other verdict drops it when `drop_any`; otherwise only a sure
+    refutation (keep=false, high confidence) drops it, and the rest are kept at low severity as "disputed"
+    (nits_drop_any has the numbers). One with no verdict (a failed call, the cap reached, a skipped index) is dropped as
     unverified, not kept: the nit tier never fails open, so its precision is the verifier's."""
     kept, dropped = [], []
     for start in range(0, len(nits), NIT_BATCH):

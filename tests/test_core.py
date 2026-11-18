@@ -6796,6 +6796,14 @@ class TestNitTier(unittest.TestCase):
         with unittest.mock.patch.dict(os.environ, {"CRUCIBLE_NITS_DROP": "sure"}):
             self.assertFalse(V.nits_drop_any(lens=True))
 
+    def test_disputed_nits_stay_out_of_lens_json(self):
+        rec = {"findings": [], "nits": [
+            dict(self._f("sure", 2), id="NIT-1", verification={"status": "verified"}),
+            dict(self._f("doubted", 5), id="NIT-2", verification={"status": "disputed"})]}
+        out = V.lens_findings(rec, make_repo({"a.py": "x = 1\n"}, {"a.py": "x = 2\n" + "y = 1\n" * 10}), nits=True)
+        rows = out["findings"] if isinstance(out, dict) else out
+        self.assertEqual([r.get("title") for r in rows], ["sure"])
+
     def test_nit_repeating_a_finding_or_another_nit_is_left_out(self):
         r, calls = self._run([self._f("division by zero in f", 1), self._f("magic number 30", 5),
                               self._f("magic number 30", 5)])
@@ -7038,6 +7046,11 @@ class TestNitTier(unittest.TestCase):
         # with calls=2 and n=3, two calls split all of it
         sh = V.ShareBudget(U.Budget(1.0), 3, calls=2)
         self.assertAlmostEqual(sh.slot().cap, 0.5)
+        # a skipped call (a cache hit) leaves one fewer to share with
+        sk = V.ShareBudget(U.Budget(1.0), 2, calls=3)
+        sk.skip()
+        sk.slot().release()
+        self.assertAlmostEqual(sk.slot().cap, 1.0 - 0.0)            # 2 calls left minus 1 taken: alone
         # the last call to come takes all that is left, not 1/n of it
         tail = V.ShareBudget(U.Budget(1.7), 3, calls=1).slot()
         self.assertAlmostEqual(tail.cap, 1.7)
