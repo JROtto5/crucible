@@ -1294,8 +1294,17 @@ def lens_findings(record, repo, nits=False, tracked=None):
     for r in out:                                      # one row per id: a nit never repeats a finding
         if r["id"] not in seen:
             seen.add(r["id"]); rows.append(r)
-    return {"crucible_sha": record.get("crucible_sha"), "sha": record.get("sha"), "status": record.get("status"),
-            "reason": record.get("reason"), "complete": (record.get("coverage") or {}).get("complete"),
+    cov = record.get("coverage") or {}
+    status, reason = record.get("status"), record.get("reason")
+    failed = [c.get("reason") for c in cov.get("chunks") or [] if c.get("status") == "failed" and c.get("reason")]
+    if status == "done" and (cov.get("files") or 0) > 0 and not cov.get("reviewed"):
+        # every pass failed (an old CLI refusing the model, an expired login, a limit with no fallback): no review
+        # happened, so it must not read as a clean change (GitHub #2). review.json keeps its own status.
+        status, reason = "failed", "no changed file was reviewed" + (f": {failed[0][:300]}" if failed else "")
+    return {"crucible_sha": record.get("crucible_sha"), "sha": record.get("sha"), "status": status,
+            "reason": reason, "complete": cov.get("complete"), "files": cov.get("files"),
+            "reviewed": cov.get("reviewed"), "missing": len(cov.get("missing") or []),
+            "failed_reason": failed[0][:300] if failed else None,
             "small_tier": record.get("small_tier"), "cost_usd": record.get("cost_usd"), "findings": rows}
 
 

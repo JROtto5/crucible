@@ -334,8 +334,14 @@ def fable_fallback():
     return None if v.lower() in ("", "0", "off", "no", "false") else MODELS.get(v, v)
 
 
+# An older Claude Code that refuses the model outright ("Claude Code 2.1.285 does not support this model; version
+# 2.1.290 or newer is required", seen on BLAZE's host, GitHub #2). Fable 5.2 needs Claude Code >= 2.1.290; on an
+# older CLI the Fable call moves to the fallback model like a limit does, instead of failing every pass.
+UNSUPPORTED_RX = re.compile(r"does not support this model|version [\d.]+ or newer is required", re.I)
+
+
 def is_limit(err):
-    return bool(LIMIT_RX.search(str(err)))
+    return bool(LIMIT_RX.search(str(err)) or UNSUPPORTED_RX.search(str(err)))
 
 
 def claude(prompt, model, schema, cwd, budget=None, tools=TOOLS_READ, effort="high", timeout=1500, kind="other"):

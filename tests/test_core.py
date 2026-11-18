@@ -4958,6 +4958,12 @@ class TestTokenMetering(unittest.TestCase):
         # switched off, or pointed at another model by short name
         out, seen, _ = run([limit, ok], fable, {"CRUCIBLE_FABLE_FALLBACK": "off"})
         self.assertIsInstance(out, U.Failed); self.assertEqual(seen, [fable])
+        # an older Claude Code that refuses Fable outright (GitHub #2, CLI 2.1.285/2.1.286): that call moves to Opus too
+        old_cli = {"is_error": True, "subtype": "success",
+                   "result": "API Error: 400 Claude Code 2.1.285 does not support this model; version 2.1.290 or newer is required"}
+        out, seen, b = run([old_cli, ok], fable)
+        self.assertEqual(out, ({"x": 1}, 0.2)); self.assertEqual(seen, [fable, opus])
+        self.assertEqual(len(b.fallback_snapshot()), 1)
         out, seen, _ = run([limit, ok], fable, {"CRUCIBLE_FABLE_FALLBACK": "sonnet"})
         self.assertEqual(seen, [fable, U.MODELS["sonnet"]])
         # SubBudget/HeldBudget views note it on the parent
@@ -7656,6 +7662,26 @@ class TestLensMode(unittest.TestCase):
             self.assertNotIn("Fix f", prompts[0])                       # the draft is never shown to the reviewer
             self.assertIn("one lens inside another reviewer", prompts[0])
             self.assertNotIn("House style.", prompts[0])
+
+    def test_lens_json_fails_when_no_changed_file_was_reviewed(self):
+        """GitHub #2: every pass failed (an old CLI refused the model), yet lens.json said done with 0 rows and the CLI
+        exited 0, the same as a clean change. Now it is failed, with the coverage and the pass's reason."""
+        why = "model call failed: API Error: 400 Claude Code 2.1.285 does not support this model"
+        rec = {"status": "done", "findings": [], "coverage": {
+            "files": 3, "reviewed": 0, "missing": ["a.js", "b.js", "c.js"], "complete": False,
+            "chunks": [{"files": ["a.js", "b.js", "c.js"], "status": "failed", "reason": why}]}}
+        lj = V.lens_findings(rec, "/repo")
+        self.assertEqual(lj["status"], "failed")
+        self.assertIn("no changed file was reviewed", lj["reason"]); self.assertIn("2.1.285", lj["reason"])
+        self.assertEqual((lj["files"], lj["reviewed"], lj["missing"], lj["failed_reason"]), (3, 0, 3, why))
+        # a partly reviewed change stays done but says what it missed
+        rec["coverage"].update(reviewed=2, missing=["c.js"])
+        lj = V.lens_findings(rec, "/repo")
+        self.assertEqual((lj["status"], lj["complete"], lj["reviewed"], lj["missing"]), ("done", False, 2, 1))
+        # a change with no code files to review (docs only) is a clean done
+        lj = V.lens_findings({"status": "done", "findings": [], "coverage": {"files": 0, "reviewed": 0,
+                                                                            "missing": [], "complete": True}}, "/repo")
+        self.assertEqual((lj["status"], lj["failed_reason"]), ("done", None))
 
     def test_a_plain_rounds_draft_finding_never_reaches_lens_json(self):
         with tempfile.TemporaryDirectory() as d:

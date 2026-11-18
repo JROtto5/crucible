@@ -94,7 +94,9 @@ The cases above are the **build** split: crucible's prompts and verifier have be
 - **Code only.** The reviewer never sees the PR description, and nothing about it is judged. There are no readiness items, no house-style findings and no
   debug-statement scanner rows, and no GitHub calls (it implies `--offline`).
 - **One file for the host:** `lens.json` in the review directory. Its path is printed, and the exit code is 3 if the
-  review failed. Each row has:
+  review failed. A review that read none of the changed files (every pass failed) is `status: failed`, never a clean
+  `done`. The file also carries `files`, `reviewed`, `missing` (counts) and `failed_reason`, so a partial review is
+  visible. Each row has:
   - `id`: a stable `CL-` + 12 hex id, from the file, line and normalized title, so the same finding keeps its id across
     runs;
   - `file` and `line`: always a file tracked in the repo, never a temp or draft path;
@@ -168,7 +170,9 @@ Model calls run with `--setting-sources ""` and an empty MCP config. A checked-o
 New here? [docs/quickstart.md](docs/quickstart.md) is a timed real run on a public repo: crucible finds a crash that shipped in a merged pyinfra PR. [docs/case-studies.md](docs/case-studies.md) shows real catches (and a miss) on upstream PRs, with links. [docs/commands.md](docs/commands.md) is the command reference.
 
 
-Requires Python 3.10+, git, `gh`, and the [Claude Code](https://claude.com/claude-code) CLI.
+Requires Python 3.10+, git, `gh`, and the [Claude Code](https://claude.com/claude-code) CLI. Reviews that crucible routes to Fable 5.2 need
+Claude Code 2.1.290 or newer; on an older CLI those calls move to Opus (`CRUCIBLE_FABLE_FALLBACK`), as on a spend
+limit.
 
 ```bash
 pipx install git+https://github.com/JROtto5/crucible   # or: pip install --user git+https://github.com/JROtto5/crucible
