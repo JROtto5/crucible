@@ -1,6 +1,6 @@
 {
  "kind": "nit",
- "message": "shop: CSV importer, cart totals, JSON line items",
+ "message": "shop: CSV importer, cart totals, plain-text line items",
  "issues": [
   {
    "name": "missed-reuse",
