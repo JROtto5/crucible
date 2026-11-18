@@ -3305,8 +3305,8 @@ class TestRerunSameCommit(unittest.TestCase):
         open(os.path.join(repo, "a.js"), "wb").write(b"// caf\xe9\n")
         open(os.path.join(repo, "CONTRIBUTING.md"), "wb").write(b"Caf\xe9 rules.\n")
         sh(repo, "git", "commit", "-qam", "latin1")
-        self.assertIn("// caf�", U.git(repo, "diff", "main...HEAD"))
-        self.assertIn("Caf� rules.", V.project_rules_text(repo, "t__none"))
+        self.assertIn("// caf\ufffd", U.git(repo, "diff", "main...HEAD"))
+        self.assertIn("Caf\ufffd rules.", V.project_rules_text(repo, "t__none"))
 
     def test_learned_project_files_round_trip_under_a_non_utf8_locale(self):
         # rules.md, STYLE.md and memory.md quote PR bodies and model output; each goes into every review prompt
