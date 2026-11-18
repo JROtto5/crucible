@@ -6765,7 +6765,7 @@ class TestNitTier(unittest.TestCase):
     def test_verified_nits_kept_apart_and_never_in_the_verdict(self):
         nits = [self._f("missing docstring on new public f", 2), self._f("magic number 30", 5, "medium"),
                 self._f("comment contradicts loop bound", 8), self._f("speculative concern", 11)]
-        r, calls = self._run(nits, verdicts={2: (True, "low"), 3: (False, "high")})
+        r, calls = self._run(nits, verdicts={2: (True, "low"), 3: (False, "high")}, env={"CRUCIBLE_NITS_DROP": "any"})
         self.assertEqual(sorted(f["title"] for f in r["nits"]), ["magic number 30", "missing docstring on new public f"])
         self.assertEqual({f["verification"]["status"] for f in r["nits"]}, {"verified"})
         self.assertEqual(len(r["nits_dropped"]), 2)              # a low-confidence keep is not a keep
@@ -6779,6 +6779,22 @@ class TestNitTier(unittest.TestCase):
         self.assertEqual(nit_calls[0]["model"], U.MODELS["sonnet"])
         self.assertIn("## Nits (non-blocking", V.report(r, {}))
         self.assertGreater(r["cost_nits_usd"], 0)
+
+    def test_only_a_sure_refutation_drops_a_nit_by_default(self):
+        """ReviewBench run 4: nits refuted at medium confidence held 15 missed golden issues and 2 false ones."""
+        nits = [self._f("a", 2), self._f("b", 5), self._f("c", 8), self._f("d", 11)]
+        verdicts = {0: (True, "high"), 1: (False, "medium"), 2: (True, "low"), 3: (False, "high")}
+        r, _ = self._run(nits, verdicts=verdicts)
+        st = {f["title"]: f["verification"]["status"] for f in r["nits"]}
+        self.assertEqual(st, {"a": "verified", "b": "disputed", "c": "disputed"})
+        self.assertEqual([f["title"] for f in r["nits_dropped"]], ["d"])
+        self.assertTrue(all(f["severity"] == "low" for f in r["nits"] if f["title"] in ("b", "c")))
+        self.assertIn("(disputed", V.report(r, {}))
+        r, _ = self._run(nits, verdicts=verdicts, env={"CRUCIBLE_NITS_DROP": "any"})
+        self.assertEqual([f["title"] for f in r["nits"]], ["a"])
+        self.assertTrue(V.nits_drop_any(lens=True))
+        with unittest.mock.patch.dict(os.environ, {"CRUCIBLE_NITS_DROP": "sure"}):
+            self.assertFalse(V.nits_drop_any(lens=True))
 
     def test_nit_repeating_a_finding_or_another_nit_is_left_out(self):
         r, calls = self._run([self._f("division by zero in f", 1), self._f("magic number 30", 5),
@@ -6812,7 +6828,8 @@ class TestNitTier(unittest.TestCase):
         nits = [self._f("missing docstring on new public f", 2), self._f("doc comment mentions old behaviour", 5)]
         r, _ = self._run(nits, verdicts={1: (True, "medium")})
         self.assertEqual(len(r["nits"]), 2)
-        r, _ = self._run(nits, verdicts={1: (True, "medium")}, env={"CRUCIBLE_NITS_MIN_CONFIDENCE": "high"})
+        r, _ = self._run(nits, verdicts={1: (True, "medium")},
+                         env={"CRUCIBLE_NITS_MIN_CONFIDENCE": "high", "CRUCIBLE_NITS_DROP": "any"})
         self.assertEqual([f["title"] for f in r["nits"]], ["missing docstring on new public f"])
         self.assertEqual(r["nits_dropped"][0]["verification"]["confidence"], "medium")
 

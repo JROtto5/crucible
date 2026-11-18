@@ -182,6 +182,17 @@ def nits_keep_confidence():
     return ("high",) if floor == "high" else ("high", "medium")
 
 
+def nits_drop_any(lens=False):
+    """Which verifier "no" drops a nit. CRUCIBLE_NITS_DROP=sure (default, not for --lens): only a refutation the
+    verifier is sure of (keep=false, confidence high); a nit it doubts or refutes at medium or low confidence stays,
+    marked "disputed". =any (the default for --lens, which another reviewer's authors read): every "no" drops it.
+    ReviewBench run 4's dropped nits, judged (2026-11-18): the 45 refuted at medium confidence held 15 golden issues
+    the run had missed and 2 false ones; the 19 refuted at high confidence, 3 and 3. Keeping all of them took grounded
+    recall 48.1 -> 53.7 and precision 88.3 -> 86.6 (grounded F1 62.3 -> 66.3)."""
+    v = os.environ.get("CRUCIBLE_NITS_DROP", "").strip().lower()
+    return v == "any" if v else bool(lens)
+
+
 def nits_cap_usd():
     """USD the nit verification of one review may spend (CRUCIBLE_NITS_MAX_USD, default 0.75)."""
     try:
@@ -486,7 +497,7 @@ def nit_verify_prompt(batch):
         """).format(n=len(batch)) + claims + "\n"
 
 
-def verify_nits(nits, codes, repo, budget, model, fresh=False):
+def verify_nits(nits, codes, repo, budget, model, fresh=False, drop_any=True):
     """-> (kept, dropped). Batched read-only verification of the nit tier. A nit is kept only on keep=true with high
     or medium confidence (nits_keep_confidence); one with no verdict (a failed call, the cap reached, a skipped index) is dropped as
     unverified, not kept: the nit tier never fails open, so its precision is the verifier's."""
@@ -519,6 +530,12 @@ def verify_nits(nits, codes, repo, budget, model, fresh=False):
                 f["verification"] = {"status": "verified", "method": "read", "evidence": v["evidence"],
                                      "confidence": v["confidence"], "model": model}
                 kept.append(f)
+            elif not drop_any and not (not v["keep"] and v.get("confidence") == "high"):
+                # not a sure refutation: keep it at low severity, with the verifier's doubt on the record
+                f["severity"] = "low"
+                f["verification"] = {"status": "disputed", "method": "read", "evidence": v["evidence"],
+                                     "keep": v["keep"], "confidence": v.get("confidence"), "model": model}
+                kept.append(f)
             else:
                 f["verification"] = {"status": "dropped", "method": "read", "evidence": v["evidence"],
                                      "confidence": v.get("confidence"), "model": model}
@@ -534,7 +551,7 @@ def nit_pool(nit_cands, findings, dlabel, measured):
 
 
 def run_nits(nit_cands, findings, repo, sha, dctx, dlabel, measured, budget, authors, fresh=False, log=print,
-             extra_cap=0.0):
+             extra_cap=0.0, lens=False):
     """-> the record fields of the nit tier. Nits that repeat a finding (kept or not) or each other are left out,
     so is a description-length nit (the length check owns that), and the rest are verified under their own cap
     (plus `extra_cap`: the sweep's nits bring their own batches)."""
@@ -547,7 +564,7 @@ def run_nits(nit_cands, findings, repo, sha, dctx, dlabel, measured, budget, aut
     if nits:
         log(f"  verifying {len(nits)} nit(s) in batches of {NIT_BATCH} ({model}, read-only, cap ${cap:.2f})")
     codes = [region(repo, sha, f["file"], f["line"], pad=NIT_PAD, draft=dctx) for f in nits]
-    kept, dropped = verify_nits(nits, codes, repo, sub, model, fresh) if nits else ([], [])
+    kept, dropped = verify_nits(nits, codes, repo, sub, model, fresh, nits_drop_any(lens)) if nits else ([], [])
     kept.sort(key=lambda f: SEV.index(f["severity"]))
     unverified = sum(1 for f in dropped if f["verification"]["status"] == "unverified")
     if unverified:
@@ -1401,6 +1418,7 @@ def lens_findings(record, repo, nits=False, tracked=None):
     out = [row(f, "finding") for f in record.get("findings") or [] if keep(f)]
     if nits:
         out += [row(f, "nit") for f in record.get("nits") or []
+                if (f.get("verification") or {}).get("status") != "disputed"
                 if keep(f) and (f.get("verification") or {}).get("status") != "dropped"]
     seen, rows = set(), []
     for r in out:                                      # one row per id: a nit never repeats a finding
@@ -1777,7 +1795,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                     swept = [clean_sites(f, nl) for f in swept]
                 nit_cands += swept
             record.update(run_nits(nit_cands, cands + carried + reverify, repo, sha, dctx, dlabel, measured, budget,
-                                   authors, fresh, log, extra))
+                                   authors, fresh, log, extra, lens=lens))
         unsettled, lead, tail = [f for f in kept if verify_failed(f)], [], []
         if unsettled:                                  # inserted first, so a failed review pass still leads
             why = (unsettled[0]["verification"].get("reason") or "no reason recorded")[:300]
@@ -2031,7 +2049,9 @@ def report(rev, ans, waivers=None):
         L += ["", "</details>"]
     if "nits" in rev:                      # only reviews run with --nits; they never count toward the verdict
         L += ["", "## Nits (non-blocking, verified; not counted in the verdict)", ""]
-        L += [f"- {f['severity']} · `{f['file']}:{f['line']}` · **{f['title']}**: {f.get('problem', '')}"
+        L += [f"- {f['severity']} · `{f['file']}:{f['line']}` · **{f['title']}**"
+              + (" (disputed: the verifier wasn't sure it holds)" if (f.get("verification") or {}).get("status") == "disputed" else "")
+              + f": {f.get('problem', '')}"
               + (f" Fix: {f['fix']}" if f.get("fix") else "")
               + (f" Also at: {', '.join(f'`{x}`' for x in f['also_at'])}." if f.get("also_at") else "")
               for f in rev["nits"]] or ["None."]
