@@ -3300,6 +3300,14 @@ class TestRerunSameCommit(unittest.TestCase):
         r = self._ascii_locale_run(code, repo)
         self.assertEqual(r.returncode, 0, r.stderr)
 
+    def test_git_diff_and_contributing_survive_a_latin1_byte(self):
+        repo = make_repo({"a.js": "1\n"}, {"b.js": "2\n"})
+        open(os.path.join(repo, "a.js"), "wb").write(b"// caf\xe9\n")
+        open(os.path.join(repo, "CONTRIBUTING.md"), "wb").write(b"Caf\xe9 rules.\n")
+        sh(repo, "git", "commit", "-qam", "latin1")
+        self.assertIn("// caf�", U.git(repo, "diff", "main...HEAD"))
+        self.assertIn("Caf� rules.", V.project_rules_text(repo, "t__none"))
+
     def test_learned_project_files_round_trip_under_a_non_utf8_locale(self):
         # rules.md, STYLE.md and memory.md quote PR bodies and model output; each goes into every review prompt
         up = make_repo({"a.js": "// c\nconst a = 1;\n"})
