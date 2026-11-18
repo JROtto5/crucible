@@ -6921,20 +6921,56 @@ class TestNitTier(unittest.TestCase):
         self.assertNotIn("nits_reserve_usd", r)
 
     def test_parallel_passes_keep_chunk_order_and_the_budget(self):
-        """Passes 2..n run CRUCIBLE_PASS_JOBS at a time; results land in chunk order and the calls can't overspend."""
-        with unittest.mock.patch.dict(os.environ, {"CRUCIBLE_PASS_JOBS": "3"}):
-            r, calls = self._run([], nits=None, budget=None, review_cost=0.30, passes=5)
-            self.assertEqual([c["status"] for c in r["coverage"]["chunks"]], ["reviewed"] * 5)
-            self.assertEqual([c["files"] for c in r["coverage"]["chunks"]],
-                             [c["files"] for c in sorted(r["coverage"]["chunks"], key=lambda c: c["files"])])
-            r, _ = self._run([self._f("a nit", 2)], budget=1.0, review_cost=0.30, passes=5)
-            self.assertLessEqual(sum(1 for c in r["coverage"]["chunks"] if c["status"] == "reviewed"), 4)
+        """Passes 2..n run in parallel: results land in chunk order though early passes finish last, every call gets a
+        reserved slot of at least the floor, and the slots are all given back."""
+        from unittest import mock
+        repo = make_repo({"a.py": "x = 1\n"}, {"a.py": "x = 2\n"})
+        caps, shares = [], []
+        real_share = V.ShareBudget
+
+        class Share(real_share):
+            def __init__(self, *a, **kw):
+                super().__init__(*a, **kw)
+                shares.append(self)
+
+        def fake(prompt, model, schema, cwd, budget=None, *a, **kw):
+            n = int(re.search(r"# pass (\d+)", prompt).group(1))
+            if kw.get("kind") != "review":
+                return {"nits": []}, 0.0
+            caps.append((n, budget.remaining() if budget is not None else None))
+            time.sleep(0.05 * (6 - n))              # pass 2 finishes last
+            if budget is not None:
+                budget.add(0.40)
+            return {"summary": f"s{n}", "findings": [self._f(f"bug in pass {n}", n, "medium")], "nits": []}, 0.40
+        real_chunk = V.diff_mod.chunk
+
+        def chunk(files, *a, **kw):
+            chunks, unc = real_chunk(files, *a, **kw)
+            return [dict(chunks[0], files=[f"p{i}.py"], text=chunks[0]["text"] + f"\n# pass {i}")
+                    for i in range(1, 6)], unc
+        home = tempfile.mkdtemp(prefix="crucible-home-")
+        with mock.patch.object(V, "HOME", home), mock.patch.object(U, "HOME", home), mock.patch.object(V, "claude", fake), \
+                mock.patch.object(V.diff_mod, "chunk", chunk), mock.patch.object(V, "ShareBudget", Share), \
+                mock.patch.object(V, "verify_tiered", lambda f, *a, **kw: ({"keep": True, "severity": f["severity"],
+                    "method": "read", "actions": "", "evidence": "e", "confidence": "high"}, [])), \
+                mock.patch.dict(os.environ, {"CRUCIBLE_CACHE": os.path.join(home, "c"), "CRUCIBLE_PASS_JOBS": "3"}):
+            d = V.run_review(repo, "main", budget_usd=6.0, offline=True, skip_checks=True, log=lambda *_: None, nits=True)
+            r = U.read_json(os.path.join(d, "review.json"))
+        self.assertEqual([c["files"] for c in r["coverage"]["chunks"]], [[f"p{i}.py"] for i in range(1, 6)])
+        self.assertEqual([c["status"] for c in r["coverage"]["chunks"]], ["reviewed"] * 5)
+        self.assertEqual(len(shares), 1)
+        self.assertEqual((shares[0].active, round(shares[0].out, 9)), (0, 0))
+        later = [c for n, c in caps if n > 1]
+        self.assertEqual(len(later), 4)
+        self.assertTrue(all(c >= V.PASS_SLOT_FLOOR_USD for c in later), caps)
 
     def test_share_budget(self):
         """Slots reserve their cap: the caps in flight never add up to more than what is left (crucible review of
         8ba7507: a cap read as remaining/n let a 4th call start with caps of 0.889 out against 0.667 left)."""
         parent = U.Budget(1.0)
         share = V.ShareBudget(parent, 3)
+        floor = unittest.mock.patch.object(V, "PASS_SLOT_FLOOR_USD", 0.0)
+        floor.start()
         a, b, c = share.slot(), share.slot(), share.slot()
         self.assertAlmostEqual(sum(x.remaining() for x in (a, b, c)), 1.0)
         a.add(0.3); a.release()                      # the first call ends having spent 0.3 of its 0.333
@@ -6946,10 +6982,30 @@ class TestNitTier(unittest.TestCase):
             x.release()
         self.assertEqual((share.active, round(share.out, 9)), (0, 0))
         self.assertIsNone(V.ShareBudget(U.Budget(None), 3).slot().remaining())
+        floor.stop()
         with unittest.mock.patch.dict(os.environ, {"CRUCIBLE_PASS_JOBS": "x"}):
             self.assertEqual(V.pass_jobs(), 3)
         with unittest.mock.patch.dict(os.environ, {"CRUCIBLE_PASS_JOBS": "3"}):
             self.assertEqual([V.pass_jobs(x) for x in (None, 5.0, 2.5, 0.4)], [3, 3, 2, 1])
+
+    def test_a_slot_under_the_floor_waits_for_a_release(self):
+        import threading as th
+        parent = U.Budget(3.0)
+        share = V.ShareBudget(parent, 3)
+        a, b, c = share.slot(), share.slot(), share.slot()          # $1 each
+        a.add(0.9); a.release()
+        got = []
+        t = th.Thread(target=lambda: got.append(share.slot()), daemon=True)
+        t.start(); t.join(0.2)
+        self.assertEqual(got, [])                                   # (2.1 - 2.0) / 1 = 0.10 < $1: waits
+        b.add(0.2); b.release()
+        t.join(0.2)
+        self.assertEqual(got, [])                                   # (1.9 - 1.0) / 2 = 0.45: still waits
+        c.release()                                                 # nothing running: it takes its share
+        t.join(2)
+        self.assertEqual(len(got), 1)
+        self.assertAlmostEqual(got[0].cap, 1.9 / 3)
+        got[0].release()
 
     def test_share_budget_under_threads_never_overspends(self):
         import concurrent.futures as cf, random
@@ -6957,6 +7013,7 @@ class TestNitTier(unittest.TestCase):
             rnd = random.Random(seed)
             parent = U.Budget(2.0)
             share = V.ShareBudget(parent, 3)
+            share_floor = unittest.mock.patch.object(V, 'PASS_SLOT_FLOOR_USD', 0.0); share_floor.start()
 
             def call(_):
                 s = share.slot()
@@ -6968,6 +7025,7 @@ class TestNitTier(unittest.TestCase):
                     s.release()
             with cf.ThreadPoolExecutor(3) as ex:
                 list(ex.map(call, range(8)))
+            share_floor.stop()
             self.assertLessEqual(parent.spent, 2.0 + 1e-9)
 
     def test_held_budget(self):

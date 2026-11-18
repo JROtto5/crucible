@@ -259,20 +259,29 @@ class ShareBudget:
     the remainder (each call's --max-budget-usd is its slot's remaining()), and the reservation is released when the
     call ends. With no limit every slot is unlimited."""
     def __init__(self, parent, n):
-        self.parent, self.n, self.lock, self.out, self.active = parent, max(1, n), threading.Lock(), 0.0, 0
+        self.parent, self.n, self.out, self.active = parent, max(1, n), 0.0, 0
+        self.cond = threading.Condition()
 
     def slot(self):
-        with self.lock:
-            pr = self.parent.remaining()
-            cap = None if pr is None else max(0.0, pr - self.out) / max(1, self.n - self.active)
+        """Reserve a cap: what is left after the caps already out, split over the free slots. A cap under
+        PASS_SLOT_FLOOR_USD waits for a running call to end and give its reservation back, so later passes get a
+        usable share instead of one the CLI would cut off; with nothing running it takes what is left."""
+        with self.cond:
+            while True:
+                pr = self.parent.remaining()
+                cap = None if pr is None else max(0.0, pr - self.out) / max(1, self.n - self.active)
+                if cap is None or cap >= PASS_SLOT_FLOOR_USD or self.active == 0:
+                    break
+                self.cond.wait()
             self.active += 1
             self.out += cap or 0.0
             return _Slot(self, cap)
 
     def _release(self, cap):
-        with self.lock:
+        with self.cond:
             self.active -= 1
             self.out -= cap or 0.0
+            self.cond.notify_all()
 
     def remaining(self):
         return self.parent.remaining()
@@ -316,8 +325,9 @@ class _Slot:
         return getattr(self.share.parent, name)
 
 
-# A parallel pass only gets a share of what is left, and the CLI cuts off a call at its cap, so passes run in
-# parallel only when every slot can get at least this much; tighter budgets keep the old one-after-another order.
+# A parallel pass only gets a share of what is left, and the CLI cuts off a call at its cap. So the pool is sized for
+# at least this much per slot, and a later call whose share would fall under it waits for a running one to end
+# (ShareBudget.slot); fewer calls run at once rather than calls too small to finish.
 PASS_SLOT_FLOOR_USD = 1.0
 
 def pass_jobs(left=None):
@@ -327,7 +337,7 @@ def pass_jobs(left=None):
         n = max(1, int(os.environ.get("CRUCIBLE_PASS_JOBS", "3")))
     except ValueError:
         n = 3
-    return n if left is None else max(1, min(n, int(left // PASS_SLOT_FLOOR_USD)))
+    return n if left is None or PASS_SLOT_FLOOR_USD <= 0 else max(1, min(n, int(left // PASS_SLOT_FLOOR_USD)))
 
 
 # ---------- the nit sweep: a second, nit-only look when budget remains ----------
