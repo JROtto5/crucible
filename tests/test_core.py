@@ -6969,8 +6969,14 @@ class TestNitTier(unittest.TestCase):
         8ba7507: a cap read as remaining/n let a 4th call start with caps of 0.889 out against 0.667 left)."""
         parent = U.Budget(1.0)
         share = V.ShareBudget(parent, 3)
-        floor = unittest.mock.patch.object(V, "PASS_SLOT_FLOOR_USD", 0.0)
-        floor.start()
+        with unittest.mock.patch.object(V, "PASS_SLOT_FLOOR_USD", 0.0):
+            self._share_budget_slots(parent, share)
+        with unittest.mock.patch.dict(os.environ, {"CRUCIBLE_PASS_JOBS": "x"}):
+            self.assertEqual(V.pass_jobs(), 3)
+        with unittest.mock.patch.dict(os.environ, {"CRUCIBLE_PASS_JOBS": "3"}):
+            self.assertEqual([V.pass_jobs(x) for x in (None, 5.0, 2.5, 0.4)], [3, 3, 2, 1])
+
+    def _share_budget_slots(self, parent, share):
         a, b, c = share.slot(), share.slot(), share.slot()
         self.assertAlmostEqual(sum(x.remaining() for x in (a, b, c)), 1.0)
         a.add(0.3); a.release()                      # the first call ends having spent 0.3 of its 0.333
@@ -6982,11 +6988,15 @@ class TestNitTier(unittest.TestCase):
             x.release()
         self.assertEqual((share.active, round(share.out, 9)), (0, 0))
         self.assertIsNone(V.ShareBudget(U.Budget(None), 3).slot().remaining())
-        floor.stop()
-        with unittest.mock.patch.dict(os.environ, {"CRUCIBLE_PASS_JOBS": "x"}):
-            self.assertEqual(V.pass_jobs(), 3)
-        with unittest.mock.patch.dict(os.environ, {"CRUCIBLE_PASS_JOBS": "3"}):
-            self.assertEqual([V.pass_jobs(x) for x in (None, 5.0, 2.5, 0.4)], [3, 3, 2, 1])
+        # a slot never shows more than its cap, nor more than the budget has left; a second release is a no-op
+        s = V.ShareBudget(U.Budget(1.0), 2).slot()
+        s.add(0.4)
+        self.assertAlmostEqual(s.remaining(), 0.1)
+        s.release(); s.release()
+        self.assertEqual(s.share.active, 0)
+        # the last call to come takes all that is left, not 1/n of it
+        tail = V.ShareBudget(U.Budget(1.7), 3, calls=1).slot()
+        self.assertAlmostEqual(tail.cap, 1.7)
 
     def test_a_slot_under_the_floor_waits_for_a_release(self):
         import threading as th
@@ -7013,7 +7023,6 @@ class TestNitTier(unittest.TestCase):
             rnd = random.Random(seed)
             parent = U.Budget(2.0)
             share = V.ShareBudget(parent, 3)
-            share_floor = unittest.mock.patch.object(V, 'PASS_SLOT_FLOOR_USD', 0.0); share_floor.start()
 
             def call(_):
                 s = share.slot()
@@ -7023,9 +7032,8 @@ class TestNitTier(unittest.TestCase):
                     s.add(min(cap, rnd.uniform(0.2, 0.9)))
                 finally:
                     s.release()
-            with cf.ThreadPoolExecutor(3) as ex:
+            with unittest.mock.patch.object(V, "PASS_SLOT_FLOOR_USD", 0.0), cf.ThreadPoolExecutor(3) as ex:
                 list(ex.map(call, range(8)))
-            share_floor.stop()
             self.assertLessEqual(parent.spent, 2.0 + 1e-9)
 
     def test_held_budget(self):

@@ -94,6 +94,8 @@ FINDINGS_NITS_SCHEMA = {**FINDINGS_SCHEMA, "properties": {
 # cleanup only on success (7), a need the setup doesn't meet (manifest, minimum runtime, OS, container; 7), and a
 # step unsafe to run twice (2); 9 are one-offs. Most were low or medium and seen-but-unsaid, like the security
 # misses.
+# The content-files paragraph: run 4 missed 12 of 16 golden issues in .md files; most were in templates and agent or
+# skill files that a tool reads (scotthamilton77/agents-config: 22 of 25 missed), reviewed as prose.
 NITS_NOTE = f"""
         Second tier, "nits" (at most {NITS_MAX_PER_PASS}, separate from findings): smaller REAL problems a careful
         reviewer would comment on but not block on: an unhandled edge case, a misleading name, comment or docstring,
@@ -139,6 +141,12 @@ NITS_NOTE = f"""
         layer the repo keeps apart (core code importing UI or CLI code, a library reading argv or the process
         environment directly); a public name, export or option that doesn't follow the naming or placement of its
         peers. A changed contract that breaks a caller is a finding, not a nit (see the call sites below, if any).
+        Files that another program or an AI agent reads are code too, so review them line by line, not as prose:
+        templates, prompt, agent, skill and rule files, config, CI workflows and install or shell scripts. A tag or
+        block opened one way and closed another; a path, command, tool or feature name that is wrong for where the
+        file is installed or which tool reads it; an example or usage line that doesn't match the code it documents
+        (an argument missing, a flag renamed); a stated limit or step (a timeout, a check) that the commands shown
+        don't do; a misspelled word that changes the meaning or breaks a trigger or a lookup.
 """
 NIT_VERDICTS_SCHEMA = {"type": "object", "properties": {"verdicts": {"type": "array", "items": {
     "type": "object", "properties": {
@@ -258,22 +266,28 @@ class ShareBudget:
     is left after the caps already out, split over the free slots. So the caps in flight never add up to more than
     the remainder (each call's --max-budget-usd is its slot's remaining()), and the reservation is released when the
     call ends. With no limit every slot is unlimited."""
-    def __init__(self, parent, n):
-        self.parent, self.n, self.out, self.active = parent, max(1, n), 0.0, 0
+    def __init__(self, parent, n, calls=None):
+        # calls: how many slots will be taken in all, so the last ones split what is left among themselves, not by n
+        self.parent, self.n, self.out, self.active, self.taken, self.calls = parent, max(1, n), 0.0, 0, 0, calls
         self.cond = threading.Condition()
 
     def slot(self):
-        """Reserve a cap: what is left after the caps already out, split over the free slots. A cap under
+        """Reserve a cap: what is left after the caps already out, split over the free slots (or over the calls still
+        to come, when fewer: the last pass alone gets all that is left). A cap under
         PASS_SLOT_FLOOR_USD waits for a running call to end and give its reservation back, so later passes get a
         usable share instead of one the CLI would cut off; with nothing running it takes what is left."""
         with self.cond:
             while True:
                 pr = self.parent.remaining()
-                cap = None if pr is None else max(0.0, pr - self.out) / max(1, self.n - self.active)
+                ways = self.n - self.active
+                if self.calls is not None:
+                    ways = min(ways, self.calls - self.taken)
+                cap = None if pr is None else max(0.0, pr - self.out) / max(1, ways)
                 if cap is None or cap >= PASS_SLOT_FLOOR_USD or self.active == 0:
                     break
                 self.cond.wait()
             self.active += 1
+            self.taken += 1
             self.out += cap or 0.0
             return _Slot(self, cap)
 
@@ -1598,7 +1612,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         results = [run_pass(1, chunks[0], budget)] if chunks else []
         jobs = pass_jobs(pass_budget.remaining())
         if len(chunks) > 1 and jobs > 1:
-            share = ShareBudget(pass_budget, min(jobs, len(chunks) - 1))
+            share = ShareBudget(pass_budget, min(jobs, len(chunks) - 1), calls=len(chunks) - 1)
             with cf.ThreadPoolExecutor(max_workers=jobs) as ex:
                 results += list(ex.map(lambda a: run_pass(a[0], a[1], share), enumerate(chunks[1:], 2)))
         else:
