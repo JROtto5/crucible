@@ -253,6 +253,35 @@ class HeldBudget:
         return getattr(self.parent, name)
 
 
+class ShareBudget:
+    """A view of the budget for calls made `n` at a time: each sees 1/n of what is left, so n calls in flight together
+    can't spend more than the remainder (each call's --max-budget-usd is its view's remaining())."""
+    def __init__(self, parent, n):
+        self.parent, self.n = parent, max(1, n)
+
+    def remaining(self):
+        pr = self.parent.remaining()
+        return None if pr is None else max(0.0, pr / self.n)
+
+    def exhausted(self):
+        r = self.parent.remaining()
+        return r is not None and r <= 0.0
+
+    def add(self, c):
+        self.parent.add(c)
+
+    def __getattr__(self, name):
+        return getattr(self.parent, name)
+
+
+def pass_jobs():
+    """Review passes 2..n in parallel: CRUCIBLE_PASS_JOBS (default 3; 1 = one after another)."""
+    try:
+        return max(1, int(os.environ.get("CRUCIBLE_PASS_JOBS", "3")))
+    except ValueError:
+        return 3
+
+
 # ---------- the nit sweep: a second, nit-only look when budget remains ----------
 # ReviewBench run 3 found 30.8% of low-severity golden issues, and nits carried ~15 points of recall at ~92% true.
 # One review call asks for findings and nits together, and a pass that found a few stops looking. So after the
@@ -1466,12 +1495,13 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         cands, chunk_status, summaries, nit_cands = list(scanner) + house_findings, [], [], []
         measured = length_measured(style_json)
         fkey, review_cost = facts_key(chk), 0.0
-        tok_before = budget.token_snapshot()       # review passes run one after another, before any verification
+        tok_before = budget.token_snapshot()       # all review passes finish before any verification starts
         full_texts = since_texts(files, digested)
         pass_hold = nits_reserve_usd(budget.limit) if nits else 0.0
         pass_budget = HeldBudget(budget, pass_hold) if pass_hold else budget
         sweep_chunks, sweep_notes = [], []             # the reviewed passes, for the nit sweep's second look
-        for i, ch in enumerate(chunks, 1):
+        def run_pass(i, ch, pbudget):
+            """One review pass -> (ch, docs, out | None, cost, status). Runs in a worker thread for passes 2..n."""
             since = since_note(prev_sha, record["incremental"]["amended"], ch, full_texts, base) if prev_sha else ""
             docs = docs_note(repo, sha, dfiles if prev_sha else files, ch, files) if nits else ""
             if nits:
@@ -1488,21 +1518,33 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             key = hashlib.sha256((review_model + "\0" + key_prompt).encode()).hexdigest()[:32]
             hit = None if fresh else cache_hit(key, budget, "review")
             if hit:
-                out, cost = hit, 0
-            else:
-                log(f"  review pass {i}/{len(chunks)}: {', '.join(ch['files'])[:90]}")
-                try:
-                    # the first pass always runs on the whole budget, so a small one still reviews something
-                    out, cost = claude(prompt, review_model, FINDINGS_NITS_SCHEMA if nits else FINDINGS_SCHEMA, repo,
-                                       budget if i == 1 else pass_budget, kind="review")
-                    review_cost += cost or 0
-                    cache_put(key, out)
-                except Failed as e:
-                    held_pass = str(e) == BUDGET_EXHAUSTED and pass_hold and not budget.exhausted()
-                    chunk_status.append({"files": ch["files"], "status": "failed",
-                                         "reason": HELD_PASS_REASON if held_pass else str(e)})
-                    continue
-            chunk_status.append({"files": ch["files"], "status": "reviewed", "cached": bool(hit)})
+                return ch, docs, hit, 0, {"files": ch["files"], "status": "reviewed", "cached": True}
+            log(f"  review pass {i}/{len(chunks)}: {', '.join(ch['files'])[:90]}")
+            try:
+                out, cost = claude(prompt, review_model, FINDINGS_NITS_SCHEMA if nits else FINDINGS_SCHEMA, repo,
+                                   pbudget, kind="review")
+                cache_put(key, out)
+            except Failed as e:
+                held_pass = str(e) == BUDGET_EXHAUSTED and pass_hold and not budget.exhausted()
+                return ch, docs, None, 0, {"files": ch["files"], "status": "failed",
+                                           "reason": HELD_PASS_REASON if held_pass else str(e)}
+            return ch, docs, out, cost or 0, {"files": ch["files"], "status": "reviewed", "cached": False}
+
+        # the first pass always runs alone on the whole budget, so a small one still reviews something; the rest run
+        # pass_jobs() at a time, each call capped at its share of what is left so parallel calls can't overspend it
+        results = [run_pass(1, chunks[0], budget)] if chunks else []
+        jobs = pass_jobs()
+        if len(chunks) > 1 and jobs > 1:
+            share = ShareBudget(pass_budget, min(jobs, len(chunks) - 1))
+            with cf.ThreadPoolExecutor(max_workers=jobs) as ex:
+                results += list(ex.map(lambda a: run_pass(a[0], a[1], share), enumerate(chunks[1:], 2)))
+        else:
+            results += [run_pass(i, ch, pass_budget) for i, ch in enumerate(chunks[1:], 2)]
+        for ch, docs, out, cost, status in results:       # chunk order, whatever order the calls finished in
+            review_cost += cost
+            chunk_status.append(status)
+            if out is None:
+                continue
             sweep_chunks.append(ch); sweep_notes.append(docs)
             summaries.append(out["summary"])
             for f in out["findings"][:10]:

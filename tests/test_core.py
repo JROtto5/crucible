@@ -23,6 +23,8 @@ tempfile.tempdir = _TMP_ROOT
 os.environ["TMPDIR"] = _TMP_ROOT
 _TMP_HOME = tempfile.mkdtemp(prefix="crucible-test-home-")
 os.environ["CRUCIBLE_HOME"] = _TMP_HOME
+# review passes one after another unless a test asks for parallel ones: the fakes charge in call order
+os.environ.setdefault("CRUCIBLE_PASS_JOBS", "1")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from crucible import catalog as C, diff as D, readiness as R, review as V, routing as RT, style as S, util as U  # noqa: E402
@@ -6917,6 +6919,27 @@ class TestNitTier(unittest.TestCase):
         self.assertNotIn("nits_reserve_usd", r)
         r, _ = self._run([self._f("a nit", 2)], nits=None, budget=1.0)
         self.assertNotIn("nits_reserve_usd", r)
+
+    def test_parallel_passes_keep_chunk_order_and_the_budget(self):
+        """Passes 2..n run CRUCIBLE_PASS_JOBS at a time; results land in chunk order and the calls can't overspend."""
+        with unittest.mock.patch.dict(os.environ, {"CRUCIBLE_PASS_JOBS": "3"}):
+            r, calls = self._run([], nits=None, budget=None, review_cost=0.30, passes=5)
+            self.assertEqual([c["status"] for c in r["coverage"]["chunks"]], ["reviewed"] * 5)
+            self.assertEqual([c["files"] for c in r["coverage"]["chunks"]],
+                             [c["files"] for c in sorted(r["coverage"]["chunks"], key=lambda c: c["files"])])
+            r, _ = self._run([self._f("a nit", 2)], budget=1.0, review_cost=0.30, passes=5)
+            self.assertLessEqual(sum(1 for c in r["coverage"]["chunks"] if c["status"] == "reviewed"), 4)
+
+    def test_share_budget(self):
+        parent = U.Budget(1.0)
+        share = V.ShareBudget(parent, 4)
+        self.assertAlmostEqual(share.remaining(), 0.25)
+        share.add(0.6)
+        self.assertAlmostEqual(parent.spent, 0.6); self.assertAlmostEqual(share.remaining(), 0.1)
+        self.assertFalse(share.exhausted())
+        self.assertIsNone(V.ShareBudget(U.Budget(None), 3).remaining())
+        with unittest.mock.patch.dict(os.environ, {"CRUCIBLE_PASS_JOBS": "x"}):
+            self.assertEqual(V.pass_jobs(), 3)
 
     def test_held_budget(self):
         parent = U.Budget(1.0)
