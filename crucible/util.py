@@ -346,7 +346,8 @@ def is_limit(err):
 
 def claude(prompt, model, schema, cwd, budget=None, tools=TOOLS_READ, effort="high", timeout=1500, kind="other"):
     """One isolated, structured model call. Raises Failed on any problem. `kind` labels its tokens and cost in the
-    budget (Budget.kind_snapshot). A Fable call refused for a spend/usage limit is retried once, on its own, on
+    budget (Budget.kind_snapshot). A Fable call refused for a spend/usage limit, or by a Claude Code too old for the
+    model, is retried once, on its own, on
     fable_fallback() and noted in the budget (review.json model_fallbacks); the rest of the review keeps its models."""
     try:
         return _claude_once(prompt, model, schema, cwd, budget, tools, effort, timeout, kind)

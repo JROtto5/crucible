@@ -1297,7 +1297,10 @@ def lens_findings(record, repo, nits=False, tracked=None):
     cov = record.get("coverage") or {}
     status, reason = record.get("status"), record.get("reason")
     failed = [c.get("reason") for c in cov.get("chunks") or [] if c.get("status") == "failed" and c.get("reason")]
-    if status == "done" and (cov.get("files") or 0) > 0 and not cov.get("reviewed"):
+    chunks = cov.get("chunks") or []
+    no_pass_ran = bool(failed) and not any(c.get("status") == "reviewed" for c in chunks) and cov.get("missing")
+    # an incremental round counts files untouched since the last review as reviewed, so judge it by its passes too
+    if status == "done" and (cov.get("files") or 0) > 0 and (not cov.get("reviewed") or no_pass_ran):
         # every pass failed (an old CLI refusing the model, an expired login, a limit with no fallback): no review
         # happened, so it must not read as a clean change (GitHub #2). review.json keeps its own status.
         status, reason = "failed", "no changed file was reviewed" + (f": {failed[0][:300]}" if failed else "")

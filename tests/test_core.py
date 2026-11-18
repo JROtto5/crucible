@@ -7674,8 +7674,15 @@ class TestLensMode(unittest.TestCase):
         self.assertEqual(lj["status"], "failed")
         self.assertIn("no changed file was reviewed", lj["reason"]); self.assertIn("2.1.285", lj["reason"])
         self.assertEqual((lj["files"], lj["reviewed"], lj["missing"], lj["failed_reason"]), (3, 0, 3, why))
+        # an incremental round: an untouched file is carried as reviewed, but the changed file's only pass failed
+        inc = {"status": "done", "findings": [], "coverage": {
+            "files": 3, "reviewed": 2, "missing": ["b.js"], "complete": False,
+            "chunks": [{"files": ["b.js"], "status": "failed", "reason": why}]}}
+        self.assertEqual(V.lens_findings(inc, "/repo")["status"], "failed")
         # a partly reviewed change stays done but says what it missed
-        rec["coverage"].update(reviewed=2, missing=["c.js"])
+        rec["coverage"].update(reviewed=2, missing=["c.js"],
+                               chunks=[{"files": ["a.js", "b.js"], "status": "reviewed"},
+                                       {"files": ["c.js"], "status": "failed", "reason": why}])
         lj = V.lens_findings(rec, "/repo")
         self.assertEqual((lj["status"], lj["complete"], lj["reviewed"], lj["missing"]), ("done", False, 2, 1))
         # a change with no code files to review (docs only) is a clean done
