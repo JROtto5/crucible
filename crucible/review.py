@@ -1686,7 +1686,10 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
 
 def carry_forward(repo, project, sha, record):
     """Carry answers from the previous reviewed commit of this branch when the finding is the same and its code region
-    was not touched since then."""
+    was not touched since then. An absence finding has a second anchor, where the missing piece would land: a FIXED
+    answer isn't carried when that anchor changed and the re-check (split_prev's `anchor_changed`) still holds the
+    finding, so an incomplete fix is re-answered instead of passing as fixed (BLAZE's two-anchor rule, 2026-11-18).
+    Deferred and refuted answers still carry: they don't claim the anchor now has the missing piece."""
     prev = next((s for s in reversed(branch_history(repo, project, sha)) if s != sha), None)
     if not prev:
         return
@@ -1709,6 +1712,8 @@ def carry_forward(repo, project, sha, record):
                 continue                           # the cited code changed: it must be re-answered
             moved = diff_mod.map_line(hunks.get(old["file"], []), old["line"])
             same = old["id"] == f["id"] or (moved is not None and abs(moved - f["line"]) <= 3 and similar_loose(f["title"], old["title"]))
+            if same and f.get("anchor_changed") and prev_ans[old["id"]].get("disposition") == "fixed":
+                break                              # its anchor moved and the re-check still holds it: "fixed" is stale
             if same:
                 carried[f["id"]] = dict(prev_ans[old["id"]], carried_from=prev[:10], carried_finding=old["id"])
                 used.add(old["id"])

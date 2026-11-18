@@ -1078,3 +1078,17 @@ regression = about $11.40, before self-review.
 The same two cases were missed in both runs (js-refcount, rated medium; py-race). Every case is under 200 changed lines, so all ran in the small tier. Its $1 cap never bound, because no case cost more than $0.36. The 19% saving comes from the lens prompt: no draft and no house-style section. The cap is a ceiling for the host, not where the saving came from. One round each, so the cost difference is within noise for single cases.
 
 **PKCE pair, re-run 2026-11-17 18:08 ET (72212c6, `--cases pkce --no-write`, outputs read in eval/last-run.json):** `py-pkce-unchecked` caught: critical at authsrv/server.py:31, "token() accepts code_verifier but never verifies it", which is the planted line (token() at 31–37 never reads `code_verifier`); plus an important at :21 (required positional PKCE args break the API) and a low at :23 (challenge format unchecked); 1 true finding dropped by the verifier. `clean-py-pkce-enforced`: 0 blocking; a medium at :28 (PKCE required for all clients) and a low at :13 (bad input raises instead of invalid_grant), both fair and non-blocking. $0.919 for the pair. n=1 each, too few to quote; the 15:05 caught/clean result now has a read output behind it.
+
+## 2026-11-18: absence findings answered FIXED, then re-raised (BLAZE two-anchor ask, read-only, $0)
+Over stored reviews started since 2026-10-19 (`~/.crucible/reviews`, each project's branches.json for round order). An absence finding is one `absence_anchor()` returns non-None for (model `anchor_files` or an `ABSENCE_RX` title).
+
+| | count |
+|---|---|
+| kept absence findings | 461 |
+| answered FIXED | 55 |
+| FIXED, and the same finding (id, or same file + `similar_loose` title) kept in the next reviewed round | 5 (2 three-mesh-bvh, 3 crucible) |
+| of those 5, answer carried silently | 0 (4 re-answered by hand, 1 re-answered deferred) |
+| kept findings re-checked because their anchor changed (`anchor_changed`) | 40 |
+| of those 40, answer carried | 12: 7 deferred, 5 refuted, 0 fixed |
+
+So the silent FIXED carry BLAZE describes had not happened here: 0 of 55. The code still allowed it (`carry_forward` checked only the cited region), so it is closed now with a falsifier test (FIXED, then the anchor file changes and the re-check holds: fails on the old code) and two companions that must still carry (FIXED with neither anchor changed; deferred across an anchor change). The 5 refuted answers carried across an anchor change are left as they are: a refutation can depend on the anchor file too, but no case of one going stale has been seen. 5 of 55 re-raised (9%, Wilson about 4-20%) vs BLAZE's 3 of 94; different units (BLAZE counts followed findings, this counts FIXED answers), so no ranking.

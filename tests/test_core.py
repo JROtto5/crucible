@@ -780,6 +780,40 @@ class TestReviewLogic(unittest.TestCase):
         self.assertIn("CR-aaaa", ans)          # line 40 untouched → carried
         self.assertNotIn("CR-bbbb", ans)       # line 6 is within 3 of touched line 7 → re-answer
 
+    def _absence_round(self, disposition, touch):
+        """An absence finding ("no test for the retry guard", anchored in test/a.test.js) answered `disposition` on
+        one commit; the next commit edits `touch`; split_prev decides carry vs re-check and the re-check keeps it.
+        -> the answers carried to the new commit."""
+        src = "".join(f"line{i}\n" for i in range(1, 60))
+        d = make_repo({"a.js": src, "b.js": "b\n", "test/a.test.js": "t\n"}, {"a.js": src.replace("line40\n", "retry()\n")})
+        proj, prev = U.project_key(d), U.git(d, "rev-parse", "HEAD")
+        f = {"id": "CR-abs1", "file": "a.js", "line": 40, "title": "No test for the retry guard", "severity": "medium",
+             "source": "review", "anchor_files": ["test/a.test.js"], "verification": {"status": "verified"}}
+        pd = U.review_dir(proj, prev)
+        U.write_json(os.path.join(pd, "review.json"), {"status": "done", "findings": [f]})
+        U.write_json(os.path.join(pd, "answers.json"), {"CR-abs1": {"disposition": disposition, "note": "n"}})
+        U.write_json(os.path.join(U.project_dir(proj), "branches.json"), {"fix": [prev]})
+        open(os.path.join(d, touch), "a").write("more\n")
+        sh(d, "git", "commit", "-qam", "next round")
+        new = U.git(d, "rev-parse", "HEAD")
+        dtext = U.git(d, "diff", "-U0", "--no-color", f"{prev}..{new}")
+        carried, touched = V.split_prev([f], D.changed_old_ranges(dtext), D.hunks_old_new(dtext), prev,
+                                        changed=[touch], known=["a.js", "b.js", "test/a.test.js"])
+        rec = {"findings": carried + touched}           # the re-check (if any) still holds it
+        V.carry_forward(d, proj, new, rec)
+        return U.read_json(os.path.join(U.review_dir(proj, new), "answers.json"), {}) or {}
+
+    def test_fixed_absence_answer_not_carried_when_its_anchor_changed(self):
+        """BLAZE 11-18 two-anchor falsifier: FIXED, then the test file changes but the re-check still finds the test
+        missing -> re-answer, not a silent "fixed"."""
+        self.assertNotIn("CR-abs1", self._absence_round("fixed", "test/a.test.js"))
+
+    def test_fixed_absence_answer_carries_when_neither_anchor_changed(self):
+        self.assertEqual(self._absence_round("fixed", "b.js")["CR-abs1"]["disposition"], "fixed")
+
+    def test_deferred_absence_answer_carries_across_an_anchor_change(self):
+        self.assertEqual(self._absence_round("deferred", "test/a.test.js")["CR-abs1"]["disposition"], "deferred")
+
 
 class TestStyle(unittest.TestCase):
     def test_median_and_density(self):
