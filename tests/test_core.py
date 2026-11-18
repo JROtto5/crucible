@@ -23,8 +23,9 @@ tempfile.tempdir = _TMP_ROOT
 os.environ["TMPDIR"] = _TMP_ROOT
 _TMP_HOME = tempfile.mkdtemp(prefix="crucible-test-home-")
 os.environ["CRUCIBLE_HOME"] = _TMP_HOME
-# review passes one after another unless a test asks for parallel ones: the fakes charge in call order
-os.environ.setdefault("CRUCIBLE_PASS_JOBS", "1")
+# review passes one after another unless a test asks for parallel ones: the fakes charge in call order, so a
+# CRUCIBLE_PASS_JOBS exported in the shell must not leak in
+os.environ["CRUCIBLE_PASS_JOBS"] = "1"
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from crucible import catalog as C, diff as D, readiness as R, review as V, routing as RT, style as S, util as U  # noqa: E402
@@ -6737,6 +6738,16 @@ class TestNitTier(unittest.TestCase):
         _, calls = self._run([self._f("a nit", 2)], nits=None)
         self.assertNotIn("Reliability gaps", calls[0]["prompt"])    # the no-nits prompt is unchanged
 
+    def test_content_files_go_to_nits(self):
+        _, calls = self._run([self._f("a nit", 2)])
+        prompt = next(c["prompt"] for c in calls if c["kind"] == "review")
+        self.assertIn("Files that another program or an AI agent reads are code too", prompt)
+        for shape in ("opened one way and closed another", "wrong for where the", "doesn't match the code it documents",
+                      "breaks a trigger"):
+            self.assertIn(shape, prompt)
+        _, calls = self._run([self._f("a nit", 2)], nits=None)
+        self.assertNotIn("Files that another program", calls[0]["prompt"])
+
     def test_maintainability_goes_to_nits(self):
         r, calls = self._run([self._f("a nit", 2)], verdicts={0: (True, "high")})
         prompt = next(c["prompt"] for c in calls if c["kind"] == "review")
@@ -6933,12 +6944,18 @@ class TestNitTier(unittest.TestCase):
                 super().__init__(*a, **kw)
                 shares.append(self)
 
+        lock, inflight, peak = __import__("threading").Lock(), [0], [0]
+
         def fake(prompt, model, schema, cwd, budget=None, *a, **kw):
             n = int(re.search(r"# pass (\d+)", prompt).group(1))
             if kw.get("kind") != "review":
                 return {"nits": []}, 0.0
             caps.append((n, budget.remaining() if budget is not None else None))
+            with lock:
+                inflight[0] += 1; peak[0] = max(peak[0], inflight[0])
             time.sleep(0.05 * (6 - n))              # pass 2 finishes last
+            with lock:
+                inflight[0] -= 1
             if budget is not None:
                 budget.add(0.40)
             return {"summary": f"s{n}", "findings": [self._f(f"bug in pass {n}", n, "medium")], "nits": []}, 0.40
@@ -6963,6 +6980,7 @@ class TestNitTier(unittest.TestCase):
         later = [c for n, c in caps if n > 1]
         self.assertEqual(len(later), 4)
         self.assertTrue(all(c >= V.PASS_SLOT_FLOOR_USD for c in later), caps)
+        self.assertGreater(peak[0], 1)                             # the passes really overlapped
 
     def test_share_budget(self):
         """Slots reserve their cap: the caps in flight never add up to more than what is left (crucible review of
@@ -6994,6 +7012,15 @@ class TestNitTier(unittest.TestCase):
         self.assertAlmostEqual(s.remaining(), 0.1)
         s.release(); s.release()
         self.assertEqual(s.share.active, 0)
+        # a slot never shows more than the budget has left, though its cap is larger
+        parent2 = U.Budget(1.0)
+        s2 = V.ShareBudget(parent2, 2).slot()                     # cap 0.5
+        parent2.add(0.8)                                          # spent elsewhere (verification)
+        self.assertAlmostEqual(s2.remaining(), 0.2)
+        s2.release()
+        # with calls=2 and n=3, two calls split all of it
+        sh = V.ShareBudget(U.Budget(1.0), 3, calls=2)
+        self.assertAlmostEqual(sh.slot().cap, 0.5)
         # the last call to come takes all that is left, not 1/n of it
         tail = V.ShareBudget(U.Budget(1.7), 3, calls=1).slot()
         self.assertAlmostEqual(tail.cap, 1.7)

@@ -291,6 +291,13 @@ class ShareBudget:
             self.out += cap or 0.0
             return _Slot(self, cap)
 
+    def skip(self):
+        """A call that won't be made after all (its pass was a cache hit): one fewer to share with."""
+        with self.cond:
+            if self.calls is not None:
+                self.calls -= 1
+            self.cond.notify_all()
+
     def _release(self, cap):
         with self.cond:
             self.active -= 1
@@ -1590,6 +1597,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             key = hashlib.sha256((review_model + "\0" + key_prompt).encode()).hexdigest()[:32]
             hit = None if fresh else cache_hit(key, budget, "review")
             if hit:
+                if isinstance(pbudget, ShareBudget):
+                    pbudget.skip()
                 return ch, docs, hit, 0, {"files": ch["files"], "status": "reviewed", "cached": True}
             log(f"  review pass {i}/{len(chunks)}: {', '.join(ch['files'])[:90]}")
             call = pbudget.slot() if isinstance(pbudget, ShareBudget) else pbudget
