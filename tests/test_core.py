@@ -3291,6 +3291,15 @@ class TestRerunSameCommit(unittest.TestCase):
         for p in (os.path.join(repo, "PREP.md"), os.path.join(d, "PREP.md")):
             self.assertIn("- a \u2192 b, \u6f22\u5b57", open(p, encoding="utf-8").read())
 
+    def test_git_diff_and_contributing_decode_as_utf8_under_a_non_utf8_locale(self):
+        repo = make_repo({"a.js": "1\n", "CONTRIBUTING.md": "Use a → b.\n"}, {"a.js": "// a → b\n"})
+        code = ("import sys\nfrom crucible import util as U, review as V\n"
+                "d = U.git(sys.argv[1], 'diff', 'main...HEAD')\n"
+                "r = V.project_rules_text(sys.argv[1], 't__none')\n"
+                "sys.exit(0 if '// a \\u2192 b' in d and 'Use a \\u2192 b.' in r else repr((d, r)))\n")
+        r = self._ascii_locale_run(code, repo)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
     def test_learned_project_files_round_trip_under_a_non_utf8_locale(self):
         # rules.md, STYLE.md and memory.md quote PR bodies and model output; each goes into every review prompt
         up = make_repo({"a.js": "// c\nconst a = 1;\n"})

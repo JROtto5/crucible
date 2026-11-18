@@ -48,7 +48,8 @@ class NoStructuredOutput(Failed):
 
 
 def git(repo, *args, check=True):
-    r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True)
+    # diffs carry whatever bytes the files hold: UTF-8 whatever the locale, and never fail on a stray byte
+    r = subprocess.run(["git", "-C", repo, *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
     if check and r.returncode != 0:
         raise Failed(f"git {' '.join(args)}: {r.stderr.strip()[:300]}")
     return r.stdout.strip()

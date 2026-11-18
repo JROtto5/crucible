@@ -470,7 +470,7 @@ def project_rules_text(repo, project):
     for name in ("CONTRIBUTING.md", ".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md", "AGENTS.md", "CLAUDE.md"):
         p = os.path.join(repo, name)
         if os.path.exists(p):
-            parts.append(f"--- {name} (excerpt) ---\n" + open(p, errors="replace").read()[:5000])
+            parts.append(f"--- {name} (excerpt) ---\n" + open(p, encoding="utf-8", errors="replace").read()[:5000])
     learned = os.path.join(project_dir(project), "rules.md")
     if os.path.exists(learned):
         parts.append("--- maintainer preferences learned from merged PR reviews ---\n" + open(learned, encoding="utf-8", errors="replace").read()[:6000])
