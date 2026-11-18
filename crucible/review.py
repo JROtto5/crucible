@@ -1,5 +1,5 @@
 """The review pipeline: checks → scanners → chunked review → per-finding verification → verdict."""
-import concurrent.futures as cf, datetime as dt, fcntl, hashlib, os, re, subprocess, textwrap
+import concurrent.futures as cf, datetime as dt, fcntl, hashlib, os, re, subprocess, textwrap, threading
 from . import callsites, catalog, checks as checks_mod, diff as diff_mod, docrefs, readiness, routing, style as style_mod
 from .util import (BLOCKING, BUDGET_EXHAUSTED, HOME, MODELS, PREFERENCE, SEV, TOOLS_READ, TOOLS_RUN, Budget, Failed, NoStructuredOutput,
                    claude, crucible_build, default_base,
@@ -254,14 +254,28 @@ class HeldBudget:
 
 
 class ShareBudget:
-    """A view of the budget for calls made `n` at a time: each sees 1/n of what is left, so n calls in flight together
-    can't spend more than the remainder (each call's --max-budget-usd is its view's remaining())."""
+    """Budget for review passes run `n` at a time. Each call takes a slot, which reserves its cap under a lock: what
+    is left after the caps already out, split over the free slots. So the caps in flight never add up to more than
+    the remainder (each call's --max-budget-usd is its slot's remaining()), and the reservation is released when the
+    call ends. With no limit every slot is unlimited."""
     def __init__(self, parent, n):
-        self.parent, self.n = parent, max(1, n)
+        self.parent, self.n, self.lock, self.out, self.active = parent, max(1, n), threading.Lock(), 0.0, 0
+
+    def slot(self):
+        with self.lock:
+            pr = self.parent.remaining()
+            cap = None if pr is None else max(0.0, pr - self.out) / max(1, self.n - self.active)
+            self.active += 1
+            self.out += cap or 0.0
+            return _Slot(self, cap)
+
+    def _release(self, cap):
+        with self.lock:
+            self.active -= 1
+            self.out -= cap or 0.0
 
     def remaining(self):
-        pr = self.parent.remaining()
-        return None if pr is None else max(0.0, pr / self.n)
+        return self.parent.remaining()
 
     def exhausted(self):
         r = self.parent.remaining()
@@ -274,12 +288,46 @@ class ShareBudget:
         return getattr(self.parent, name)
 
 
-def pass_jobs():
-    """Review passes 2..n in parallel: CRUCIBLE_PASS_JOBS (default 3; 1 = one after another)."""
+class _Slot:
+    """One call's share: at most `cap`, and never more than the budget has left. release() once the call ends."""
+    def __init__(self, share, cap):
+        self.share, self.cap, self.own, self.done = share, cap, 0.0, False
+
+    def remaining(self):
+        pr = self.share.parent.remaining()
+        if self.cap is None:
+            return pr
+        return max(0.0, min(self.cap - self.own, pr if pr is not None else self.cap))
+
+    def exhausted(self):
+        r = self.remaining()
+        return r is not None and r <= 0.0
+
+    def add(self, c):
+        self.own += c or 0
+        self.share.parent.add(c)
+
+    def release(self):
+        if not self.done:
+            self.done = True
+            self.share._release(self.cap)
+
+    def __getattr__(self, name):
+        return getattr(self.share.parent, name)
+
+
+# A parallel pass only gets a share of what is left, and the CLI cuts off a call at its cap, so passes run in
+# parallel only when every slot can get at least this much; tighter budgets keep the old one-after-another order.
+PASS_SLOT_FLOOR_USD = 1.0
+
+def pass_jobs(left=None):
+    """Review passes 2..n in parallel: CRUCIBLE_PASS_JOBS (default 3; 1 = one after another), fewer when `left` USD
+    can't give each slot PASS_SLOT_FLOOR_USD."""
     try:
-        return max(1, int(os.environ.get("CRUCIBLE_PASS_JOBS", "3")))
+        n = max(1, int(os.environ.get("CRUCIBLE_PASS_JOBS", "3")))
     except ValueError:
-        return 3
+        n = 3
+    return n if left is None else max(1, min(n, int(left // PASS_SLOT_FLOOR_USD)))
 
 
 # ---------- the nit sweep: a second, nit-only look when budget remains ----------
@@ -1520,20 +1568,25 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             if hit:
                 return ch, docs, hit, 0, {"files": ch["files"], "status": "reviewed", "cached": True}
             log(f"  review pass {i}/{len(chunks)}: {', '.join(ch['files'])[:90]}")
+            call = pbudget.slot() if isinstance(pbudget, ShareBudget) else pbudget
             try:
                 out, cost = claude(prompt, review_model, FINDINGS_NITS_SCHEMA if nits else FINDINGS_SCHEMA, repo,
-                                   pbudget, kind="review")
+                                   call, kind="review")
                 cache_put(key, out)
             except Failed as e:
                 held_pass = str(e) == BUDGET_EXHAUSTED and pass_hold and not budget.exhausted()
                 return ch, docs, None, 0, {"files": ch["files"], "status": "failed",
                                            "reason": HELD_PASS_REASON if held_pass else str(e)}
+            finally:
+                if call is not pbudget:
+                    call.release()
             return ch, docs, out, cost or 0, {"files": ch["files"], "status": "reviewed", "cached": False}
 
         # the first pass always runs alone on the whole budget, so a small one still reviews something; the rest run
-        # pass_jobs() at a time, each call capped at its share of what is left so parallel calls can't overspend it
+        # pass_jobs() at a time, each call capped by a reserved share of what is left (ShareBudget), so the calls in
+        # flight can't overspend the budget or the nit hold; too little left for a useful share runs them serially
         results = [run_pass(1, chunks[0], budget)] if chunks else []
-        jobs = pass_jobs()
+        jobs = pass_jobs(pass_budget.remaining())
         if len(chunks) > 1 and jobs > 1:
             share = ShareBudget(pass_budget, min(jobs, len(chunks) - 1))
             with cf.ThreadPoolExecutor(max_workers=jobs) as ex:

@@ -6931,15 +6931,44 @@ class TestNitTier(unittest.TestCase):
             self.assertLessEqual(sum(1 for c in r["coverage"]["chunks"] if c["status"] == "reviewed"), 4)
 
     def test_share_budget(self):
+        """Slots reserve their cap: the caps in flight never add up to more than what is left (crucible review of
+        8ba7507: a cap read as remaining/n let a 4th call start with caps of 0.889 out against 0.667 left)."""
         parent = U.Budget(1.0)
-        share = V.ShareBudget(parent, 4)
-        self.assertAlmostEqual(share.remaining(), 0.25)
-        share.add(0.6)
-        self.assertAlmostEqual(parent.spent, 0.6); self.assertAlmostEqual(share.remaining(), 0.1)
-        self.assertFalse(share.exhausted())
-        self.assertIsNone(V.ShareBudget(U.Budget(None), 3).remaining())
+        share = V.ShareBudget(parent, 3)
+        a, b, c = share.slot(), share.slot(), share.slot()
+        self.assertAlmostEqual(sum(x.remaining() for x in (a, b, c)), 1.0)
+        a.add(0.3); a.release()                      # the first call ends having spent 0.3 of its 0.333
+        d = share.slot()
+        out = sum(x.cap for x in (b, c, d))
+        self.assertLessEqual(out, parent.remaining() + 1e-9)
+        self.assertAlmostEqual(d.remaining(), parent.remaining() - b.cap - c.cap)
+        for x in (b, c, d):
+            x.release()
+        self.assertEqual((share.active, round(share.out, 9)), (0, 0))
+        self.assertIsNone(V.ShareBudget(U.Budget(None), 3).slot().remaining())
         with unittest.mock.patch.dict(os.environ, {"CRUCIBLE_PASS_JOBS": "x"}):
             self.assertEqual(V.pass_jobs(), 3)
+        with unittest.mock.patch.dict(os.environ, {"CRUCIBLE_PASS_JOBS": "3"}):
+            self.assertEqual([V.pass_jobs(x) for x in (None, 5.0, 2.5, 0.4)], [3, 3, 2, 1])
+
+    def test_share_budget_under_threads_never_overspends(self):
+        import concurrent.futures as cf, random
+        for seed in range(20):
+            rnd = random.Random(seed)
+            parent = U.Budget(2.0)
+            share = V.ShareBudget(parent, 3)
+
+            def call(_):
+                s = share.slot()
+                try:
+                    cap = s.remaining()
+                    time.sleep(rnd.random() / 500)
+                    s.add(min(cap, rnd.uniform(0.2, 0.9)))
+                finally:
+                    s.release()
+            with cf.ThreadPoolExecutor(3) as ex:
+                list(ex.map(call, range(8)))
+            self.assertLessEqual(parent.spent, 2.0 + 1e-9)
 
     def test_held_budget(self):
         parent = U.Budget(1.0)

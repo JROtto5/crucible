@@ -191,6 +191,7 @@ Environment variables:
 - `CRUCIBLE_REVIEW_MODEL`, `CRUCIBLE_VERIFY_MODEL`: override the reviewer and verifier models.
 - `CRUCIBLE_ASSIST_MODEL`: the model for `polish`, `prep` and `reply`.
 - `CRUCIBLE_CLAUDE_DIR`: which Claude account to bill.
+- `CRUCIBLE_PASS_JOBS`: how many review passes (after the first) run at once on a change too big for one pass (default 3; 1 = one after another). Under `--budget`, each call reserves its share of what is left, so parallel calls can't overspend it; with less than $1 left per slot the passes run one after another.
 - `CRUCIBLE_FABLE_FALLBACK`: the model a Fable call moves to when the account refuses it for a spend or usage limit (default `opus`; a short name or full id; `off` turns it off). Each move is listed under `model_fallbacks` in review.json.
 - `CRUCIBLE_VERIFY_CHEAP`: the cheap verification tier (default `claude-haiku-5-5`; `none` turns tiering off, as does `--no-tiers`).
 - `CRUCIBLE_NO_TOOLS_CACHE=1`: keep prompt caching on for tool-less calls (`learn`, verdict salvage). They run uncached by default: one request never re-reads its cache, so the cache write only adds cost.
