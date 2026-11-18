@@ -2899,6 +2899,53 @@ class TestRunReviewAbsenceAnchor(unittest.TestCase):
                          "The review pass failed for boom.py (model call failed), so this review is incomplete; a plain re-run retries it.")
                 self.assertFalse(r5["coverage"]["complete"])
 
+    def test_fixed_answer_not_carried_when_the_anchor_changed_and_the_recheck_holds(self):
+        """BLAZE's two-anchor falsifier through run_review: the absence finding is answered FIXED, the next commit edits
+        its anchor file without adding the test, the re-check keeps it -> unanswered again; the naming finding, whose
+        anchors didn't change, keeps its answer."""
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            repo, home = os.path.join(d, "r"), os.path.join(d, "home")
+            os.makedirs(os.path.join(repo, "tests"))
+            env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",
+                       GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+            g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True, env=env).stdout.decode().strip()
+            w = lambda p, t: open(os.path.join(repo, p), "w").write(t)
+            g("init", "-q", "-b", "main")
+            w("guard.py", "def ok(v):\n    return True\n"); w("tests/test_guard.py", "# tests\n")
+            g("add", "-A"); g("commit", "-qm", "base"); g("checkout", "-qb", "x")
+            w("guard.py", "def ok(v):\n    return not v.get('salvaged')\n"); g("commit", "-qam", "guard")
+
+            def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500, kind="other"):
+                if "findings" in schema["properties"]:
+                    return {"summary": "s", "findings": [
+                        {"severity": "low", "file": "guard.py", "line": 2, "title": "No test for the salvaged guard",
+                         "problem": "p", "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "a test",
+                         "fix": "add one", "anchor_files": ["tests/test_guard.py"]},
+                        {"severity": "low", "file": "guard.py", "line": 1, "title": "ok() is a vague name",
+                         "problem": "p", "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "w",
+                         "fix": "rename"}]}, 0
+                return {"keep": True, "severity": "low", "confidence": "high", "method": "read", "actions": "a",
+                        "evidence": "still no test of the salvaged path"}, 0
+
+            with mock.patch.object(V, "HOME", home), mock.patch.object(U, "HOME", home), \
+                    mock.patch.object(V, "claude", fake), mock.patch.dict(os.environ, {"CRUCIBLE_CACHE": os.path.join(home, "c")}):
+                run = lambda: V.run_review(repo, "main", offline=True, skip_checks=True, no_tiers=True, log=lambda *_: None)
+                d1 = run()
+                ids = {f["title"]: f["id"] for f in U.read_json(os.path.join(d1, "review.json"))["findings"]}
+                U.write_json(os.path.join(d1, "answers.json"), {
+                    ids["No test for the salvaged guard"]: {"disposition": "fixed", "note": "test added"},
+                    ids["ok() is a vague name"]: {"disposition": "refuted", "note": "the repo's name"}})
+                w("tests/test_guard.py", "# tests\ndef test_ok(): assert ok({})\n")    # touches the anchor, not the path
+                g("commit", "-qam", "a test, but not of the salvaged path")
+                d2 = run()
+                r2, a2 = U.read_json(os.path.join(d2, "review.json")), U.read_json(os.path.join(d2, "answers.json"), {}) or {}
+                held = [f for f in r2["findings"] if f["title"] == "No test for the salvaged guard"]
+                self.assertEqual(held[0]["anchor_changed"], ["tests/test_guard.py"])
+                self.assertNotIn(held[0]["id"], a2)                  # FIXED was not carried
+                self.assertEqual(r2["carried_answers"], [ids["ok() is a vague name"]])
+                self.assertEqual(a2[ids["ok() is a vague name"]]["disposition"], "refuted")
+
 
 class TestEvalFixtureJunk(unittest.TestCase):
     def test_build_repo_skips_pycache(self):

@@ -1689,7 +1689,8 @@ def carry_forward(repo, project, sha, record):
     was not touched since then. An absence finding has a second anchor, where the missing piece would land: a FIXED
     answer isn't carried when that anchor changed and the re-check (split_prev's `anchor_changed`) still holds the
     finding, so an incomplete fix is re-answered instead of passing as fixed (BLAZE's two-anchor rule, 2026-11-18).
-    Deferred and refuted answers still carry: they don't claim the anchor now has the missing piece."""
+    Deferred and refuted answers still carry. A deferral doesn't depend on the anchor; a refutation can ("the test
+    exists"), but no stale one has been seen yet (eval/NOTES.md, 2026-11-18), so it carries until one is."""
     prev = next((s for s in reversed(branch_history(repo, project, sha)) if s != sha), None)
     if not prev:
         return
