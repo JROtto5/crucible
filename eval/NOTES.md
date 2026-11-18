@@ -1092,3 +1092,38 @@ Over stored reviews started since 2026-10-19 (`~/.crucible/reviews`, each projec
 | of those 40, answer carried | 12: 7 deferred, 5 refuted, 0 fixed |
 
 So the silent FIXED carry BLAZE describes had not happened here: 0 of 55. The code still allowed it (`carry_forward` checked only the cited region), so it is closed now with a falsifier test (FIXED, then the anchor file changes and the re-check holds: fails on the old code) and two companions that must still carry (FIXED with neither anchor changed; deferred across an anchor change). The 5 refuted answers carried across an anchor change are left as they are: a refutation can depend on the anchor file too, but no case of one going stale has been seen. 5 of 55 re-raised (9%, Wilson about 4-20%) vs BLAZE's 3 of 94; different units (BLAZE counts followed findings, this counts FIXED answers), so no ranking.
+
+### 2026-11-18 · BLAZE's three never-found classes as eval cases: crucible already finds them at fixture size ($2.80)
+
+ARMOR's 11-18 draw named three classes behind 4 of 5 serious misses (BLAZE's own engine): (a) code in one file
+relying on what another file says it returns, broken without a signature change; (b) a denylist an odd spelling gets
+past; (c) a missing value treated like an empty one, or the reverse. The cases were written from the class names
+alone. Each fixture's own tests pass and each bug was reproduced by hand before any review ran (a login order 900, 2
+makes 2 the leader; `/%61dmin` and `/docs/../admin` reach the admin route; `allowed_origins: []` allows every origin).
+
+| case | class | shape | before (crucible 123e902, no `--nits`, $1.5 budget) |
+|---|---|---|---|
+| py-declared-order-broken | a | a set drops the login order the docstring promises; leader.py takes `ids[0]` | caught, important, registry.py:29 |
+| py-declared-order-indirect | a | same, but the promise is in an unchanged file and the set is one file further down | caught, important, index.py:8 |
+| py-denylist-odd-spelling | b | host denylist on `urlsplit().hostname`: `localhost.`, `127.1`, `[::1]` pass | caught, important, send.py:21 |
+| py-denylist-path-encoding | b | prefix denylist on the raw path; the unchanged upstream unquotes and normpaths | caught, critical, proxy.py:15 |
+| py-absent-vs-empty | c | `overrides.get(k) or default`: `allowed_origins: []` becomes `["*"]`, `retries: 0` becomes 3 | caught, important, merge.py:13 |
+| ts-absent-vs-null-patch | c | the form sends null for every field the user didn't touch; the unchanged server clears on null | caught, critical, profileForm.ts:10 |
+| clean-py-declared-order-kept | | `dict.fromkeys` keeps the order | 0 blocking |
+| clean-py-absent-vs-empty | | `key in overrides` | 0 blocking |
+
+6 of 6 caught (Wilson 61-100%, n=6), 0 false blocking on 2, $2.80 for both runs. Every catch names the root cause, not
+a neighbour. The cases sit at the ceiling, so they can't show a gain, and no prompt change was made: one that can't
+be measured here could still cost recall elsewhere. They stay as regression guards.
+
+The real-PR side, $0, from the stored R4 judge output (`runs/r4/scoring/results.details.json` sha256 784ab0cf9d42…,
+joined to `golden/<pr>.json` by index). A keyword pass over the 25 PRs' golden TPs, then read by hand, gives these R4
+misses at medium or above:
+(a) 3: a UI row that now loads from a handler that returns 503 when an optional store isn't wired; UI and adapter
+naming the same config keys differently; a tracing callback that doesn't start the operation its API contract says
+it wraps. (b) 1: a user path read without `resolve()`/normalising (traversal, not an odd spelling). (c) 2: an
+"opt-in" checkpoint that always runs because its path defaults to a non-None value; `None` handled like one listed
+value in a branch. The keyword counts (golden TPs found by R4: a 9 of 27, b 5 of 13, c 24 of 49) are loose, since
+the regexes also hit unrelated text, so they are not a recall figure. The hand-read misses are mostly in mid-to-large
+PRs (11 to 36 golden TPs, against a median of 12), so the gap is more likely reading reach in a big change than not
+knowing the class. That is a hypothesis, n=6, not tested here.

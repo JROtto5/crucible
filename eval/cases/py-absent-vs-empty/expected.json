@@ -1,0 +1,28 @@
+{
+ "kind": "bug",
+ "split": "build",
+ "message": "settings: let a project override the defaults (retries, timeout, allowed origins, banner)",
+ "file": "settings/merge.py",
+ "lines": [
+  13
+ ],
+ "also": [
+  {
+   "file": "settings/cors.py",
+   "lines": [
+    6,
+    7
+   ]
+  }
+ ],
+ "keywords": [
+  "falsy",
+  "empty",
+  "is none",
+  "in overrides",
+  "explicit",
+  "retries: 0",
+  "retries=0",
+  "zero"
+ ]
+}

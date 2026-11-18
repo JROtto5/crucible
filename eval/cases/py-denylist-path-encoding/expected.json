@@ -1,0 +1,33 @@
+{
+ "kind": "bug",
+ "split": "build",
+ "message": "gateway: block operator-only paths at the public edge; log request timing",
+ "file": "gateway/proxy.py",
+ "lines": [
+  14,
+  15,
+  16
+ ],
+ "also": [
+  {
+   "file": "gateway/upstream.py",
+   "lines": [
+    16
+   ]
+  }
+ ],
+ "keywords": [
+  "unquote",
+  "percent",
+  "%2",
+  "%61",
+  "encod",
+  "normpath",
+  "normaliz",
+  "..",
+  "//",
+  "dot segment",
+  "bypass",
+  "decod"
+ ]
+}

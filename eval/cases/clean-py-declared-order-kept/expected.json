@@ -1,0 +1,4 @@
+{
+ "kind": "clean",
+ "message": "sessions: active_user_ids in one pass (it was quadratic with thousands of sessions); add active_count"
+}

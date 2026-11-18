@@ -1,0 +1,4 @@
+{
+ "kind": "clean",
+ "message": "settings: let a project override the defaults (retries, timeout, allowed origins, banner)"
+}

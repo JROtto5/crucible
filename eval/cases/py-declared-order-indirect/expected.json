@@ -1,0 +1,33 @@
+{
+ "kind": "bug",
+ "split": "build",
+ "message": "store: O(1) membership in UserIndex (login time with 8k tabs: 410 ms -> 3 ms); bench script",
+ "file": "store/index.py",
+ "lines": [
+  8,
+  23
+ ],
+ "also": [
+  {
+   "file": "sessions/leader.py",
+   "lines": [
+    7,
+    13
+   ]
+  },
+  {
+   "file": "sessions/registry.py",
+   "lines": [
+    24
+   ]
+  }
+ ],
+ "keywords": [
+  "order",
+  "oldest",
+  "longest",
+  "leader",
+  "unordered",
+  "insertion"
+ ]
+}

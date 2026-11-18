@@ -1,0 +1,3 @@
+# coedit
+
+Shared editing sessions.

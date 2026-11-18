@@ -1,0 +1,31 @@
+{
+ "kind": "bug",
+ "split": "build",
+ "message": "profile form: emptying a field clears it on the server; trim text; send Content-Type",
+ "file": "src/profileForm.ts",
+ "lines": [
+  9,
+  10
+ ],
+ "also": [
+  {
+   "file": "server/patchUser.ts",
+   "lines": [
+    9
+   ]
+  }
+ ],
+ "keywords": [
+  "untouched",
+  "not edited",
+  "didn't edit",
+  "absent",
+  "undefined",
+  "every field",
+  "all three",
+  "wipe",
+  "clears",
+  "cleared",
+  "erase"
+ ]
+}

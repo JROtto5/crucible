@@ -1,0 +1,28 @@
+{
+ "kind": "bug",
+ "split": "build",
+ "message": "webhooks: refuse URLs that point at internal hosts (SSRF)",
+ "file": "webhooks/send.py",
+ "lines": [
+  20,
+  21,
+  22
+ ],
+ "keywords": [
+  "trailing dot",
+  "localhost.",
+  "127.1",
+  "::1",
+  "ipv6",
+  "decimal",
+  "octal",
+  "normaliz",
+  "ip_address",
+  "alternate",
+  "bypass",
+  "spelling",
+  "resolve",
+  "dns",
+  "rebind"
+ ]
+}

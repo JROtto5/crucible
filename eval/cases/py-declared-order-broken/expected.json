@@ -1,0 +1,25 @@
+{
+ "kind": "bug",
+ "split": "build",
+ "message": "sessions: active_user_ids in one pass (it was quadratic with thousands of sessions); add active_count",
+ "file": "sessions/registry.py",
+ "lines": [
+  29
+ ],
+ "also": [
+  {
+   "file": "sessions/leader.py",
+   "lines": [
+    7
+   ]
+  }
+ ],
+ "keywords": [
+  "order",
+  "oldest",
+  "longest",
+  "leader",
+  "first logged",
+  "unordered"
+ ]
+}
