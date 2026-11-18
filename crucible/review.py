@@ -623,7 +623,8 @@ def dedupe(findings):
         if dup:
             dup.setdefault("also", []).append(f["title"])
             # where the merged item pointed and how severe it was, before the kept item takes the max: a later
-            # count of merged items that sit on a known issue is then a read of review.json, not a reconstruction
+            # count of merged items that sit on a known issue is then a read of review.json, not a reconstruction.
+            # `also` (titles only) stays for existing readers of review.json; `merged` is the superset.
             dup.setdefault("merged", []).append({k: f.get(k) for k in ("title", "file", "line", "severity", "source")})
             if SEV.index(f["severity"]) < SEV.index(dup["severity"]):
                 dup["severity"] = f["severity"]

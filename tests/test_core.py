@@ -738,6 +738,16 @@ class TestReviewLogic(unittest.TestCase):
                                              "severity": "important", "source": "review"}])
         self.assertEqual(out[0]["also"], ["Off by one in loop bound"])
 
+    def test_dedupe_records_every_merged_item_in_order_with_its_source(self):
+        a = {"file": "a.js", "line": 10, "title": "Off by one in loop bound", "severity": "important", "source": "review"}
+        b = {"file": "a.js", "line": 11, "title": "Loop bound off by one", "severity": "critical", "source": "review"}
+        n = {"file": "a.js", "line": 12, "title": "Loop bound is off by one", "severity": "low", "source": "scanner"}
+        out = V.dedupe([n, a, b])     # review items sort before scanner ones, so the scanner item merges last whatever the input order
+        self.assertEqual(len(out), 1)
+        self.assertEqual([(m["line"], m["severity"], m["source"]) for m in out[0]["merged"]],
+                         [(10, "important", "review"), (12, "low", "scanner")])
+        self.assertEqual(out[0]["also"], [m["title"] for m in out[0]["merged"]])
+
     def test_author_model_switch(self):
         d = make_repo({"a.js": "1\n"}, {"a.js": "2\n"},
                       msg="fix\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>")
