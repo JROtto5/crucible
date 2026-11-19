@@ -1295,3 +1295,31 @@ CONTRIBUTING/AGENTS/CLAUDE.md (TechDebtMCP, 7.1); (c) anchor at the line a fix c
 on the doc text (tp_152 x2, apilix x3; a first wording that put the doc site in also_at lost the doc nit in 3 of 3
 eval rounds and was not shipped). Never-raised one-offs (Kotlin smart cast, cross-layer 503, field-name mismatch,
 devcontainer key) have no shared shape; no change for them now.
+
+### 2026-11-19 · the three high-recall fixes, measured: targeted re-run of the 5 PRs holding 15 of R5's 18 misses, full eval
+
+Changes (main): 81f65c8 pass order riskiest first (+326561b templates/ is code), 75d4ad7 guide rule lines past 5,000
+chars (+326561b, 85fc223 cut-at-a-line-start fix and test), ea7d80f the "where a finding sits" paragraph (--nits).
+fe9b47b (verify scope, 11-19) is in both arms' code since R5 ran without it.
+
+**Targeted ReviewBench run** (image `crucible-rb:r6` = ea7d80f, same adapter and judge as R5, 1 round, account #20;
+judge resumed on #24 after it hung idle at 17:13Z): PRs TechDebtMCP, emdash, apilix, aafactory, tp_152.
+
+| PR | high golden | R4 | R5 | **R6t** | what moved |
+|---|---|---|---|---|---|
+| emdash | 3 | 0 | 0 | **3** | the auth routes were in passes 1-2 (was 8 of 24); raised at login.ts:28 and callback.ts:42 |
+| TechDebtMCP | 1 | 0 | 0 | **1** | raised as a (disputed) nit at handlers.ts:441, "new fs call on the raw user path", with the CLAUDE.md rule in view |
+| apilix | 11 | 6 | 6 | **9** | the IPC call kept at s3Adapter.ts:28/:31 (#19, #25), the debounced save kept at store.tsx:668 (#6); deps still cited at the lockfile (#0), field names (#26) still not raised |
+| aafactory | 3 | 3 | 2 | **3** | undeclared test plugins kept (pyproject.toml:27 and the test file) |
+| tp_152 | 2 | 0 | 0 | 0 | still cited at docs/UserGuide.md:344 and AddressBook.java:95, so the anchor paragraph did not move this one |
+| **sum** | 20 | 9 | 8 | **16** | high precision 16/16 matched TP |
+
+Review $ on these 5: 12.00 (R5 12.44). Splicing these 5 into R5's other 9 PRs: macro high R 52.1 → 70.7, F1 at P 100
+68.5 → 82.9. That is an estimate from one round on the PRs chosen for their misses (regression to the mean works
+in its favour); run 6 measures all 25.
+
+**Full eval** (`crucible eval --nits`, 39 cases, budget 1.5, code ca76ecc, in the r6 image on blaze-3, $15.15):
+recall 0.913 (build 19/21, holdout 2/2), any severity 1.0, false blocking 0 on 9 clean cases (11-18: 1), nit cases
+19/21 planted issues (11-18: 18/18 on 6 cases), 0 false blocking there. The two build misses (py-declared-order-broken,
+py-race) were found at medium; both are one-pass fixtures that the pass order and rules changes don't touch. Re-run
+twice each at HEAD: 4/4 caught at important. py-race's severity has flipped before (11-12 entry). Not a regression.
