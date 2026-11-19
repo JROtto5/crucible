@@ -13,7 +13,7 @@ crucible answer  CR-80b53167 fixed "restore for…of; re-added [1,2,3] test"
 crucible status                                  # GREEN / NOT_GREEN + readiness, for this exact commit
 crucible polish                                  # PR_DRAFT.md → PR_DRAFT.polished.md in the project's voice
 crucible prep                                    # likely maintainer questions + evidence-backed answers
-crucible eval                                    # score the reviewer on 37 labelled fixture changes
+crucible eval                                    # score the reviewer on 38 labelled fixture changes
 crucible reply   https://github.com/o/r/pull/12  # draft answers to real review comments (never posted)
 ```
 

@@ -6710,6 +6710,19 @@ class TestNitTier(unittest.TestCase):
         self.assertIn("(at a.py:3, a line this change adds, proposed severity low)", nv["prompt"])
         self.assertIn("(at a.py:99, proposed severity low)", nv["prompt"])
 
+    def test_scope_sits_right_before_the_real_claim_whatever_since_holds(self):
+        """A `since` text can hold diff lines, so a "Claim:" line in it must not attract the scope line (the first
+        version put it on the first "Claim:" line by regex). The rendered layout is pinned with and without scope."""
+        f = self._f("the real claim", 3)
+        since = "Changes since abc:\n Claim: an old line in a diff\n"
+        p = V.verify_prompt(f, "    1  x = 2\n 2  y = 3", since, scope="SCOPE LINE")
+        lines = p.split("\n")
+        i = next(n for n, l in enumerate(lines) if l.strip() == "SCOPE LINE")
+        self.assertEqual(p.count("SCOPE LINE"), 1)
+        self.assertEqual(lines[i + 1].strip(), "Claim: the real claim (at a.py:3, proposed severity low)")
+        self.assertEqual(len(lines[i]) - len(lines[i].lstrip()), len(lines[i + 1]) - len(lines[i + 1].lstrip()))
+        self.assertEqual(p.replace(lines[i] + "\n", "", 1), V.verify_prompt(f, "    1  x = 2\n 2  y = 3", since))
+
     def test_no_base_leaves_the_verifier_prompts_as_they_were(self):
         f = self._f("t", 3)
         self.assertEqual(V.change_scope(""), "")

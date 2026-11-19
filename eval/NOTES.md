@@ -1175,13 +1175,13 @@ The 5.7-point macro P drop R4 → R5 is two PRs, not disputed nits: emdash had 0
 (-2.7), also a verified nit. Both read like true claims. Nothing in the verifier's confidence predicts them, so FOCUS
 item 1 is closed with no change.
 
-What the same read found instead: R5's verifier dropped 71 claims (26 findings, 45 nits). **35 were refuted on causation**
+What the same read found instead: R5's verifier dropped 71 claims (26 findings, 45 nits). **36 were refuted on causation**
 ("predates", "not in the diff", "HEAD commit only changes X"); **29** of those cite a line the PR's diff adds
 (`pr/<key>/diff.patch`). The evidence shows why: the verifier is never told the review's base, so it checks `git show
 HEAD`, `HEAD~1` or upstream main, and a multi-commit PR's earlier commits look "pre-existing". Several of these came
 after the verifier had confirmed the mechanism ("Falsification test fails: no path sets success=False ... But causation
 fails"). Only the re-check of carried findings had the range (`RECHECK_SCOPE`, 11-11). Hand-matched to the golden set,
-the 35 hold 11 golden TPs R5 missed on 6 PRs (incl. a high one, undeclared test deps), among them PROTRIDER #20, an
+the 36 hold 11 golden TPs R5 missed on 6 PRs (incl. a high one, undeclared test deps), among them PROTRIDER #20, an
 exported helper that now only accepts a DataFrame (api-architecture).
 
 Change: both verifiers get `change_scope()`: "The change under review is every commit from <merge-base> to HEAD, i.e.
@@ -1189,8 +1189,8 @@ Change: both verifiers get `change_scope()`: "The change under review is every c
 diff, $0). No base: the prompt is byte-identical (cached verdicts match). Eval cases can now have a second commit
 (`change2/`, `message2`).
 
-Re-verify ($2.38): the 35 stored claims, fresh clones at each PR's head, today's verifiers with the scope line: **30 of
-35 kept** (findings 15/17, nits 17/19 incl. 2 disputed). The golden-FP one among them (a case-sensitive `== "TRUE"`)
+Re-verify ($2.38): the 36 stored claims, fresh clones at each PR's head, today's verifiers with the scope line: **32 of
+36 kept** (findings 15/17, nits 17/19 incl. 2 disputed). The golden-FP one among them (a case-sensitive `== "TRUE"`)
 is still dropped. $0 re-score of R5 adding the 11 matched golden TPs and, pessimistically, one golden-FP match
 (PROTRIDER's fastparquet nit): grounded P / R / F1 82.6 / 52.7 / 64.3 → **84.8 / 55.1 / 66.8** (66.9 without the FP).
 That is an estimate from hand matching, not a judged run; run 6 measures it.
@@ -1217,4 +1217,8 @@ would show as a true low rated important. Watch in run 6 by severity.
 Self-review round 1 (fe9b47b): NOT_GREEN, 4 items. Fixed: the scope line moved into the prompt template (a regex had
 put it on the first `Claim:` line, which a `since` text could contain), and the README/CONTRIBUTING case counts. This
 entry answers the eval-result item. "Large new logic with no comments": the new functions have docstrings, no change.
+Self-review round 2 (a142890): 5 lows. Fixed: README line 16 still said 37; this entry said "35 refuted, 30 kept", a
+miscount of the stored output (36 refuted, 32 kept); no test for the `since`/`Claim:` placement, now pinned with the
+rendered layout. Not changed: "hard-coded 8-space indent" (the rendered prompt lines up: dedent strips nothing once the
+code region is in, and the new test pins the layout).
 Spend this shift: $2.38 re-verify + about $9.6 eval A/B (18 rounds incl. the first fixture) + about $1 self-review.
