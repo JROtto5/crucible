@@ -1,0 +1,55 @@
+{
+ "kind": "nit",
+ "message": "ranking: name entries, add settings (strict mode, score floor)",
+ "message2": "docs: README shows the named-entry API",
+ "issues": [
+  {
+   "name": "rank-rejects-sequences",
+   "file": "scorer/ranking.py",
+   "lines": [
+    4,
+    5
+   ],
+   "keywords": [
+    "sequence",
+    "dict",
+    "items()",
+    "attributeerror",
+    "breaks existing",
+    "breaking",
+    "no longer accept"
+   ]
+  },
+  {
+   "name": "strict-default-disagrees",
+   "file": "scorer/settings.py",
+   "lines": [
+    8
+   ],
+   "also": [
+    {
+     "file": "settings.example.json",
+     "lines": [
+      2
+     ]
+    }
+   ],
+   "keywords": [
+    "settings.example",
+    "example",
+    "default"
+   ]
+  },
+  {
+   "name": "debug-print",
+   "file": "scorer/ranking.py",
+   "lines": [
+    11
+   ],
+   "keywords": [
+    "print",
+    "debug"
+   ]
+  }
+ ]
+}

@@ -7,6 +7,8 @@ A "nit" case plants several non-blocking problems instead, as "issues": [{"name"
 scores how many a kept nit or finding (any severity) hits, and counts any blocking finding there as false blocking.
 It is left out of bug recall and clean-case false blocking, so the nit tier's recall is read on its own, and it only
 runs with --nits.
+An optional change2/ (the tree after a second commit, subject "message2") makes a two-commit change whose planted
+problem is in the first commit, as in a PR with follow-up commits: "caused by this change" is the whole range.
 `also` lists other places a correct finding may anchor (the callee that really blocks, say); keywords apply there too.
 `split` defaults to "build". Build cases are the ones prompts and verification have been tuned against, so their
 recall flatters the reviewer. Holdout cases come from real catches and are never used to justify a prompt change; the
@@ -79,7 +81,8 @@ def _git(repo, *a):
 
 
 def build_repo(case_dir, exp, where):
-    """base/ committed on main, change/ committed on branch `change`. Returns the repo path (named after the case)."""
+    """base/ committed on main, change/ (then change2/, if present) committed on branch `change`. Returns the repo
+    path (named after the case)."""
     repo = os.path.join(where, os.path.basename(case_dir))
     os.makedirs(repo)
     _git(repo, "init", "-q", "-b", "main")
@@ -90,6 +93,11 @@ def build_repo(case_dir, exp, where):
         os.remove(os.path.join(repo, p))
     _copy_tree(os.path.join(case_dir, "change"), repo)
     _git(repo, "add", "-A"); _git(repo, "commit", "-q", "-m", exp.get("message", "change"))
+    if os.path.isdir(os.path.join(case_dir, "change2")):  # a follow-up commit: the planted problem is not in HEAD's own
+        for p in _git_ls(repo):
+            os.remove(os.path.join(repo, p))
+        _copy_tree(os.path.join(case_dir, "change2"), repo)
+        _git(repo, "add", "-A"); _git(repo, "commit", "-q", "-m", exp.get("message2", "follow-up"))
     return repo
 
 

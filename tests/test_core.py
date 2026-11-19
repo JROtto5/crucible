@@ -2980,6 +2980,24 @@ class TestEvalFixtureJunk(unittest.TestCase):
             self.assertEqual(E._git_ls(repo), ["a.py"])
 
 
+class TestEvalTwoCommitCase(unittest.TestCase):
+    def test_change2_is_a_second_commit_on_top_of_change(self):
+        from crucible import evalrun as E
+        with tempfile.TemporaryDirectory() as d:
+            case = os.path.join(d, "case")
+            for side, text in (("base", "x = 0\n"), ("change", "x = 1\n"), ("change2", "x = 1\n")):
+                os.makedirs(os.path.join(case, side))
+                open(os.path.join(case, side, "a.py"), "w").write(text)
+            open(os.path.join(case, "change2", "README.md"), "w").write("docs\n")
+            out = os.path.join(d, "out"); os.makedirs(out)
+            repo = E.build_repo(case, {"message": "m1", "message2": "m2"}, out)
+            log = subprocess.run(["git", "-C", repo, "log", "--format=%s", "main..HEAD"], capture_output=True, text=True)
+            self.assertEqual(log.stdout.split(), ["m2", "m1"])
+            last = subprocess.run(["git", "-C", repo, "show", "--name-only", "--format=", "HEAD"], capture_output=True, text=True)
+            self.assertEqual(last.stdout.split(), ["README.md"])                 # the planted change is not HEAD's own
+            self.assertEqual(sorted(E._git_ls(repo)), ["README.md", "a.py"])
+
+
 class TestVerifyFailedRetried(unittest.TestCase):
     """A finding left unverified because its verifier call failed (supavisor #1142 review2 hit the 5-hour limit) is
     re-verified by a plain re-run of the same commit and on the next commit, instead of staying unverified for good.
@@ -6675,6 +6693,32 @@ class TestNitTier(unittest.TestCase):
         f = next(f for f in r["findings"] if f["line"] == 1)
         self.assertEqual(f["verification"]["status"], "unverified")
         self.assertNotIn("also_at", f)                                               # kept, but no unchecked site
+
+    def test_verifiers_judge_causation_against_the_whole_range(self):
+        """ReviewBench run 5: 29 dropped claims cited a line the PR adds, refuted as "not caused by this change" after
+        the verifier read only `git show HEAD` or upstream main. Both verifiers now get the range, and which cited
+        lines it adds."""
+        r, calls = self._run([self._f("a nit", 3), self._f("a nit on an old line", 99)])
+        scope = V.CHANGE_SCOPE.format(base=r["base"][:12])
+        fv = next(c for c in calls if c["kind"] in ("verify", "verify_cheap"))
+        self.assertIn(scope, fv["prompt"])
+        self.assertIn(f"git diff {r['base'][:12]} HEAD", fv["prompt"])
+        self.assertIn("The cited line a.py:1 is one this range adds or rewrites.", fv["prompt"])
+        self.assertLess(fv["prompt"].index(scope), fv["prompt"].index("Claim: "))
+        nv = next(c for c in calls if c["kind"] == "verify_nits")
+        self.assertIn(scope, nv["prompt"])
+        self.assertIn("(at a.py:3, a line this change adds, proposed severity low)", nv["prompt"])
+        self.assertIn("(at a.py:99, proposed severity low)", nv["prompt"])
+
+    def test_no_base_leaves_the_verifier_prompts_as_they_were(self):
+        f = self._f("t", 3)
+        self.assertEqual(V.change_scope(""), "")
+        self.assertEqual(V.verify_prompt(f, "code"), V.verify_prompt(f, "code", scope=""))
+        self.assertNotIn("merge-base", V.verify_prompt(f, "code"))
+        self.assertEqual(V.nit_verify_prompt([(f, "code")]), V.nit_verify_prompt([(f, "code")], "", {"a.py": {3}}))
+        self.assertNotIn("a line this change adds", V.nit_verify_prompt([(f, "code")]))
+        self.assertNotIn("is one this range adds", V.change_scope("abc", f, {"a.py": {4}, "b.py": {3}}))
+        self.assertIn("a.py:3 is one this range adds", V.change_scope("abc", f, {"a.py": {3}}))
 
     def test_swept_nit_sites_are_filtered_like_the_reviewers(self):
         files = ({"a.py": "x = 1\n", "b.py": "y = 1\n"},
