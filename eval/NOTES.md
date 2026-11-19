@@ -1162,3 +1162,59 @@ Reading:
 - Parallel passes did not cut wall time here (mean 480 s vs 472 s). Most test PRs fit in one or two passes, and the long ones spend their time in verification and the nit tier, not in serial review passes. Speed needs work on verification next.
 - PRs 1 and 13 still end at the $5 cap ($5.03, $4.74). The mean stays under the $3/PR rule.
 - Next for top 3 (+3.1 F1): precision on disputed nits (route them through a second, cheaper check, or drop the ones refuted at low confidence; R4 data says those were 4 true / 5 false), api-architecture and security recall, accessibility (5 candidates for 10 golden).
+
+### 2026-11-19 · the verifier judged "caused by this change" against the wrong base (from R5's stored output, $0 read, $2.38 re-verify)
+
+FOCUS item 1 first (precision of disputed nits), read at $0 from R5's stored judge output (`runs/r5/scoring/results.details.json`
+on blaze-3, joined to each PR's kept `review.json` by message; a re-scorer reproduces R5's 82.6 / 52.7 / 64.3 exactly).
+ReviewBench's grounded P is matched_tp / matched, so only a candidate matched to a golden *false* item costs precision;
+novel_fp doesn't. R5 kept 94 disputed nits: 16 matched golden TPs, 4 matched golden FPs. Dropping any confidence-defined
+subset of them lowers F1 (all disputed 60.8, keep=false medium 61.4, keep=false low 63.9; keep=true low 64.3, no change).
+The 5.7-point macro P drop R4 → R5 is two PRs, not disputed nits: emdash had 0 matches in R4 (left out of the mean) and
+1 in R5, a verified nit matched to a golden FP (P = 0 enters the mean, about -3.5 points); chronicle went 2/3 → 0/1
+(-2.7), also a verified nit. Both read like true claims. Nothing in the verifier's confidence predicts them, so FOCUS
+item 1 is closed with no change.
+
+What the same read found instead: R5's verifier dropped 71 claims (26 findings, 45 nits). **35 were refuted on causation**
+("predates", "not in the diff", "HEAD commit only changes X"); **29** of those cite a line the PR's diff adds
+(`pr/<key>/diff.patch`). The evidence shows why: the verifier is never told the review's base, so it checks `git show
+HEAD`, `HEAD~1` or upstream main, and a multi-commit PR's earlier commits look "pre-existing". Several of these came
+after the verifier had confirmed the mechanism ("Falsification test fails: no path sets success=False ... But causation
+fails"). Only the re-check of carried findings had the range (`RECHECK_SCOPE`, 11-11). Hand-matched to the golden set,
+the 35 hold 11 golden TPs R5 missed on 6 PRs (incl. a high one, undeclared test deps), among them PROTRIDER #20, an
+exported helper that now only accepts a DataFrame (api-architecture).
+
+Change: both verifiers get `change_scope()`: "The change under review is every commit from <merge-base> to HEAD, i.e.
+`git diff <base> HEAD`, not only the last commit", plus whether the cited line is one the range adds (from the parsed
+diff, $0). No base: the prompt is byte-identical (cached verdicts match). Eval cases can now have a second commit
+(`change2/`, `message2`).
+
+Re-verify ($2.38): the 35 stored claims, fresh clones at each PR's head, today's verifiers with the scope line: **30 of
+35 kept** (findings 15/17, nits 17/19 incl. 2 disputed). The golden-FP one among them (a case-sensitive `== "TRUE"`)
+is still dropped. $0 re-score of R5 adding the 11 matched golden TPs and, pessimistically, one golden-FP match
+(PROTRIDER's fastparquet nit): grounded P / R / F1 82.6 / 52.7 / 64.3 → **84.8 / 55.1 / 66.8** (66.9 without the FP).
+That is an estimate from hand matching, not a judged run; run 6 measures it.
+
+Eval, new nit case `nit-py-earlier-commit` (3 planted lows in commit 1: an exported `rank()` that now only takes a
+dict, a dataclass default that the shipped example config contradicts, a debug print; commit 2 changes only the
+README). The first fixture had two unplanted real issues (a `None` settings path that differed from `Settings()`, old
+input files silently ranking empty) that both arms flagged; fixed, both arms re-run. `crucible eval --nits --no-write
+--budget 5 --cases nit-py-earlier-commit`, before = 7ffd136 + case:
+
+| | before | after |
+|---|---|---|
+| planted issues found (9 rounds; first 3 on the first fixture) | 26/27 | 27/27 |
+| rounds with a blocking item (a planted low rated important) | 2/9 | 5/9 |
+| $ per round | 0.45-0.89 | 0.49-0.68 |
+
+Reading: the case is near the ceiling in both arms. In the eval repo a `main` branch sits beside the change, so the
+old verifier found the right base most of the time. ReviewBench checkouts have only a bare base sha. Kept review.json
+from the last 3 rounds per arm: the reviewer proposes important or critical for these lows in both arms, and the
+verifier usually lowers them to medium. The after arm kept one at important where before kept none verified (before's
+one blocking item was unverified). 2/9 vs 5/9 is not a significant difference (n=9), but it is a plausible side
+effect: a verifier told the line is the change's own downgrades less. ReviewBench doesn't score severity. For users it
+would show as a true low rated important. Watch in run 6 by severity.
+Self-review round 1 (fe9b47b): NOT_GREEN, 4 items. Fixed: the scope line moved into the prompt template (a regex had
+put it on the first `Claim:` line, which a `since` text could contain), and the README/CONTRIBUTING case counts. This
+entry answers the eval-result item. "Large new logic with no comments": the new functions have docstrings, no change.
+Spend this shift: $2.38 re-verify + about $9.6 eval A/B (18 rounds incl. the first fixture) + about $1 self-review.
