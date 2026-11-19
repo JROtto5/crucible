@@ -1127,3 +1127,38 @@ value in a branch. The keyword counts (golden TPs found by R4: a 9 of 27, b 5 of
 the regexes also hit unrelated text, so they are not a recall figure. The hand-read misses are mostly in mid-to-large
 PRs (11 to 36 golden TPs, against a median of 12), so the gap is more likely reading reach in a big change than not
 knowing the class. That is a hypothesis, n=6, not tested here.
+
+### 2026-11-19 · ReviewBench run 5 (crucible cd17769): grounded F1 62.3 -> 64.3, about #4
+
+Same 25 test PRs, adapter (`--nits`, `RB_CONFIG_BUDGET=5`, `RB_CONFIG_KEEP_REVIEW=1`) and Sonnet 5 judge (ReviewBench @
+f223ce3), 1 round. Image `crucible-rb:r5` from a `git archive` of cd17769. PRs 0-12 ran on account #18. #18's 5-hour
+window ran out during PR 13 (adapter: LIMIT, exit 1), so PRs 13-24 were re-run on #20 and PRs 0-12 were kept. The first
+judge pass hit its 2 h timeout and resumed from its checkpoint. Both borrowed tokens were deleted from blaze3 afterwards.
+
+What changed since R4 (all pushed):
+- **Nit drop rule (2102990):** only a refutation the verifier is sure of drops a nit; doubted ones stay as "disputed" low nits (`CRUCIBLE_NITS_DROP`, lens keeps the old rule). Measured first at $0 on R4's stored output: R4 plus all 168 dropped nits, re-judged, gave grounded R 48.1 -> 53.7 and P 88.3 -> 86.6 (macro), F1 62.3 -> 66.3. Matched by message: the 45 nits refuted at medium confidence held 15 golden issues R4 had missed and 2 false ones; the 19 refuted at high confidence, 3 and 3; the 14 never verified (cap or budget), 0.
+- **Content files reviewed as code (b1990d3):** templates, prompt/agent/skill files, config, CI and scripts. R4 missed 12 of 16 golden issues in .md files.
+- **Review passes 2..n in parallel (8ba7507 .. 364199f):** `CRUCIBLE_PASS_JOBS`, reserved budget slots, a $1 slot floor. Five self-review rounds found an overspend, an over-tight cap, a lone tail pass capped at 1/n and weak tests; all fixed.
+- BLAZE's never-found classes as eval cases (399f881, from the shift before).
+
+| | R4 | **R5** |
+|---|---|---|
+| grounded P / R (macro) | 88.3 / 48.1 | **82.6 / 52.7** |
+| **grounded F1 (macro)** | 62.3 | **64.3** |
+| grounded P / R (micro) | 89.3 / 47.7 [42.6, 52.9] | 89.8 / 50.9 [45.6, 56.0] |
+| augmented P / R / F1 (macro) | 94.0 / 68.3 / 79.1 | 91.1 / 74.5 / 82.0 |
+| comments per PR | 19.4 | 23.7 |
+| $ per PR, the 25 kept runs | mean 2.12, median 1.49, max 5.00 | mean 2.05, median 1.57, max 5.03 |
+| $ incl. PR 13's cut-off first attempt | 53.08 | 56.09 (mean 2.16 over 26 runs) |
+| wall per PR (25 kept) | mean 472 s, median 315 s | mean 480 s, median 366 s |
+
+By category (macro grounded R, R4 -> R5): reliability 42.3 -> **62.6**, documentation 54.2 -> 62.5, testing 45.1 -> 56.2,
+performance 43.8 -> 56.2, maintainability 54.9 -> 58.1, security 33.0 -> 38.3, api-architecture 29.2 -> 31.2,
+correctness 51.7 -> 50.2, accessibility 33.3 -> 11.1 (n=10, 5 candidates). By severity: low 46.2 -> 52.8, medium 48.4 ->
+60.2, high 54.5 -> 52.1.
+
+Reading:
+- Recall rose on the categories the night's prompt and nit-rule changes aimed at, at about the same cost. Macro precision fell 5.7 points while micro rose 0.5: a few PRs with few matched items now carry a disputed nit the judge calls false, which weighs heavily in a per-PR mean. The board ranks by grounded F1 from the published precision and recall. Computed the same way as R4 (macro), 64.3 sits between #4 diffox ultra (63.6) and #3 Klaussy (67.4) in review-bench.ai/api/leaderboard (profile official-2026-09). That's about #4, private, 25 PRs, 1 round; the official run is 219 PRs x 3 rounds.
+- Parallel passes did not cut wall time here (mean 480 s vs 472 s). Most test PRs fit in one or two passes, and the long ones spend their time in verification and the nit tier, not in serial review passes. Speed needs work on verification next.
+- PRs 1 and 13 still end at the $5 cap ($5.03, $4.74). The mean stays under the $3/PR rule.
+- Next for top 3 (+3.1 F1): precision on disputed nits (route them through a second, cheaper check, or drop the ones refuted at low confidence; R4 data says those were 4 true / 5 false), api-architecture and security recall, accessibility (5 candidates for 10 golden).
