@@ -1221,4 +1221,5 @@ Self-review round 2 (a142890): 5 lows. Fixed: README line 16 still said 37; this
 miscount of the stored output (36 refuted, 32 kept); no test for the `since`/`Claim:` placement, now pinned with the
 rendered layout. Not changed: "hard-coded 8-space indent" (the rendered prompt lines up: dedent strips nothing once the
 code region is in, and the new test pins the layout).
-Spend this shift: $2.38 re-verify + about $9.6 eval A/B (18 rounds incl. the first fixture) + about $1 self-review.
+Self-review round 3: the change_scope docstring still said 35; fixed, plus a why-comment. Round 4: GREEN.
+Spend this shift: $2.38 re-verify + about $9.6 eval A/B (18 rounds incl. the first fixture) + $1.42 self-review (4 rounds).
