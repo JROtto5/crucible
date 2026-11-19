@@ -185,6 +185,31 @@ diff --git a/test/fixtures/keys.js b/test/fixtures/keys.js
         self.assertEqual(unc, [])
         self.assertTrue(all(c["files"] == ["b.js"] for c in chunks))
 
+    def test_review_order_ranks(self):
+        want = {0: ["src/auth/login.ts", "packages/auth-x/src/routes/callback.ts", "app/middleware/session.py"],
+                1: ["packages/admin/src/App.tsx", "src/routes/api/posts.ts", "tests/auth/test_login.py", "src/util.ts",
+                    ".github/workflows/ci.yml", "src/user/.codex/AGENTS.md.template", "src/tokenizer.ts"],
+                2: ["README.md", "docs/guide.md"],
+                3: ["pnpm-lock.yaml", "demos/a/src/x.astro", "templates/starter/src/a.ts", ".changeset/x.md",
+                    "dist/a.min.js", "server/package-lock.json"]}
+        for rank, paths in want.items():
+            for p in paths:
+                self.assertEqual(D.review_rank(p), rank, p)
+
+    def test_review_order_regroups_only_a_multi_pass_change(self):
+        def diff(paths, body=1):
+            return "".join(f"diff --git a/{p} b/{p}\n--- a/{p}\n+++ b/{p}\n@@ -1,1 +1,1 @@\n-a\n+{'b' * body}\n"
+                           for p in paths)
+        paths = [".agents/skills/x/notes.md", "demos/site/a.ts", "packages/admin/src/a.ts",
+                 "packages/auth-atproto/src/routes/login.ts", "pnpm-lock.yaml"]
+        one, _ = D.chunk(D.parse(diff(paths)))
+        self.assertEqual([c["files"] for c in one], [paths])               # fits one pass: path order, as before
+        many, unc = D.chunk(D.parse(diff(paths, body=900)), max_chars=1000)
+        self.assertEqual(unc, [])
+        self.assertEqual([f for c in many for f in c["files"]],
+                         ["packages/auth-atproto/src/routes/login.ts", "packages/admin/src/a.ts",
+                          ".agents/skills/x/notes.md", "demos/site/a.ts", "pnpm-lock.yaml"])
+
     def test_region_touched(self):
         r = D.changed_old_ranges("diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -10,2 +10,3 @@\n x\n+y\n x\n")
         self.assertTrue(D.region_touched(r["a"], 12)); self.assertFalse(D.region_touched(r["a"], 30))

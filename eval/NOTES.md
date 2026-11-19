@@ -1256,3 +1256,41 @@ Reading:
   for #3. That makes high-severity recall, not nit precision, the lever for the public table.
 - Not like for like: 25 PRs / 36 high golden items vs 219 x 3 rounds; one item moves R by 2.8 points and F1 by ~2.
   The ReviewBench goal (project_reviewbench_goal) should name which view it targets; the site's is the High one.
+
+### 2026-11-19 · high-severity misses (R5): 18 of 36, by bucket ($0, from stored output)
+
+Read from R5's judge output (`results.details.json`, `covered_golden_indices`) joined to each PR's kept `review.json`
+(findings, dropped, nits, nits_dropped with verdicts) and the golden file. A re-scorer reproduces the scorer's
+`by_severity.high` exactly (macro R 52.1 over the 14 PRs that have a high golden item; R4 54.5). Two facts about the
+judge decide the buckets: matching is **file-scoped** (`scripts/eval/matcher.ts`: "only compares findings in the
+same file"), and the high view filters by the **golden** item's severity, so a low nit at the right file counts in
+full. Macro weighting: each of the 14 PRs is 7.1 points of high recall, so a PR at 0/n is the cheapest place to gain.
+
+| # | PR | golden (category) | bucket | bug class | what crucible had |
+|---|---|---|---|---|---|
+| 1 | aafactory | #0 reliability | refuted (causation) | test plugins missing from the manifest | important, dropped "pre-existing" (an earlier PR commit); R4 had it |
+| 2 | tp_152 | #0 correctness | wrong file | command is a stub (advertised feature does nothing) | medium, verified, anchored at docs/UserGuide.md:343 |
+| 3 | tp_152 | #1 api-architecture | wrong file | operation missing from the layer interface | low nit at AddressBook.java:96 ("removeNote has no production caller"); golden at Model.java |
+| 4 | Codebase-Conversion | #33 reliability | never raised | devcontainer image build fails (apt repo key in the base image) | only devcontainer.json nits |
+| 5 | translator-ingests | #9 correctness | judge split | `break` for one branch's None action ends the loop | critical `break` finding at :413 (inside the golden 411-450), matched to #0/#14 instead |
+| 6 | TechDebtMCP | #0 security | never raised | user path to fs calls, no isAbsolute/resolve | the project's CLAUDE.md rule for this sits at char ~9.5k; crucible's rules excerpt is the first 5,000 chars of each file |
+| 7 | jadx-collaboration | #1 correctness | never raised | nullable captured `var` passed in a non-inline lambda (Kotlin smart cast) | nothing |
+| 8 | CrabTrap | #21 correctness | never raised | UI now depends on an endpoint that 503s in one deployment config | nothing |
+| 9 | apilix | #0 reliability | wrong file | runtime deps missing from the manifest | medium nit at server/package-lock.json:14; golden at server/package.json |
+| 10 | apilix | #6 correctness | refuted (causation) | debounced save cancelled on switch, edits lost | important, dropped "introduced in c8b6a1e" (an earlier PR commit); R4 had it |
+| 11 | apilix | #19 correctness | refuted + wrong file | call to an IPC method nothing exposes | critical at README.md:356, dropped on causation; R4 had it at s3Adapter.ts:28 |
+| 12 | apilix | #25 correctness | refuted + wrong file | same as #19 (second golden copy) | same item |
+| 13 | apilix | #26 correctness | never raised | field names differ between writer (UI) and reader (adapter) | nothing |
+| 14 | agents-config | #1 correctness | never raised (sibling) | tool-specific syntax copied to a sibling template | Codex twin found (matched #0), no also_at to the Gemini file |
+| 15 | agents-config | #2 correctness | never raised | unverified tool behaviour (prose-wrapped @imports) | nothing |
+| 16-18 | emdash | #0, #1, #4 correctness | never reviewed | OAuth baseUrl from the internal origin behind a proxy (3 routes) | the 3 files sit in pass 8 of 24; passes run in path order, so `.agents/`, `demos/`, `i18n/` went first; 261 of 408 files unreviewed at the $5 cap |
+
+Buckets (primary): never raised **7**, wrong file **5** (2 of them also refuted), never reviewed **3** (one PR),
+refuted on causation **2** (+2 above), judge split **1**, raised too low **0**. The four R4 items R5 lost (#1, #10,
+#11, #12) were all wrong-base causation refutations, which fe9b47b fixes (its re-verify kept the #1 claim).
+
+Fixes, in order of high-recall weight: (a) pass order under a budget: code before config, docs, lockfiles and
+demo/template trees (emdash, up to 7.1 points); (b) project rules past the excerpt: the rule lines of a long
+CONTRIBUTING/AGENTS/CLAUDE.md (TechDebtMCP, 7.1); (c) anchor at the line a fix changes, with the doc/lockfile site
+in also_at (tp_152 x2, apilix x3). Never-raised one-offs (Kotlin smart cast, cross-layer 503, field-name mismatch,
+devcontainer key) have no shared shape; no change for them now.

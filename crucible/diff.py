@@ -178,9 +178,47 @@ def scan(files):
     return out
 
 
+# Pass order when a change needs more than one pass. Passes used to run in path order, so on a large change the
+# budget went to whatever sorts first. ReviewBench run 5, emdash (408 files, $5 cap): `.agents/` skill docs, `demos/`
+# and `i18n/` took the first passes, and the three auth routes holding all three of its high-severity golden issues
+# sat in pass 8 of 24, never reviewed (261 files left). Ranks, path order within each (so a package's files stay
+# together): 0 code under a security-sensitive name, 1 other code (tests, config, CI and agent files count as code
+# here, as everywhere in crucible), 2 docs, 3 low-value: lockfiles, generated or vendored output, changesets, and
+# demo/example/sample/fixture trees and a top-level templates/ tree. Nothing is skipped; only the order changes. A
+# change that fits one pass keeps path order, so its prompt is byte-identical to before.
+# Falsifiers (tests/test_core.py test_review_order_*): must rank 0 src/auth/login.ts, packages/auth-x/src/routes/
+# callback.ts, app/middleware/session.py; must rank 1 packages/admin/src/App.tsx, src/routes/api/posts.ts,
+# tests/auth/test_login.py, src/util.ts, .github/workflows/ci.yml, src/user/.codex/AGENTS.md.template; rank 2
+# README.md, docs/guide.md; rank 3 pnpm-lock.yaml, demos/a/src/x.astro, templates/starter/src/a.ts, .changeset/x.md,
+# dist/a.min.js. Route and admin trees are not "sensitive" by name: in a web app that is most of the code.
+SENSITIVE_RX = re.compile(r"(^|[/_.-])(auth\w*|log(in|out)|oauth\w*|sessions?|tokens?|crypto|security|secrets?|"
+                          r"permissions?|acl|rbac|csrf|passkeys?|password\w*)([/_.-]|$)", re.I)
+LOW_VALUE_RX = re.compile(r"(^|/)(package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|poetry\.lock|"
+                          r"uv\.lock|Pipfile\.lock|Cargo\.lock|Gemfile\.lock|composer\.lock|go\.sum|bun\.lockb?)$|"
+                          r"\.min\.(js|css)$|\.snap$|(^|/)(__snapshots__|dist|vendor|third_party|node_modules|"
+                          r"\.changeset|demos?|examples?|samples?|fixtures?|testdata)/|^templates?/", re.I)
+
+
+def review_rank(path):
+    from .routing import is_doc                     # routing imports util only; imported here to keep diff's deps flat
+    if LOW_VALUE_RX.search(path):
+        return 3
+    if is_doc(path):
+        return 2
+    return 1 if TEST_PATH_RX.search(path) or not SENSITIVE_RX.search(path) else 0
+
+
 def chunk(files, max_chars=45000):
-    """Group files into review chunks. A file bigger than max_chars is split by hunks.
+    """Group files into review chunks. A file bigger than max_chars is split by hunks. More than one chunk: the files
+    are regrouped riskiest first (review_rank), so a budget that runs out leaves the least useful passes.
     Returns (chunks, uncovered): chunk = {files:[path], text}, uncovered = paths that could not be fully included."""
+    chunks, uncovered = _chunk(files, max_chars)
+    if len(chunks) > 1:
+        chunks, uncovered = _chunk(sorted(files, key=lambda f: review_rank(f["path"])), max_chars)   # stable sort
+    return chunks, uncovered
+
+
+def _chunk(files, max_chars):
     chunks, cur, size, uncovered = [], {"files": [], "text": ""}, 0, []
     def flush():
         nonlocal cur, size
