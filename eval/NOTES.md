@@ -1326,3 +1326,47 @@ twice each at HEAD: 4/4 caught at important. py-race's severity has flipped befo
 Nit cases on the 6 the 11-18 run had: 16/18 (maintainability missed-reuse, reliability prune-counts-failures). Re-run 2
 rounds per arm, 75d4ad7 (no where-it-sits paragraph) vs HEAD, on the maintainability, maintainability-cross and
 reliability cases: 20/20 planted found in both arms, false blocking on those cases 2 vs 3 of 6 runs (11-18: 2). Variance.
+
+### 2026-11-19 · ReviewBench run 6 (crucible 85fc223): high-severity F1 68.5 -> 73.7, about #5 on the site's table
+
+Same 25 test PRs, adapter (`--nits`, `RB_CONFIG_BUDGET=5`, `RB_CONFIG_KEEP_REVIEW=1`), Sonnet 5 judge @ f223ce3, 1
+round. Image `crucible-rb:r6f` from a `git archive` of 85fc223 (pass order, guide rule lines, where a finding sits,
+plus 11-19's verify scope fe9b47b; later commits are docs). PRs 0-22 on account #18; its 5-hour window ran out in PR
+23 (LIMIT, exit 1), so PRs 23-24 were re-run on #16. The judge stopped once on nebula ("matcher returned invalid
+JSON") and was resumed from its checkpoint. All borrowed tokens were deleted from blaze-3 (the run scripts' trap).
+`results.details.json` sha256 35747222e118….
+
+| | R4 | R5 | **R6** |
+|---|---|---|---|
+| **high: grounded P / R / F1 (macro)** | 100.0 / 54.5 / 70.5 | 100.0 / 52.1 / 68.5 | **91.7 / 61.6 / 73.7** |
+| high: found (micro) | 19/36 | 18/36 | **22/36** |
+| high: augmented P / R | 100.0 / 65.9 | 100.0 / 63.4 | 98.2 / 73.3 |
+| all severities: grounded P / R / F1 (macro) | 88.3 / 48.1 / 62.3 | 82.6 / 52.7 / 64.3 | **90.7 / 57.5 / 70.4** |
+| all: augmented P / R | 94.0 / 68.3 | 91.1 / 74.5 | 93.5 / 75.9 |
+| $ per PR, the 25 kept runs | mean 2.12, median 1.49, max 5.00 | mean 2.05, median 1.57, max 5.03 | mean 2.13, median 1.51, max 5.02 |
+| $ incl. cut-off attempts | 53.08 | 56.09 | 54.48 |
+| wall per PR (25 kept) | mean 472 s | mean 480 s | mean 450 s, median 387 s |
+
+Rank on the site's table (High, grounded F1, `/api/leaderboard/metrics?severities=High&preference=balanced`,
+fetched 11-19): #4 Copilot code review Max 75.7, **#5 Laude RevEngine 73.3**, #6 Copilot Balanced 72.7. R6's 73.7 sits
+between #4 and #5, so about #5 (private, 25 PRs, 1 round; one high item moves F1 by ~2). On the all-severity API
+(`/api/leaderboard`, not what the page shows) 70.4 is above #1 OhMyBug 69.3.
+
+High-severity items, R5 -> R6: gained 7 (aafactory #0, apilix #6, #19, #25, agents-config #1, emdash #0, #1), lost 3
+(apilix #28, #29, #35: a workspace switch that doesn't flush the pending save, at three call sites; R4 missed them too).
+Still missed 14: tp_152 x2 (still cited at the guide and AddressBook), TechDebtMCP (found in the targeted run as a
+disputed nit, not this time), CrabTrap, apilix #0 (lockfile) and #26, translator-ingests #9, Codebase-Conversion
+#33, jadx #1, agents-config #2, emdash #4.
+
+Precision on the high view fell from 100 to 91.7 by one item: a verified low nit on figlet's publish workflow
+("installer manifest drops PortableCommandAlias: figprint") matched a golden issue labelled high and false ("winget
+falls back to the exe name"). It is that PR's only high match, so its high P is 0 and enters the macro mean. Without
+it, high P 100 and F1 76.2 (#4). The all-severity precision rose 82.6 -> 90.7.
+
+Reading:
+- The targeted run's 16/20 on its 5 PRs came out 15/20 here (apilix 9 -> 6 of 11, TechDebtMCP 1 -> 0, emdash 3 -> 2,
+  agents-config not in it). One round per PR swings a PR by 1-3 items; the 25-PR gain (+4 net, +9.5 macro recall) is
+  the measured one.
+- Next for #4 (75.7) and #3 (78.7): the wrong-file bucket (tp_152 x2, apilix #0) via a fix-site step after
+  verification, measured at $0 on this run's stored output first; then the switch-without-flush sibling sites
+  (apilix #28/#29/#35), which an also_at from the store.tsx finding would carry.
