@@ -3399,6 +3399,25 @@ class TestRerunSameCommit(unittest.TestCase):
         self.assertIn("Fixes a \u2192 b.", txt)
         self.assertTrue(txt.rstrip().endswith(notes), txt)
 
+    def test_project_rules_keep_rule_lines_past_the_head(self):
+        repo = tempfile.mkdtemp()
+        head = "# Guide\n" + "Some background prose about the project layout.\n" * 120      # > RULES_HEAD chars
+        rule = "- **Path arguments:** Always validate with `path.isAbsolute()` before any filesystem operation."
+        prose = "The cache layer was added in 2024 to speed up scans."
+        open(os.path.join(repo, "CLAUDE.md"), "w").write(head + "\n## Security\n" + prose + "\n" + rule + "\n")
+        txt = V.project_rules_text(repo, "t__none")
+        self.assertIn(rule, txt)
+        self.assertNotIn(prose, txt)
+        self.assertIn(head[:V.RULES_HEAD], txt)
+
+    def test_project_rules_keep_rule_lines_short_guide_unchanged(self):
+        text = "# Guide\n- Never commit secrets.\nPlain prose.\n"
+        self.assertEqual(V.rules_excerpt(text), text)
+        long = "x" * (V.RULES_HEAD + 10) + "\n" + "- Always run lint.\n" * 1000
+        out = V.rules_excerpt(long)
+        self.assertLessEqual(len(out), V.RULES_HEAD + V.RULES_TAIL + 100)    # the tail is capped
+        self.assertIn("- Always run lint.", out)
+
     def _ascii_locale_run(self, code, *args, path=None):
         env = {**os.environ, "LC_ALL": "C", "PYTHONCOERCECLOCALE": "0", "PYTHONUTF8": "0",
                "PYTHONPATH": os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}

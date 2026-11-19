@@ -596,12 +596,33 @@ def choose_models(repo, base, author=None):
 
 
 # ---------- project knowledge ----------
+# A guide is shown from its start up to RULES_HEAD chars, then only the lines of the rest that state a rule, up to
+# RULES_TAIL chars. ReviewBench run 5, TechDebtMCP: CLAUDE.md's "Path arguments: Always validate with
+# path.isAbsolute() ... Never pass user-supplied paths directly to fs functions" sat at char ~9.5k of 10k; the PR
+# passed a user path to fs calls (a high-severity golden issue) and the reviewer never saw the rule. That file's
+# tail is 4.9k chars, 1.3k of them rule lines. Falsifiers (tests/test_core.py test_project_rules_keep_rule_lines_*):
+# a "- **X:** Always/Never ..." bullet past the head is kept; a prose line with no rule word is not; a short guide is
+# shown whole and unchanged.
+RULES_HEAD, RULES_TAIL = 5000, 3000
+RULE_LINE_RX = re.compile(r"\b(always|never|must|do not|don't|required|avoid|should not|shouldn't)\b", re.I)
+
+
+def rules_excerpt(text):
+    if len(text) <= RULES_HEAD:
+        return text
+    keep, size = [], 0
+    for line in text[RULES_HEAD:].splitlines()[1:]:     # [1:]: the line the cut lands in is partly in the head
+        if RULE_LINE_RX.search(line) and size + len(line) < RULES_TAIL:
+            keep.append(line); size += len(line) + 1
+    return text[:RULES_HEAD] + ("\n[... further down, the rule lines only:]\n" + "\n".join(keep) if keep else "")
+
+
 def project_rules_text(repo, project):
     parts = []
     for name in ("CONTRIBUTING.md", ".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md", "AGENTS.md", "CLAUDE.md"):
         p = os.path.join(repo, name)
         if os.path.exists(p):
-            parts.append(f"--- {name} (excerpt) ---\n" + open(p, encoding="utf-8", errors="replace").read()[:5000])
+            parts.append(f"--- {name} (excerpt) ---\n" + rules_excerpt(open(p, encoding="utf-8", errors="replace").read()))
     learned = os.path.join(project_dir(project), "rules.md")
     if os.path.exists(learned):
         parts.append("--- maintainer preferences learned from merged PR reviews ---\n" + open(learned, encoding="utf-8", errors="replace").read()[:6000])
