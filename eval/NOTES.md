@@ -1323,3 +1323,6 @@ recall 0.913 (build 19/21, holdout 2/2), any severity 1.0, false blocking 0 on 9
 19/21 planted issues (11-18: 18/18 on 6 cases), 0 false blocking there. The two build misses (py-declared-order-broken,
 py-race) were found at medium; both are one-pass fixtures that the pass order and rules changes don't touch. Re-run
 twice each at HEAD: 4/4 caught at important. py-race's severity has flipped before (11-12 entry). Not a regression.
+Nit cases on the 6 the 11-18 run had: 16/18 (maintainability missed-reuse, reliability prune-counts-failures). Re-run 2
+rounds per arm, 75d4ad7 (no where-it-sits paragraph) vs HEAD, on the maintainability, maintainability-cross and
+reliability cases: 20/20 planted found in both arms, false blocking on those cases 2 vs 3 of 6 runs (11-18: 2). Variance.
