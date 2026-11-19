@@ -480,6 +480,7 @@ def nit_sweep(sweep_chunks, raised, repo, model, budget, project, sha, base, rul
 def nit_verify_prompt(batch, base="", added=None):
     """`base`/`added`: change_scope()'s range line goes after the instructions, and each claim on a line the range
     adds says so. Without a base the prompt is as it was (cached verdicts still match)."""
+    # a fact from the diff, not the verifier's own git reading, which in R5 often looked at the wrong base
     mark = lambda f: ", a line this change adds" if base and added is not None and f["line"] in added.get(f["file"], ()) else ""
     claims = "\n\n".join(
         f"[{i}] {f['title']} (at {f['file']}:{f['line']}{mark(f)}, proposed severity {f['severity']})\n"
@@ -1263,7 +1264,7 @@ def added_lines(files):
 
 def change_scope(base, f=None, added=None):
     """The scope line the verifier gets, so it judges causation against the review's range, not `git show HEAD`.
-    ReviewBench run 5 (2026-11-19): 35 of the 71 dropped claims were refuted as "not caused by this change". 29 of
+    ReviewBench run 5 (2026-11-19): 36 of the 71 dropped claims were refuted as "not caused by this change". 29 of
     those cite a line the range adds; the verifier had checked only the last commit or upstream main. Several were
     golden issues the run missed. With `f` and `added`, it also says whether the cited line is one the range adds.
     Empty without a base, so a prompt built without one (anchor replays, old tests) is byte-identical."""
