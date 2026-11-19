@@ -1223,3 +1223,36 @@ rendered layout. Not changed: "hard-coded 8-space indent" (the rendered prompt l
 code region is in, and the new test pins the layout).
 Self-review round 3: the change_scope docstring still said 35; fixed, plus a why-comment. Round 4: GREEN.
 Spend this shift: $2.38 re-verify + about $9.6 eval A/B (18 rounds incl. the first fixture) + $1.42 self-review (4 rounds).
+
+### 2026-11-19 · board figures reconciled: the site's default table is grounded F1 on high-severity issues only
+
+The review-bench.ai figures (e.g. OhMyBug 92.0 / 75.6 / 83.0) are not a different scorer or PR set. They are the
+same official run (profile official-2026-09, 219 PRs x 3 rounds, Sonnet 5 judge) restricted to **high severity**:
+`/api/leaderboard/metrics?severities=High&preference=balanced` returns OhMyBug grounded P 91.999 / R 75.615, and
+2PR/(P+R) = 83.0. The site's caption, `/leaderboard.md` and `/llms.txt` all say it: "ranked by grounded F1 on
+high-severity issues", grounded = matched candidates only, F1 = beta 1 ("balanced"; "precise"/"thorough" are F0.5/F2).
+Per methodology 7.3/7.4 the filter keeps golden items of that severity and candidates whose *matched golden* has it (the
+classifier's label for unmatched ones), recomputed server-side; the High view lists each agent's top 3 configurations.
+`/api/leaderboard` (no filter, what we used for 69.3 / 68.8 / 67.4 / 63.6 / 62.6) is the same F1 over all severities;
+its `rank` field sorts by that, but it is not what the page shows by default.
+Aggregation is not stated anywhere public. The published numbers look **macro** (per-PR mean): `novelYield` is below
+the pooled `novelTruePositives / candidates` for every leader (OhMyBug 71.6 vs 75.9), which a per-PR mean gives and a
+pooled ratio can't. So our macro figures are the like-for-like ones. F1 is from the published P and R, not a mean of
+per-PR F1 (83.0 and augmentedF1 88.73 both check).
+
+The public ranking (High, grounded F1, 11-19):
+#1 OhMyBug 83.0 (92.0 / 75.6), #2 intent-review-agent 82.2, #3 intent-review-agent v1 78.7, #4 Copilot code review
+Max 75.7, #5 Laude RevEngine (Opus 5.5) 73.3, ... #9 Klaussy opus 69.3, #10 Qodo 68.3, ... #16 diffox ultra 65.6.
+
+R5 on the same measure, from its stored judge output (`runs/r5/scoring/results.json` on blaze-3, sha256 of
+results.details.json 99c057dd…, the scorer's own `by_severity.high`): 36 high golden TPs on the 25 PRs, 18 matched
+candidates, all 18 TP. Macro grounded P / R 100.0 / 52.1, **F1 68.5 → #10 of 25** (between Klaussy 69.3 and Qodo
+68.3). Micro 100.0 / 50.0 (18/36, Wilson [34.5, 65.5]), F1 66.7 → #14. R4 was 100.0 / 54.5, F1 70.5 (#7): run 5's gains
+were on medium and low, and high recall slipped one golden item's worth.
+
+Reading:
+- "About #4" for R5 holds only on the all-severity view the page doesn't show. On the page's default it is about #10,
+  and the gap to top 5 (73.3) is high-severity recall: P is already 100; R must reach ~58 (21 of 36) for #5 and ~65
+  for #3. That makes high-severity recall, not nit precision, the lever for the public table.
+- Not like for like: 25 PRs / 36 high golden items vs 219 x 3 rounds; one item moves R by 2.8 points and F1 by ~2.
+  The ReviewBench goal (project_reviewbench_goal) should name which view it targets; the site's is the High one.
