@@ -623,7 +623,10 @@ def rules_excerpt(text):
     if len(text) <= RULES_HEAD:
         return text
     keep, size = [], 0
-    for line in text[RULES_HEAD:].splitlines()[1:]:     # [1:]: the line the cut lands in is partly in the head
+    tail = text[RULES_HEAD:].splitlines()
+    if text[RULES_HEAD - 1] != "\n":                  # the cut landed inside a line: its rest is partly in the head
+        tail = tail[1:]
+    for line in tail:
         if RULE_LINE_RX.search(line) and size + len(line) < RULES_TAIL:
             keep.append(line); size += len(line) + 1
     return text[:RULES_HEAD] + ("\n[... further down, the rule lines only:]\n" + "\n".join(keep) if keep else "")

@@ -188,9 +188,10 @@ diff --git a/test/fixtures/keys.js b/test/fixtures/keys.js
     def test_review_order_ranks(self):
         want = {0: ["src/auth/login.ts", "packages/auth-x/src/routes/callback.ts", "app/middleware/session.py"],
                 1: ["packages/admin/src/App.tsx", "src/routes/api/posts.ts", "tests/auth/test_login.py", "src/util.ts",
-                    ".github/workflows/ci.yml", "src/user/.codex/AGENTS.md.template", "src/tokenizer.ts"],
+                    ".github/workflows/ci.yml", "src/user/.codex/AGENTS.md.template", "src/tokenizer.ts",
+                    "templates/index.html", "templates/starter/src/a.ts"],
                 2: ["README.md", "docs/guide.md"],
-                3: ["pnpm-lock.yaml", "demos/a/src/x.astro", "templates/starter/src/a.ts", ".changeset/x.md",
+                3: ["pnpm-lock.yaml", "demos/a/src/x.astro", ".changeset/x.md",
                     "dist/a.min.js", "server/package-lock.json"]}
         for rank, paths in want.items():
             for p in paths:
@@ -3417,6 +3418,14 @@ class TestRerunSameCommit(unittest.TestCase):
         out = V.rules_excerpt(long)
         self.assertLessEqual(len(out), V.RULES_HEAD + V.RULES_TAIL + 100)    # the tail is capped
         self.assertIn("- Always run lint.", out)
+
+    def test_project_rules_keep_rule_lines_cut_on_a_line_start(self):
+        head = "y" * (V.RULES_HEAD - 1) + "\n"                   # char RULES_HEAD starts a fresh line
+        out = V.rules_excerpt(head + "- Never pass a raw path to fs.\nprose\n")
+        self.assertIn("- Never pass a raw path to fs.", out)
+        mid = V.rules_excerpt("y" * (V.RULES_HEAD - 3) + "- Never half.\n- Must keep.\n")
+        self.assertNotIn("\nver half.", mid)                      # a line cut by the head is not repeated in pieces
+        self.assertIn("- Must keep.", mid)
 
     def _ascii_locale_run(self, code, *args, path=None):
         env = {**os.environ, "LC_ALL": "C", "PYTHONCOERCECLOCALE": "0", "PYTHONUTF8": "0",

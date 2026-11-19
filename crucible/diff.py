@@ -184,19 +184,19 @@ def scan(files):
 # sat in pass 8 of 24, never reviewed (261 files left). Ranks, path order within each (so a package's files stay
 # together): 0 code under a security-sensitive name, 1 other code (tests, config, CI and agent files count as code
 # here, as everywhere in crucible), 2 docs, 3 low-value: lockfiles, generated or vendored output, changesets, and
-# demo/example/sample/fixture trees and a top-level templates/ tree. Nothing is skipped; only the order changes. A
+# demo/example/sample/fixture trees (not templates/: a Django or Flask app's views live there). Nothing is skipped; only the order changes. A
 # change that fits one pass keeps path order, so its prompt is byte-identical to before.
 # Falsifiers (tests/test_core.py test_review_order_*): must rank 0 src/auth/login.ts, packages/auth-x/src/routes/
 # callback.ts, app/middleware/session.py; must rank 1 packages/admin/src/App.tsx, src/routes/api/posts.ts,
 # tests/auth/test_login.py, src/util.ts, .github/workflows/ci.yml, src/user/.codex/AGENTS.md.template; rank 2
-# README.md, docs/guide.md; rank 3 pnpm-lock.yaml, demos/a/src/x.astro, templates/starter/src/a.ts, .changeset/x.md,
-# dist/a.min.js. Route and admin trees are not "sensitive" by name: in a web app that is most of the code.
+# README.md, docs/guide.md; rank 3 pnpm-lock.yaml, demos/a/src/x.astro, .changeset/x.md, dist/a.min.js; templates/index.html is rank 1.
+# Route and admin trees are not "sensitive" by name: in a web app that is most of the code.
 SENSITIVE_RX = re.compile(r"(^|[/_.-])(auth\w*|log(in|out)|oauth\w*|sessions?|tokens?|crypto|security|secrets?|"
                           r"permissions?|acl|rbac|csrf|passkeys?|password\w*)([/_.-]|$)", re.I)
 LOW_VALUE_RX = re.compile(r"(^|/)(package-lock\.json|npm-shrinkwrap\.json|pnpm-lock\.yaml|yarn\.lock|poetry\.lock|"
                           r"uv\.lock|Pipfile\.lock|Cargo\.lock|Gemfile\.lock|composer\.lock|go\.sum|bun\.lockb?)$|"
                           r"\.min\.(js|css)$|\.snap$|(^|/)(__snapshots__|dist|vendor|third_party|node_modules|"
-                          r"\.changeset|demos?|examples?|samples?|fixtures?|testdata)/|^templates?/", re.I)
+                          r"\.changeset|demos?|examples?|samples?|fixtures?|testdata)/", re.I)
 
 
 def review_rank(path):
