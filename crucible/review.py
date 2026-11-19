@@ -96,7 +96,19 @@ FINDINGS_NITS_SCHEMA = {**FINDINGS_SCHEMA, "properties": {
 # misses.
 # The content-files paragraph: run 4 missed 12 of 16 golden issues in .md files; most were in templates and agent or
 # skill files that a tool reads (scotthamilton77/agents-config: 22 of 25 missed), reviewed as prose.
+# The where-it-sits paragraph: run 5 found 5 of its 18 missed high-severity issues (eval/NOTES 2026-11-19) but cited
+# them in another file than the code at fault: a command stub cited at the user guide that advertises it, a missing
+# interface method at the class that has it, deps missing from package.json at package-lock.json, a call to an IPC
+# method nothing exposes at the README. A reader of inline comments, like the file-scoped benchmark judge, looks for
+# the comment where the code must change. With --nits only, as the rest of this note. A first wording ("list the doc
+# line in also_at") made the reviewer drop its separate nit on the wrong README text in 3 of 3 eval rounds, so the
+# doc nit is kept explicitly.
 NITS_NOTE = f"""
+        Where a finding or nit sits: at the line a fix would change, in the code at fault, not where the flaw
+        shows. A README or guide describing a feature the code doesn't do, a lockfile out of step with its manifest,
+        a call to a method nothing defines, a caller broken by its callee: cite the stub, the manifest, the call or
+        the callee. That is in addition to, not instead of, a nit on doc text the change made wrong: keep that nit
+        at the doc line as well.
         Second tier, "nits" (at most {NITS_MAX_PER_PASS}, separate from findings): smaller REAL problems a careful
         reviewer would comment on but not block on: an unhandled edge case, a misleading name, comment or docstring,
         docs or README text the change made wrong, a missing doc or test for a new public function, inconsistent error handling, a

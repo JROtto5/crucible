@@ -7532,6 +7532,16 @@ class TestDocRefs(unittest.TestCase):
         self.assertTrue(with_nits.rstrip().endswith("OUTSIDE this diff: x"))
         self.assertIn("Docs the change left behind", with_nits)
 
+    def test_where_it_sits_paragraph_only_with_nits(self):
+        ch = {"files": ["a.py"], "text": "diff"}
+        args = ("o__r", "a" * 40, "b" * 40, ch, "", "", "", "", ["a.py"])
+        self.assertNotIn("Where a finding or nit sits", V.review_prompt(*args))
+        p = V.review_prompt(*args, nits=True)
+        i = p.index("so a later round re-checks it there.")
+        self.assertLess(i, p.index("Where a finding or nit sits"))     # right after the base anchoring rule
+        self.assertLess(p.index("Where a finding or nit sits"), p.index('Second tier, "nits"'))
+        self.assertIn("in addition to, not instead of, a nit on doc text", p)
+
     def test_docstring_body_lines_and_block_comments_count(self):
         from crucible import docrefs
         d, files, rd = self._repo({

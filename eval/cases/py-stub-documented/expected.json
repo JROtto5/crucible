@@ -1,0 +1,9 @@
+{
+ "kind": "bug",
+ "split": "build",
+ "source": "shape of ReviewBench run 5's high-severity misses cited in another file than the code at fault (a command stub cited at the user guide that advertises it); not copied from a test-set PR",
+ "message": "cli: add `jot delete DATE` and document it",
+ "file": "jot/cli.py",
+ "lines": [22, 23, 24],
+ "keywords": ["stub", "never remove", "never calls", "doesn't remove", "does not remove", "not removed", "not deleted", "never deleted", "store.remove", "remove(", "no-op", "nothing is deleted", "does nothing"]
+}
