@@ -1289,8 +1289,8 @@ Buckets (primary): never raised **7**, wrong file **5** (2 of them also refuted)
 refuted on causation **2** (+2 above), judge split **1**, raised too low **0**. The four R4 items R5 lost (#1, #10,
 #11, #12) were all wrong-base causation refutations, which fe9b47b fixes (its re-verify kept the #1 claim).
 
-Fixes, in order of high-recall weight: (a) pass order under a budget: code before config, docs, lockfiles and
-demo/template trees (emdash, up to 7.1 points); (b) project rules past the excerpt: the rule lines of a long
+Fixes, in order of high-recall weight: (a) pass order under a budget: security-named code, then code, docs, lockfiles and
+demo/example trees (emdash, up to 7.1 points); (b) project rules past the excerpt: the rule lines of a long
 CONTRIBUTING/AGENTS/CLAUDE.md (TechDebtMCP, 7.1); (c) anchor at the line a fix changes, and keep the separate nit
 on the doc text (tp_152 x2, apilix x3; a first wording that put the doc site in also_at lost the doc nit in 3 of 3
 eval rounds and was not shipped). Never-raised one-offs (Kotlin smart cast, cross-layer 503, field-name mismatch,

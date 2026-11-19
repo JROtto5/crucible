@@ -3423,8 +3423,9 @@ class TestRerunSameCommit(unittest.TestCase):
         head = "y" * (V.RULES_HEAD - 1) + "\n"                   # char RULES_HEAD starts a fresh line
         out = V.rules_excerpt(head + "- Never pass a raw path to fs.\nprose\n")
         self.assertIn("- Never pass a raw path to fs.", out)
-        mid = V.rules_excerpt("y" * (V.RULES_HEAD - 3) + "- Never half.\n- Must keep.\n")
-        self.assertNotIn("\nver half.", mid)                      # a line cut by the head is not repeated in pieces
+        cut = "- Always validate paths; "                          # the head ends inside this rule line
+        mid = V.rules_excerpt("y" * (V.RULES_HEAD - len(cut)) + cut + "never trust input.\n- Must keep.\n")
+        self.assertNotIn("\nnever trust input.", mid)             # its rest (a rule word in it) is not repeated
         self.assertIn("- Must keep.", mid)
 
     def _ascii_locale_run(self, code, *args, path=None):
