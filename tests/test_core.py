@@ -6610,7 +6610,7 @@ class TestNitTier(unittest.TestCase):
 
     def _run(self, nits_out, verdicts=None, nits=True, env=None, fail_batch=False, budget=None, findings=1, verify_cost=0.0,
              review_cost=0.0, verify_error=None, passes=1, repo_files=None, sweep_out=(), sweep_cost=0.0,
-             sites_hold=(), finding_sites=None):
+             sites_hold=(), finding_sites=None, blocking=1):
         """-> (review.json, calls). `passes` > 1 splits the diff into that many review passes. The fake reviewer returns one important finding and `nits_out` as nits; the nit
         verifier answers `verdicts` (index -> (keep, confidence)), default keep/high for every nit."""
         from unittest import mock
@@ -6626,7 +6626,7 @@ class TestNitTier(unittest.TestCase):
                 first = dict(self._f("division by zero in f", 1, "important"),
                              **({"also_at": list(finding_sites)} if finding_sites else {}))
                 out = {"summary": "s", "findings": [first] +
-                       [self._f(w, 3 + 2 * i, "medium") for i, w in
+                       [self._f(w, 3 + 2 * i, "important" if i < blocking - 1 else "medium") for i, w in
                         enumerate(["unclosed socket in g", "README flag renamed", "retry loop never sleeps", "lock held across await", "token logged at info", "timeout default changed", "empty list crashes max"][:findings - 1])]}
                 if "nits" in schema["properties"]:
                     out["nits"] = nits_out
@@ -7051,6 +7051,18 @@ class TestNitTier(unittest.TestCase):
         self.assertEqual(status, {"division by zero in f": "unverified", "unclosed socket in g": "unverified"})
         self.assertEqual({f["verification"]["reason"] for f in r["findings"]}, {V.HELD_REASON})
         self.assertEqual([f["title"] for f in r["nits"]], ["a nit"])
+
+    def test_pickrate_big_change_small_budget_verifies_every_blocking_finding(self):
+        """R6 (Pickrate): 8 important findings shipped unverified, "held for nit verification", though the budget
+        covered them. The reserve only holds back non-blocking work."""
+        # $1.30: the review pass spends $1.00, $0.195 is the nit reserve. 8 blocking findings, two tiers each at
+        # $0.015, fit the $0.30 left but not the $0.105 above the reserve
+        r, calls = self._run([self._f("a nit", 2)], budget=1.3, findings=8, blocking=8, review_cost=1.0,
+                             verify_cost=0.015)
+        self.assertEqual({f["severity"] for f in r["findings"]}, {"important"})
+        self.assertEqual([f["title"] for f in r["findings"] if f["verification"]["status"] != "verified"], [])
+        self.assertNotIn(V.HELD_REASON, [f["verification"].get("reason") for f in r["findings"]])
+        self.assertEqual([f["title"] for f in r["nits"]], ["a nit"])    # $0.06 left still covers the nit batch
 
     def test_review_passes_stop_at_the_nit_reserve(self):
         """ReviewBench run 2, PR 1: 24 review passes spent $4.91 of $5 before any verification, so 0 nits."""
