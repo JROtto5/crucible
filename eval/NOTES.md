@@ -1372,3 +1372,10 @@ Reading:
   (apilix #28/#29/#35), which an also_at from the store.tsx finding would carry.
 
 **PKCE pair on the 11-18 nightly (6eb3179, full 37-case run 2026-11-18 17:11 ET; read from eval/RESULTS.md:32,47 on 11-20 00:1x ET):** `py-pkce-unchecked` caught (3 kept, 0 nits, $0.43). `clean-py-pkce-enforced`: **1 false blocking** (2 kept, $0.46), and it was the run's only false blocking. Against the 11-17 18:08 re-run (caught / 0 blocking), the bug arm held and the clean arm flipped. That is n=1 per arm per night, so it's variance-sized and too few to quote. The 11-19 full eval reported 0 false blocking on 9 clean cases (line ~1322); per-case output for that run was not written to RESULTS.md, so the clean twin's 11-19 state is read from the aggregate only.
+
+**R4 merged items, countable by place? (asked 11-18, checked on blaze-3 at $0, read-only):** no. R4's per-PR
+review.json sits next to findings.json in the run's out/<pr-key>/ (25 files); runs/r4 itself only keeps findings/,
+judge.log and log-N.txt. 16 merged items on 11 kept items across 9 PRs (6 findings, 5 nits) are stored only as `also`
+titles, with no file, line or severity, and no per-pass output was kept to rebuild them. The missing field is the
+`merged` entry (title, file, line, severity, source) that 7f087c1 added, so any run on 7f087c1 or later answers this
+as a read of review.json.
