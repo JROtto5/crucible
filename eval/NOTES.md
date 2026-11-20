@@ -1434,6 +1434,12 @@ planted issues (11-19 full run: 19/21 on the 7 older ones), false blocking 0 on 
 13 on 7); none of them is a rule-quoting or "predates" nit (tests, docstrings, edge cases), so the rise isn't read
 as this change; no old-code arm was run on the clean cases.
 
+Self-review round 1 (19396cf, $0.21): NOT_GREEN, 3 items, all fixed in 7059200: no eval run or fixture for a
+verifier change (the eval above), a 170-char test comment, and the nit_verify_prompt docstring still saying the
+prompt is unchanged without a base. Round 2 (7059200, $0.52): 1 low, "the new case passes with or without the note",
+true and stated above; deferred (no fixture can make the reviewer raise it only as a nit). GREEN. 491 tests on
+blaze-3, ruff clean. Shift spend about $14.3.
+
 **Also seen in R6, not changed today:** 8 important findings shipped unverified because "the rest of the review
 budget is held for nit verification" (emdash 7, nebula 1), and 4 findings had a failed verifier call
 (`error_max_structured_output_retries`: apilix 2, translator-ingests, node-postgres, statswales). The first is the
