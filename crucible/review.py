@@ -239,7 +239,8 @@ class SubBudget:
 # though nits were 95% true and findings 64%. So everything before the nit tier runs against the budget less a nit
 # reserve: the review passes (PR 1's 24 passes spent $4.91 of its $5 before any verification) and every finding's
 # verification. A held finding is kept unverified at the reviewer's severity (R2: unverified findings were judged
-# true 30 of 31 times); a held pass leaves its files uncovered and says so. Blocking findings still verify first.
+# true 30 of 31 times); a held pass leaves its files uncovered and says so. Blocking findings verify against the
+# whole budget: R6 (Pickrate) shipped 8 important findings unverified to keep the reserve for nits.
 # Best-effort: calls already in flight can overspend the hold, as they can the budget.
 NIT_BATCH_EST_USD = 0.20             # ReviewBench run 2: $2.76 over ~17 batches of nit verification ≈ $0.16
 NIT_RESERVE_SHARE = 0.15
@@ -1794,14 +1795,15 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
 
         def verify(f):
             since = anchor_since(repo, prev_sha, f, base) if f.get("anchor_changed") else ""
+            b = budget if f["severity"] in BLOCKING else held
             try:
-                return (f,) + verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo, held, tiers,
+                return (f,) + verify_tiered(f, region(repo, sha, f["file"], f["line"], draft=dctx), repo, b, tiers,
                                             fresh, since, dctx and dctx[0], no_exec=no_exec,
                                             scope=change_scope(base, f, added)) + (None,)
             except Failed as e:
                 # only claude()'s pre-call refusal is the hold: a call that ran and failed (its own --max-budget-usd
                 # cut, a timeout) keeps its real reason and counts as an attempt
-                if str(e) == BUDGET_EXHAUSTED and held is not budget and not budget.exhausted():
+                if str(e) == BUDGET_EXHAUSTED and b is not budget and not budget.exhausted():
                     return f, None, [], HELD_REASON
                 return f, None, [], str(e)
         if to_verify:

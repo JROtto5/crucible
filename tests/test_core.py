@@ -7043,13 +7043,13 @@ class TestNitTier(unittest.TestCase):
         self.assertEqual(len(imp["verification"]["tiers"]), 2)               # cheap, then strong
         self.assertEqual({f["severity"] for f in r["findings"] if f["verification"]["status"] == "unverified"}, {"medium"})
 
-    def test_blocking_findings_are_held_too(self):
-        # the review pass leaves $0.02 of $0.30, under the $0.045 hold: both findings are held (kept, unverified)
-        # and the nit still gets verified
+    def test_only_non_blocking_findings_are_held(self):
+        # the review pass leaves $0.02 of $0.30, under the $0.045 hold: the medium finding is held (kept, unverified),
+        # the important one is verified anyway, and the nit still gets verified
         r, calls = self._run([self._f("a nit", 2)], budget=0.3, findings=2, review_cost=0.28)
         status = {f["title"]: f["verification"]["status"] for f in r["findings"]}
-        self.assertEqual(status, {"division by zero in f": "unverified", "unclosed socket in g": "unverified"})
-        self.assertEqual({f["verification"]["reason"] for f in r["findings"]}, {V.HELD_REASON})
+        self.assertEqual(status, {"division by zero in f": "verified", "unclosed socket in g": "unverified"})
+        self.assertEqual([f["verification"].get("reason") for f in r["findings"]], [None, V.HELD_REASON])
         self.assertEqual([f["title"] for f in r["nits"]], ["a nit"])
 
     def test_pickrate_big_change_small_budget_verifies_every_blocking_finding(self):
