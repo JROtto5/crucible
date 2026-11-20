@@ -46,6 +46,40 @@ def strip_new_attribution(original, rewritten):
     return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip("\n"), removed
 
 
+# A line that is only bold text ("**Note for reviewers**", "__Risks:__"), a reviewer-notes heading, and a bold
+# lead-in ("**Risk:** none known."). Rewrites add them unasked; WRITING.md counts them as machine tells and
+# gkjohnson bans notes sections outright (DRG-87).
+_BOLD_ONLY_RX = re.compile(r"^\s*(\*\*|__)[^*_\n]+?\1\s*:?\s*$")
+_NOTES_SECTION_RX = re.compile(r"^#{1,6}\s+(notes?|notes? (for|to) (the )?reviewers?|reviewer'?s? notes|call-?outs?)\s*:?\s*$", re.I)
+_NOTES_LABEL_RX = re.compile(r"^(notes?|notes? (for|to) (the )?reviewers?|reviewer'?s? notes|call-?outs?|risks?|trade-?offs?)$", re.I)
+_BOLD_LEAD_RX = re.compile(r"^(\s*(?:[-*]\s+)?)(\*\*|__)([^*_\n]{1,40}?:?)\2(\s*:?\s+)(?=\S)")
+
+
+def strip_new_emphasis(original, rewritten):
+    """-> (rewritten without bold-only lines and reviewer-notes headings the original didn't have, and with the
+    bold taken off lead-ins it didn't have; list of changes). The text under such a heading stays: only the shape
+    is the rewrite's, the facts are the author's."""
+    had = {re.sub(r"\s+", " ", l.strip()).lower() for l in original.split("\n")}
+    had_leads = {m.group(3).strip(" :").lower() for l in original.split("\n") for m in [_BOLD_LEAD_RX.match(l)] if m}
+    changes, kept = [], []
+    for line in rewritten.split("\n"):
+        if re.sub(r"\s+", " ", line.strip()).lower() in had:
+            kept.append(line)
+        elif _NOTES_SECTION_RX.match(line) or (_BOLD_ONLY_RX.match(line) and _NOTES_LABEL_RX.match(line.strip(" *_:"))):
+            changes.append(f"heading the rewrite added: {line.strip()}")
+        elif _BOLD_ONLY_RX.match(line):             # a fact the rewrite put in bold keeps its words
+            m = _BOLD_ONLY_RX.match(line)
+            kept.append(line.replace(m.group(1), ""))
+            changes.append(f"bold line the rewrite added: {line.strip()}")
+        else:
+            m = _BOLD_LEAD_RX.match(line)
+            if m and m.group(3).strip(" :").lower() not in had_leads:
+                line = m.group(1) + m.group(3) + m.group(4) + line[m.end():]
+                changes.append(f"bold lead-in the rewrite added: {m.group(3).strip()}")
+            kept.append(line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip("\n"), changes
+
+
 # ---------- measurements ----------
 def words(t):
     return len(re.findall(r"\w+", t or ""))
@@ -462,9 +496,9 @@ def polish(repo, project, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-
         Rewrite this pull-request description so it reads like a long-time regular of this project wrote it.
         Match the house style below (title format, length near the median, the project's headings or none, how issues
         are referenced). Keep EVERY factual statement, number, command and test result from the original; do not add any
-        claim that isn't in the original or provable from the checkout (you may read the code). Add a short
-        "Note for reviewers" style call-out only if the original or the code shows a real trade-off or risky spot.
-        No emoji, no "This PR ..." openers, no filler words, no marketing tone. Do not add any AI or tool attribution
+        claim that isn't in the original or provable from the checkout (you may read the code). If the original or
+        the code shows a real trade-off or risky spot, say it in one plain sentence in the body; never add a bold
+        lead-in, a bold-only line or a notes section the original doesn't have. No emoji, no "This PR ..." openers, no filler words, no marketing tone. Do not add any AI or tool attribution
         (no "Generated with ..." footer, no AI Co-authored-by trailer); keep such a line only if the original has it.
         {'Required template sections: ' + str(heads) if heads else ''}
         Return the new title and body, a list of anything you removed (so the author can check), and the facts you kept.
@@ -480,18 +514,32 @@ def polish(repo, project, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-
     if added_attr:
         log(f"  dropped AI attribution the rewrite added: {added_attr}")
         out["removed"] = list(out["removed"]) + [f"AI attribution added by the rewrite: {a}" for a in added_attr]
+    body, shaped = strip_new_emphasis(parts["body"], body)
+    if shaped:
+        log(f"  undid formatting the rewrite added: {shaped}")
     body, restored = keep_required_lines(parts["body"], body, upstream_slug(repo))
     if restored:
         log(f"  restored required line(s) the rewrite dropped: {restored}")
+    # the notes must match the output: a reword the restore undid ("Fixes" became "Fix") did not happen
+    leads = {re.match(r"[-*\s]*(\**\w+)", r).group(1).strip("*").lower() for r in restored if re.match(r"[-*\s]*\**\w", r)}
+    removed = [r for r in out["removed"] if not any(l.strip() in r for l in restored)
+               and not any(re.search(rf"[\"'`“]{re.escape(w)}[\"'`”]", r, re.I) for w in leads)]
     txt = f"# {out['title']}\n\n{body.strip()}\n"
-    # carry the author's notes over, so the polished draft still has them, marked off
+    # carry the author's notes over, so the polished draft still has them, marked off; a `# Title` block before
+    # `# Body` lands in the notes too, and the new title is already on top
+    carried = parts["notes"]
+    if parts["title"]:
+        carried = re.sub(r"(?m)^#{1,4}\s+(pr\s+)?title\s*:?\s*\n(\s*\n)*`?" + re.escape(parts["title"]) + r"`?[ \t]*(\n|$)",
+                         "", carried, count=1, flags=re.I).strip("\n")
     # UTF-8 like find_draft reads it: under an 8-bit locale the locale codec can't encode the notes' "→" or CJK
-    open(newp, "w", encoding="utf-8").write(txt + (f"\n{NOTES_MARKER}\n\n{parts['notes']}\n" if parts["notes"] else ""))
-    notes = "\n".join(f"- removed: {r}" for r in out["removed"]) or "- nothing removed"
+    open(newp, "w", encoding="utf-8").write(txt + (f"\n{NOTES_MARKER}\n\n{carried}\n" if carried else ""))
+    notes = "\n".join([f"- removed: {r}" for r in removed] + [f"- undone: {s}" for s in shaped]
+                      + [f"- put back verbatim (the rewrite had changed or dropped it): {r}" for r in restored]) \
+        or "- nothing removed"
     open(os.path.join(repo, "PR_DRAFT.polish-notes.md"), "w", encoding="utf-8").write(f"# Polish notes\n\n{notes}\n\n## Facts kept\n\n"
                                                                     + "\n".join(f"- {k}" for k in out["kept_facts"]) + "\n")
     leftover = ai_tells(body, read_json(os.path.join(project_dir(project), "style.json"), {}), heads,
                         template_text(repo)[1])
-    log(f"wrote {newp} (original kept) · {len(out['removed'])} removals listed in PR_DRAFT.polish-notes.md · "
+    log(f"wrote {newp} (original kept) · {len(removed)} removals listed in PR_DRAFT.polish-notes.md · "
         f"remaining tells: {leftover or 'none'} · ${round(cost, 4)}")
     return newp

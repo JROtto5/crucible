@@ -751,6 +751,52 @@ class TestDraftSplit(unittest.TestCase):
         self.assertNotIn("why: because", seen[0])  # notes are never sent to be folded into the body
         self.assertEqual(R.split_draft(txt)["body"], "Fix a.")
 
+    def test_polish_adds_no_bold_notes_and_no_second_title(self):
+        # DRG-87, from work/next/bvh-947 (2026-11-11): a `# Title` / `# Body` draft came back with a bold
+        # "**Note for reviewers**" section the author never wrote (gkjohnson bans notes sections), the old
+        # `# Title` block repeated after the notes marker, and polish-notes saying "Fixes" became "Fix" while the
+        # restored output kept "Fixes".
+        d = make_repo({"a.js": "1\n"})
+        open(os.path.join(d, "PR_DRAFT.md"), "w").write(
+            "# Title\nWorkers: Copy the geometry buffers by default\n\n# Body\nFixes #947\n\n"
+            "`generate()` now copies the position.\n\nThe copy takes 44 ms; **`transferBuffers: true`** avoids it.\n")
+        seen, orig = [], S.claude
+
+        def fake(prompt, *a, **k):
+            seen.append(prompt)
+            return {"title": "Workers: Copy geometry buffers by default",
+                    "body": "Fix #947\n\n- Copy the position by default\n\n**Note for reviewers**\n"
+                            "The copy takes 44 ms; **`transferBuffers: true`** avoids it.\n\n"
+                            "**Risk:** none known.\n\n**Breaking: no more transfer by default**",
+                    "removed": ['"Fixes" became "Fix"', "nothing else"], "kept_facts": ["44 ms"]}, 0.0
+        S.claude = fake
+        try:
+            S.polish(d, "t__polish_bold", log=lambda *_: None)
+        finally:
+            S.claude = orig
+        txt = open(os.path.join(d, "PR_DRAFT.polished.md")).read()
+        self.assertNotIn("Note for reviewers", txt)
+        self.assertIn("\nRisk: none known.", txt)                         # a bold lead-in loses only its bold
+        self.assertIn("**`transferBuffers: true`**", txt)                # bold the author wrote mid-line stays
+        self.assertIn("\nBreaking: no more transfer by default\n", txt)  # a bold-only fact keeps its words
+        self.assertEqual(txt.count("Workers:"), 1, txt)                  # the new title, once, first
+        self.assertTrue(txt.startswith("# Workers: Copy geometry buffers by default\n"), txt)
+        self.assertNotIn(R.NOTES_MARKER, txt)                            # the title block was the only "note"
+        self.assertNotIn("Note for reviewers", seen[0].split("House style:")[0])   # the prompt no longer asks for one
+        notes = open(os.path.join(d, "PR_DRAFT.polish-notes.md")).read()
+        self.assertIn("Fixes #947", notes)                               # the restore is listed ...
+        self.assertNotIn('"Fixes" became "Fix"', notes)                  # ... and the undone change is not
+        self.assertIn("Note for reviewers", notes)                       # the strip is listed for the author
+        # a notes section the author did write is theirs to keep
+        open(os.path.join(d, "PR_DRAFT.md"), "w").write("Fix a.\n\n**Note for reviewers**\nslow path.\n")
+        S.claude = lambda *a, **k: ({"title": "Fix a", "body": "Fix a.\n\n**Note for reviewers**\nslow path.",
+                                     "removed": [], "kept_facts": []}, 0.0)
+        try:
+            S.polish(d, "t__polish_bold", log=lambda *_: None)
+        finally:
+            S.claude = orig
+        self.assertIn("**Note for reviewers**", open(os.path.join(d, "PR_DRAFT.polished.md")).read())
+
 
 class TestReviewLogic(unittest.TestCase):
     def test_honesty_caps(self):
