@@ -6611,7 +6611,8 @@ class TestNitTier(unittest.TestCase):
     def _run(self, nits_out, verdicts=None, nits=True, env=None, fail_batch=False, budget=None, findings=1, verify_cost=0.0,
              review_cost=0.0, verify_error=None, passes=1, repo_files=None, sweep_out=(), sweep_cost=0.0,
              sites_hold=(), finding_sites=None, blocking=1):
-        """-> (review.json, calls). `passes` > 1 splits the diff into that many review passes. The fake reviewer returns one important finding and `nits_out` as nits; the nit
+        """-> (review.json, calls). `passes` > 1 splits the diff into that many review passes. The fake reviewer returns
+        `findings` findings, the first `blocking` of them important and the rest medium, and `nits_out` as nits; the nit
         verifier answers `verdicts` (index -> (keep, confidence)), default keep/high for every nit."""
         from unittest import mock
         repo = make_repo(*(repo_files or ({"a.py": "x = 1\n"},
