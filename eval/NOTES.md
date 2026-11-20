@@ -1446,7 +1446,7 @@ budget is held for nit verification" (emdash 7, nebula 1), and 4 findings had a 
 11-18 Pickrate bug (blocking verification must come before the nit reserve); it is the next item. Neither costs the
 benchmark (unverified findings are kept), but users get blocking findings nobody checked.
 
-## 2026-11-20 Pickrate fix (0fad47f..67cb577): blocking findings verify against the whole budget
+### 2026-11-20 · Pickrate fix (0fad47f..67cb577): blocking findings verify against the whole budget
 
 Self-review round 34 asked what the change costs the nit tier, since blocking verification may now spend the nit
 reserve. `crucible eval --nits --no-write --budget 1.5 --cases nit- clean-` at 67cb577 (17 cases, $6.82, local):
