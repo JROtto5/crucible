@@ -1379,3 +1379,51 @@ judge.log and log-N.txt. 16 merged items on 11 kept items across 9 PRs (6 findin
 titles, with no file, line or severity, and no per-pass output was kept to rebuild them. The missing field is the
 `merged` entry (title, file, line, severity, source) that 7f087c1 added, so any run on 7f087c1 or later answers this
 as a read of review.json.
+
+### 2026-11-20 · R6's wrong-file misses at $0, and two verifier refutations that cost high items
+
+**Fix-site step (decision: not as a general step).** Read from R6's stored output (`results.details.json` sha256
+35747222e118…, each PR's kept review.json, golden). A deterministic step that turns every `path:line` a kept item's
+problem/fix/evidence names into an extra candidate (`also_at`) gives 341 extra candidates on the 25 PRs; 232 land on
+no golden item, and only 1 lands on a missed high item. Limited to items that sit in a doc or lockfile: 22
+candidates, the same 1 high item (apilix #0: lockfile -> `server/package.json`) and 9 near golden-false lows. So:
+- apilix #0 is the one real fix-site case: lockfile <-> manifest. A small sibling rule (a kept lockfile finding also
+  cites the manifest beside it) would carry it; worth ~0.6 points of macro high recall (1 of apilix's 11). Not built.
+- tp_152 #0 (the delete stub) is not a fix-site problem: the doc nit names `DeleteNoteCommand.java:35-37` but was
+  dropped by the nit verifier as "the stub predates this change". tp_152 #1 names `Model` with no line.
+
+**Two refutations.** All 36 R6 drops read by hand (12 findings, 24 nits). Two missed high items were raised and
+dropped at high confidence, each on a refutation that was right elsewhere in the same run:
+| refutation | wrong on | right on |
+|---|---|---|
+| "other code already does the same" | TechDebtMCP #0 (high): new `fs.stat` on the raw user path; the nit quoted CLAUDE.md's path rule and its own falsifier failed at HEAD. Also #6 (low, true): the new error echoes the path | k1LoW: "new method has no doc comment" (no method in the file has one) |
+| "that code predates this change" | tp_152: the delete stub, harmless before, loses data now that notes persist (doc site; matches only medium #29) | PROTRIDER: a docstring already stale at the base |
+
+Fix (review.py `NIT_REFUTATIONS_NOTE`, nit verifier only): the first refutation settles style and consistency only;
+a claim that quotes a written project rule is judged on whether the code the change adds follows it, as is a bug or
+security gap the change repeats; "predates" doesn't answer "this change makes old code reachable or harmful".
+
+A/B, re-verifying R6's 20 dropped nits (PR_DRAFT.md ones left out) with the stored items, `fresh`, same model
+(claude-sonnet-5-5) and batching per PR; repos cloned at each PR's head (`/tmp/claude-1000/r6an/reverify_nits.py`):
+| nit | old prompt (R6 + 4 rounds) | first wording (2) | **shipped wording (6)** | "sure refutation" wording (2) |
+|---|---|---|---|---|
+| TechDebtMCP:441 path rule (golden #0 high, tp) | 0/5 kept | 0/2 | **5/6** (5 verified) | 0/2 |
+| TechDebtMCP:445 error echoes path (#6 low, tp) | 0/5 | 0/2 | **5/6** | 0/2 |
+| k1LoW:76 no doc comment (style) | 0/5 | 0/2 | 4/6 disputed (low) | 1/2 disputed |
+| agents-config AGENTS.md:1 (style) | 0/5 | 0/2 | 2/6 disputed | 1/2 disputed |
+| tp_152 UserGuide:344 stub (#29 medium) | 2/5 disputed | 2/2 disputed | 1/2 disputed | 0/2 |
+| the other 15 | as before within a round's noise | | | |
+All 20, 2 rounds per arm: kept 16 (old) / 14 (first) / 22 (shipped) / 15 ("sure") of 40.
+Reading: the first wording made the verifier say "this change doesn't make the stub newly harmful" but changed no
+verdict. The shipped one tells it to read the quoted rule and judge the added line; in the rounds that kept 441 its
+evidence quotes CLAUDE.md. The "sure refutation" variant's two drops say "the premise isn't a project rule" (it
+never opened CLAUDE.md), so the phrase steered it back to the convention argument. n=6 on one item: the expected gain
+on the High view is ~5/6 of TechDebtMCP's one item, about +6 points of macro high recall, if run 7 behaves like the
+re-verify; the cost is 0-1 extra disputed low style nits per PR like k1LoW's, which land on no high golden item.
+Spend: $2.62 + $1.17 + $1.16 + $0.68 = $5.63.
+
+**Also seen in R6, not changed today:** 8 important findings shipped unverified because "the rest of the review
+budget is held for nit verification" (emdash 7, nebula 1), and 4 findings had a failed verifier call
+(`error_max_structured_output_retries`: apilix 2, translator-ingests, node-postgres, statswales). The first is the
+11-18 Pickrate bug (blocking verification must come before the nit reserve); it is the next item. Neither costs the
+benchmark (unverified findings are kept), but users get blocking findings nobody checked.

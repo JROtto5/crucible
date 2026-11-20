@@ -489,6 +489,28 @@ def nit_sweep(sweep_chunks, raised, repo, model, budget, project, sha, base, rul
     return out_nits, {"passes": ran, "of": len(sweep_chunks), "failed": failed, "cost_usd": round(budget.own, 4)}
 
 
+# Two refutations that settle a style nit but not a bug. ReviewBench run 6 (eval/NOTES 2026-11-20): two of its 14
+# missed high-severity issues were raised as nits and dropped on them, both at high confidence. TechDebtMCP: "new
+# fs.stat call gets the user path without isAbsolute/resolve" quoted the CLAUDE.md rule, and its own falsification
+# test failed at HEAD, but it was dropped as "other handlers also do this; consistent with existing convention".
+# tp_152: "`note d-` is documented as deleting a note, but DeleteNoteCommand does nothing" was dropped as "the stub
+# predates this change", although the change is what made notes persist, so the stub now loses user data. The same
+# two refutations were right on a missing doc comment no method in the file has, and on a docstring already stale at
+# the base, so the note keeps them for consistency and for the old code's own text. Re-verifying R6's 20 dropped nits
+# (2 rounds, then 4 more on the 3 PRs it moved): the rule nit kept 5 of 6 (0 of 5 before), its true error-message
+# twin 5 of 6; a doc-comment nit on a file with none came back disputed (kept low) 4 of 6. A wording that called the
+# style case "a sure refutation" lost the rule nit 2 of 2: the verifier then never opened CLAUDE.md.
+NIT_REFUTATIONS_NOTE = """\
+        Two refutations that are not enough on their own. "Other code already does the same" disproves a claim about
+        consistency or style only. When the claim quotes a rule the project wrote down (CONTRIBUTING, CLAUDE.md,
+        AGENTS.md or the like: read that rule), the question is whether the code this change adds follows it: a new
+        call or line that breaks the rule is worth a comment even when its neighbours break it too, because the
+        change adds one more. The same holds for a bug or a security gap the change repeats. "That code predates
+        this change" disproves a claim about that code alone. When the claim is that this change makes old code
+        reachable or harmful (it now stores, calls, routes or exposes what the old code mishandles), check that.
+        """
+
+
 def nit_verify_prompt(batch, base="", added=None):
     """`base`/`added`: change_scope()'s range line goes after the instructions, and each claim on a line the range
     adds says so. Without a base the prompt is as it was (cached verdicts still match)."""
@@ -508,9 +530,10 @@ def nit_verify_prompt(batch, base="", added=None):
         or of an existing helper needs both sites read, and holds only if they really do the same thing.
         A claim that a doc, docstring or comment is stale needs that line and the code it describes read at HEAD;
         it holds only if the text now says something the code doesn't do (not if it is merely brief).
+        """).format(n=len(batch)) + textwrap.dedent(NIT_REFUTATIONS_NOTE) + textwrap.dedent("""\
         Do not modify files. Return one verdict per claim, by its [index].
 
-        """).format(n=len(batch)) + (change_scope(base) + "\n\n" if base else "") + claims + "\n"
+        """) + (change_scope(base) + "\n\n" if base else "") + claims + "\n"
 
 
 def verify_nits(nits, codes, repo, budget, model, fresh=False, drop_any=True, base="", added=None):

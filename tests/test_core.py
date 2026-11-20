@@ -1,4 +1,4 @@
-import atexit, json, os, re, shlex, shutil, subprocess, sys, tempfile, time, unittest
+import atexit, json, os, re, shlex, shutil, subprocess, sys, tempfile, textwrap, time, unittest
 from unittest import mock as _mock  # noqa: F401  (makes unittest.mock importable as an attribute under any test order)
 
 # Every temp dir the suite makes (fixture repos, clones, homes, and those of crucible subprocesses through TMPDIR)
@@ -6786,6 +6786,25 @@ class TestNitTier(unittest.TestCase):
         self.assertNotIn("a line this change adds", V.nit_verify_prompt([(f, "code")]))
         self.assertNotIn("is one this range adds", V.change_scope("abc", f, {"a.py": {4}, "b.py": {3}}))
         self.assertIn("a.py:3 is one this range adds", V.change_scope("abc", f, {"a.py": {3}}))
+
+    def test_nit_verifier_is_told_which_refutations_settle_only_style(self):
+        # R6: a rule-quoting security nit dropped as "consistent with existing convention", and a stub made harmful by
+        # the change dropped as "predates this change". Falsifier: the A/B in eval/NOTES 2026-11-20 (kept 5/6 vs 0/5). The note sits after the checking rules, before the claims and
+        # the scope line, and the finding verifier's prompt is unchanged.
+        f = self._f("new fs call takes the raw user path", 3)
+        p = V.nit_verify_prompt([(f, "code")], "abc", {"a.py": {3}})
+        note = textwrap.dedent(V.NIT_REFUTATIONS_NOTE)
+        self.assertEqual(p.count(note), 1)
+        for words in ('"Other code already does the same" disproves a claim about\nconsistency or style only',
+                      "a rule the project wrote down", "whether the code this change adds follows it",
+                      "even when its neighbours break it too", '"That code predates\nthis change"',
+                      "makes old code\nreachable or harmful"):
+            self.assertIn(words, note)
+        self.assertLess(p.index("merely brief"), p.index(note))
+        self.assertLess(p.index(note), p.index("Do not modify files"))
+        self.assertLess(p.index("Do not modify files"), p.index(V.change_scope("abc")))
+        self.assertLess(p.index(V.change_scope("abc")), p.index("[0] new fs call"))
+        self.assertNotIn("Other code already does the same", V.verify_prompt(f, "code"))
 
     def test_swept_nit_sites_are_filtered_like_the_reviewers(self):
         files = ({"a.py": "x = 1\n", "b.py": "y = 1\n"},
