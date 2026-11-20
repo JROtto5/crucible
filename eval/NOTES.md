@@ -1370,3 +1370,5 @@ Reading:
 - Next for #4 (75.7) and #3 (78.7): the wrong-file bucket (tp_152 x2, apilix #0) via a fix-site step after
   verification, measured at $0 on this run's stored output first; then the switch-without-flush sibling sites
   (apilix #28/#29/#35), which an also_at from the store.tsx finding would carry.
+
+**PKCE pair on the 11-18 nightly (6eb3179, full 37-case run 2026-11-18 17:11 ET; read from eval/RESULTS.md:32,47 on 11-20 00:1x ET):** `py-pkce-unchecked` caught (3 kept, 0 nits, $0.43). `clean-py-pkce-enforced`: **1 false blocking** (2 kept, $0.46), and it was the run's only false blocking. Against the 11-17 18:08 re-run (caught / 0 blocking), the bug arm held and the clean arm flipped. That is n=1 per arm per night, so it's variance-sized and too few to quote. The 11-19 full eval reported 0 false blocking on 9 clean cases (line ~1322); per-case output for that run was not written to RESULTS.md, so the clean twin's 11-19 state is read from the aggregate only.
