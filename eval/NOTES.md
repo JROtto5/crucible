@@ -1445,3 +1445,12 @@ budget is held for nit verification" (emdash 7, nebula 1), and 4 findings had a 
 (`error_max_structured_output_retries`: apilix 2, translator-ingests, node-postgres, statswales). The first is the
 11-18 Pickrate bug (blocking verification must come before the nit reserve); it is the next item. Neither costs the
 benchmark (unverified findings are kept), but users get blocking findings nobody checked.
+
+## 2026-11-20 Pickrate fix (0fad47f..67cb577): blocking findings verify against the whole budget
+
+Self-review round 34 asked what the change costs the nit tier, since blocking verification may now spend the nit
+reserve. `crucible eval --nits --no-write --budget 1.5 --cases nit- clean-` at 67cb577 (17 cases, $6.82, local):
+nit cases 22/22 planted issues (7059200 run: 22/22), false blocking 0 on 9 clean cases (same), 1 on nit cases
+(nit-py-reliability; 7059200: maintainability-cross), nits kept 69 (21 on clean cases; was 23), dropped 6. Every case
+cost $0.19-$0.58 of its $1.50, so no case comes near the reserve and the eval can't move either way; the cost shows only
+on budget-capped ReviewBench PRs (run 2's PRs 1 and 13 are the shape to watch on the next run).
