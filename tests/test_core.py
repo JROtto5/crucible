@@ -6788,9 +6788,10 @@ class TestNitTier(unittest.TestCase):
         self.assertIn("a.py:3 is one this range adds", V.change_scope("abc", f, {"a.py": {3}}))
 
     def test_nit_verifier_is_told_which_refutations_settle_only_style(self):
-        # R6: a rule-quoting security nit dropped as "consistent with existing convention", and a stub made harmful by
-        # the change dropped as "predates this change". Falsifier: the A/B in eval/NOTES 2026-11-20 (kept 5/6 vs 0/5). The note sits after the checking rules, before the claims and
-        # the scope line, and the finding verifier's prompt is unchanged.
+        # R6: a rule-quoting security nit dropped as "consistent with existing convention", and a stub made harmful
+        # by the change dropped as "predates this change" (eval/NOTES 2026-11-20 has the A/B).
+        # The note sits after the checking rules and before the scope line and the claims; the finding verifier's
+        # prompt doesn't get it.
         f = self._f("new fs call takes the raw user path", 3)
         p = V.nit_verify_prompt([(f, "code")], "abc", {"a.py": {3}})
         note = textwrap.dedent(V.NIT_REFUTATIONS_NOTE)

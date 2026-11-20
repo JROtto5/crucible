@@ -1,0 +1,10 @@
+{
+ "kind": "nit",
+ "split": "build",
+ "source": "class of ReviewBench run 6's TechDebtMCP miss (a new line breaking a rule the project's guide states, beside older lines that break it too; the nit was dropped as 'consistent with existing convention'); written from the class, not the PR",
+ "message": "notes: refuse notes over 1 MB",
+ "issues": [
+  {"name": "abs-path-in-new-error", "file": "notes/handlers.py", "lines": [19],
+   "keywords": ["absolute", "CLAUDE.md", "filesystem path", "leak", "full path", "server path", "real path"]}
+ ]
+}

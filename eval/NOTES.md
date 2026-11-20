@@ -1420,7 +1420,19 @@ evidence quotes CLAUDE.md. The "sure refutation" variant's two drops say "the pr
 never opened CLAUDE.md), so the phrase steered it back to the convention argument. n=6 on one item: the expected gain
 on the High view is ~5/6 of TechDebtMCP's one item, about +6 points of macro high recall, if run 7 behaves like the
 re-verify; the cost is 0-1 extra disputed low style nits per PR like k1LoW's, which land on no high golden item.
-Spend: $2.62 + $1.17 + $1.16 + $0.68 = $5.63.
+Spend: re-verify $2.62 + $1.17 + $1.16 + $0.68 = $5.63; eval $6.60 + A/B $1.42; self-review rounds below.
+
+**Eval** (self-review round 1 asked for it). New build nit case `nit-py-rule-new-instance` (40 cases): a project
+guide (CLAUDE.md) forbids absolute paths in error messages, an older message in the same function already breaks
+it, and the change adds a size cap whose new error does too. Written from the class, not from the PR. Old code
+(1cd5bb4) vs HEAD, `crucible eval --nits --budget 1.5 --cases nit-py-rule-new-instance`, 2 rounds each: found 2/2
+vs 2/2, 0 false blocking in both, $0.36-0.40 vs $0.29-0.37. The reviewer raises it as a kept medium finding in every
+round, so the nit verifier never judges it: the case is at the ceiling and guards the class, not this note.
+`crucible eval --nits --no-write --budget 1.5 --cases nit- clean-` at HEAD (17 cases, $6.60): nit cases 22/22
+planted issues (11-19 full run: 19/21 on the 7 older ones), false blocking 0 on 9 clean cases (7 build, 2 holdout),
+1 on nit cases (maintainability-cross; the 11-19 A/B had it in 2-3 of 6 runs). Nits on clean cases 23 on 9 (11-18:
+13 on 7); none of them is a rule-quoting or "predates" nit (tests, docstrings, edge cases), so the rise isn't read
+as this change; no old-code arm was run on the clean cases.
 
 **Also seen in R6, not changed today:** 8 important findings shipped unverified because "the rest of the review
 budget is held for nit verification" (emdash 7, nebula 1), and 4 findings had a failed verifier call

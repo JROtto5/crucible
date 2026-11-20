@@ -513,7 +513,8 @@ NIT_REFUTATIONS_NOTE = """\
 
 def nit_verify_prompt(batch, base="", added=None):
     """`base`/`added`: change_scope()'s range line goes after the instructions, and each claim on a line the range
-    adds says so. Without a base the prompt is as it was (cached verdicts still match)."""
+    adds says so. Without a base neither is added. NIT_REFUTATIONS_NOTE is always in (it changed every prompt, so
+    verdicts cached before 2026-11-20 miss once)."""
     # a fact from the diff, not the verifier's own git reading, which in R5 often looked at the wrong base
     mark = lambda f: ", a line this change adds" if base and added is not None and f["line"] in added.get(f["file"], ()) else ""
     claims = "\n\n".join(
