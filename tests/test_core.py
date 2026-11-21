@@ -751,6 +751,125 @@ class TestDraftSplit(unittest.TestCase):
         self.assertNotIn("why: because", seen[0])  # notes are never sent to be folded into the body
         self.assertEqual(R.split_draft(txt)["body"], "Fix a.")
 
+    def test_polish_adds_no_bold_notes_and_no_second_title(self):
+        # DRG-87, from work/next/bvh-947 (2026-11-11): a `# Title` / `# Body` draft came back with a bold
+        # "**Note for reviewers**" section the author never wrote (gkjohnson bans notes sections), the old
+        # `# Title` block repeated after the notes marker, and polish-notes saying "Fixes" became "Fix" while the
+        # restored output kept "Fixes".
+        d = make_repo({"a.js": "1\n"})
+        open(os.path.join(d, "PR_DRAFT.md"), "w").write(
+            "# Title\nWorkers: Copy the geometry buffers by default\n\n# Body\nFixes #947\n\n"
+            "`generate()` now copies the position.\n\nThe copy takes 44 ms; **`transferBuffers: true`** avoids it.\n")
+        seen, orig = [], S.claude
+
+        def fake(prompt, *a, **k):
+            seen.append(prompt)
+            return {"title": "Workers: Copy geometry buffers by default",
+                    "body": "Fix #947\n\n- Copy the position by default\n\n**Note for reviewers**\n"
+                            "The copy takes 44 ms; **`transferBuffers: true`** avoids it.\n\n"
+                            "**Risk:** none known.\n\n**Breaking: no more transfer by default**",
+                    "removed": ['"Fixes" became "Fix"', "nothing else"], "kept_facts": ["44 ms"]}, 0.0
+        S.claude = fake
+        try:
+            S.polish(d, "t__polish_bold", log=lambda *_: None)
+        finally:
+            S.claude = orig
+        txt = open(os.path.join(d, "PR_DRAFT.polished.md")).read()
+        self.assertNotIn("Note for reviewers", txt)
+        self.assertIn("\nRisk: none known.", txt)                         # a bold lead-in loses only its bold
+        self.assertIn("**`transferBuffers: true`**", txt)                # bold the author wrote mid-line stays
+        self.assertIn("\nBreaking: no more transfer by default\n", txt)  # a bold-only fact keeps its words
+        self.assertEqual(txt.count("Workers:"), 1, txt)                  # the new title, once, first
+        self.assertTrue(txt.startswith("# Workers: Copy geometry buffers by default\n"), txt)
+        self.assertNotIn(R.NOTES_MARKER, txt)                            # the title block was the only "note"
+        self.assertNotIn("Note for reviewers", seen[0].split("House style:")[0])   # the prompt no longer asks for one
+        notes = open(os.path.join(d, "PR_DRAFT.polish-notes.md")).read()
+        self.assertIn("Fixes #947", notes)                               # the restore is listed ...
+        self.assertNotIn('"Fixes" became "Fix"', notes)                  # ... and the undone change is not
+        self.assertIn("Note for reviewers", notes)                       # the strip is listed for the author
+        # a notes section the author did write is theirs to keep
+        open(os.path.join(d, "PR_DRAFT.md"), "w").write("Fix a.\n\n**Note for reviewers**\nslow path.\n")
+        S.claude = lambda *a, **k: ({"title": "Fix a", "body": "Fix a.\n\n**Note for reviewers**\nslow path.",
+                                     "removed": [], "kept_facts": []}, 0.0)
+        try:
+            S.polish(d, "t__polish_bold", log=lambda *_: None)
+        finally:
+            S.claude = orig
+        self.assertIn("**Note for reviewers**", open(os.path.join(d, "PR_DRAFT.polished.md")).read())
+        # review42 (CR-d9727a93): polish passes the repo slug, so this repo's issue URL counts as "#947"
+        open(os.path.join(d, "PR_DRAFT.md"), "w").write("Fixes #947\n\nCopy.\n")
+        S.claude = lambda *a, **k: ({"title": "Copy", "body": "Copy; see https://github.com/o/r/issues/947 for the fix.",
+                                     "removed": ['"Fixes" became "fix"'], "kept_facts": []}, 0.0)
+        orig_slug, S.upstream_slug = S.upstream_slug, lambda *_: "o/r"
+        try:
+            S.polish(d, "t__polish_bold", log=lambda *_: None)
+        finally:
+            S.claude, S.upstream_slug = orig, orig_slug
+        self.assertIn('"Fixes" became "fix" (the required line was put back',
+                      open(os.path.join(d, "PR_DRAFT.polish-notes.md")).read())
+
+
+    def test_strip_new_emphasis_let_through(self):
+        # review37 on DRG-87 (CR-bb3b9165, CR-5fde51b7, CR-5e503f3f, CR-d77a3be8): what the strip must leave alone
+        keep = lambda o, r, h=(): S.strip_new_emphasis(o, r, h)[0]
+        # a heading the PR template requires, even if the author's draft lacked it
+        self.assertIn("## Notes for reviewers", keep("Fixes a bug.\n", "## Summary\n\nFixes a bug.\n\n## Notes for reviewers\n\nnone",
+                                                     ["Summary", "Notes for reviewers"]))
+        self.assertNotIn("## Notes", keep("Fix a.\n", "## Notes\n\nFix a."))       # ... but not one nobody asked for
+        # the author's bold moved to a line start, or its label punctuation changed
+        self.assertIn("**`transferBuffers: true`** avoids", keep("The copy takes 44 ms; **`transferBuffers: true`** avoids it.",
+                                                                "**`transferBuffers: true`** avoids the 44 ms copy."))
+        self.assertIn("**Risk:** none", keep("The copy is slow. **Risk:** none known.", "**Risk:** none known."))
+        self.assertIn("**Risk:** none", keep("**Risk.** none known.", "**Risk:** none known."))
+        self.assertIn("**Breaking: no more transfer.**", keep("**Breaking: no more transfer**", "**Breaking: no more transfer.**"))
+        # dunder identifiers are not bold
+        self.assertEqual(keep("- `__init__` takes the args", "- __init__ now takes the args"), "- __init__ now takes the args")
+        self.assertEqual(keep("Run `__main__`.", "__main__"), "__main__")
+        # fenced code is never touched
+        fenced = "```md\n**Risk:** none\n## Notes\n```"
+        self.assertEqual(keep("x", fenced), fenced)
+        # still stripped: new bold lead-ins and new bold-only lines
+        self.assertEqual(keep("x", "**Risk:** none known."), "Risk: none known.")
+        self.assertEqual(keep("x", "**Breaking change**"), "Breaking change")
+        # review38 on DRG-87 (CR-b3bef7e8): a required section the rewrite wrote as a bold line keeps its label
+        self.assertIn("**Notes for reviewers**", keep("x", "**Notes for reviewers**\nslow", ["Notes for reviewers"]))
+        # CR-3bfffb4e: a fence closes only on the same char, at least as long, with nothing after it
+        nested = "````md\n```\n**Risk:** y\n```\n**Risk:** z\n````"
+        self.assertEqual(keep("x", nested), nested)
+        self.assertEqual(keep("x", "```\n```python\n**Risk:** y\n```\n**Risk:** z"), "```\n```python\n**Risk:** y\n```\nRisk: z")
+        self.assertEqual(keep("x", "````md\n```\n````\n**Risk:** y"), "````md\n```\n````\nRisk: y")
+        # CR-66a3c1ef: a capitalised word in __ __ is bold, not a dunder
+        self.assertNotIn("__Notes__", keep("x", "__Notes__\nslow"))
+        self.assertEqual(keep("x", "__Risk__: none"), "Risk: none")
+        # review39 (CR-de694dfa): a fence inside a nested list item is still code
+        nested_li = "- a\n  - b\n\n    ```md\n    **Risk:** y\n    ```\n**Risk:** z"
+        self.assertEqual(keep("x", nested_li), nested_li.replace("**Risk:** z", "Risk: z"))
+        # CR-23314803: inline ```x``` opens no fence, so what follows is still checked
+        self.assertEqual(keep("x", "```foo``` is handled.\n**Risk:** y"), "```foo``` is handled.\nRisk: y")
+
+    def test_polish_notes_keep_bundled_removals(self):
+        # CR-29cb8385: a removal entry that also names a restored line must not vanish from the notes
+        u = S._reword_undone
+        self.assertIs(u('"Fixes" became "Fix"', ["Fixes #947"]), True)
+        self.assertIs(u('"Fixes #947"', ["Fixes #947"]), True)
+        # CR-7c9d096d: a reword note quoting the whole restored line was undone in full too
+        self.assertIs(u('"Fixes #947" became "Fix #947"', ["Fixes #947"]), True)
+        self.assertIs(u('Reworded "Fixes #947" to "Fix #947"', ["Fixes #947"]), True)
+        self.assertIs(u("Changed 'Fixes #947' to 'Fix #947'", ["- Fixes #947"]), True)
+        # review39 (CR-7f278c8e): the reworded text is still in the body next to the put-back line, so it stands
+        body = "Fixes #947\n\nCopy buffers by default; fixes #947.\n\nAdd copy."
+        self.assertEqual(u('"Fixes #947" became "Copy buffers by default; fixes #947."', ["Fixes #947"], body), "partly")
+        self.assertIs(u('"Fixes #947" became "Fix #947"', ["Fixes #947"], "Fixes #947\n\nAdd copy."), True)
+        # review40 (CR-4ef64f32): "fix" in other prose is not the reword
+        self.assertIs(u('"Fixes" became "Fix"', ["Fixes #947"], "Fixes #947\n\nThis fix copies the buffers."), True)
+        self.assertEqual(u('"Fixes" became "Fix"', ["Fixes #947"], "Fixes #947\n\nFix #947 by copying."), "partly")
+        # review41 (CR-db629bc8): this repo's issue URL and "#947" are the same issue
+        self.assertEqual(u('"Fixes" became "Fix"', ["Fixes #947"], "Fixes #947\n\nFix https://github.com/o/r/issues/947 by copying.",
+                           "o/r"), "partly")
+        self.assertEqual(u('"Fixes #947" line and the sentence saying the fix is backported to 2.3', ["Fixes #947"]), "partly")
+        self.assertIs(u('dropped the aside "Closes #120" and kept the retry loop', ["Closes #12"]), False)
+        self.assertIs(u('dropped the note that the "related" cache path is gone', ["Related issue: #5"]), False)
+
 
 class TestReviewLogic(unittest.TestCase):
     def test_honesty_caps(self):

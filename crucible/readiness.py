@@ -42,14 +42,15 @@ NOTES_MARKER_RX = re.compile(r"^\s*<!--\s*crucible:\s*notes\s*-->\s*$", re.I)
 NOTES_MARKER = "<!-- crucible: notes -->"
 
 
-def _unfenced(lines):
+def _unfenced(lines, fence_rx=FENCE_RX):
     """Indexes of lines outside fenced code blocks (CommonMark: a fence closes on the same char, at least as long).
+    Fence lines themselves count as inside. `fence_rx`: style.strip_new_emphasis passes one that allows any indent.
 
     Deliberately simple: fences indented 4+ spaces (e.g. inside list items) aren't recognised, and an unclosed
     fence runs to the end of the file, so markers after it are not seen and the draft is judged as all body."""
     out, fence = [], None
     for i, l in enumerate(lines):
-        m = FENCE_RX.match(l)
+        m = fence_rx.match(l)
         if fence is None:
             if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):  # "```x``` ..." is inline code, not a fence
                 fence = m.group(1)
