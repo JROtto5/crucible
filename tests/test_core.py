@@ -849,6 +849,9 @@ class TestDraftSplit(unittest.TestCase):
         body = "Fixes #947\n\nCopy buffers by default; fixes #947.\n\nAdd copy."
         self.assertEqual(u('"Fixes #947" became "Copy buffers by default; fixes #947."', ["Fixes #947"], body), "partly")
         self.assertIs(u('"Fixes #947" became "Fix #947"', ["Fixes #947"], "Fixes #947\n\nAdd copy."), True)
+        # review40 (CR-4ef64f32): "fix" in other prose is not the reword
+        self.assertIs(u('"Fixes" became "Fix"', ["Fixes #947"], "Fixes #947\n\nThis fix copies the buffers."), True)
+        self.assertEqual(u('"Fixes" became "Fix"', ["Fixes #947"], "Fixes #947\n\nFix #947 by copying."), "partly")
         self.assertEqual(u('"Fixes #947" line and the sentence saying the fix is backported to 2.3', ["Fixes #947"]), "partly")
         self.assertIs(u('dropped the aside "Closes #120" and kept the retry loop', ["Closes #12"]), False)
         self.assertIs(u('dropped the note that the "related" cache path is gone', ["Related issue: #5"]), False)

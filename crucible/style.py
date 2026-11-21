@@ -527,10 +527,18 @@ def _reword_undone(entry, restored, body=""):
             return True
         m = re.fullmatch(rf"(?i)(?:reworded |changed )?{_Q}(?:{olds}){_Q}\s*"
                          rf"(?:became|->|→|to|changed to|was changed to|reworded to)\s*{_Q}([^\"'`”’]+){_Q}", e)
-        if m:                                       # the put-back lines don't count: "Fix" is inside "Fixes #947"
-            rest = "\n".join(l for l in body.split("\n") if l.strip() not in {x.strip() for x in restored})
-            new = re.escape(m.group(1).strip().rstrip("."))
-            return "partly" if new and re.search(rf"(?i)(?<!\w){new}(?!\w)", rest) else True
+        if m:
+            # it stands only where the new text is a whole line, or sits on a line linking the same issue: a word
+            # like "fix" in other prose isn't the reword, and the put-back line itself doesn't count
+            new = m.group(1).strip().rstrip(".").lower()
+            refs = _issue_refs(line)
+            for l in body.split("\n"):
+                t = re.sub(r"^[-*\s]+", "", l.strip()).rstrip(".").lower()
+                if l.strip() == line or not new:
+                    continue
+                if t == new or (refs and refs & _issue_refs(l) and re.search(rf"(?<!\w){re.escape(new)}(?!\w)", t)):
+                    return "partly"
+            return True
     if any(re.search(rf"(?<![\w#]){re.escape(r.strip())}(?![\w])", entry) for r in restored if r.strip()):
         return "partly"
     return False
