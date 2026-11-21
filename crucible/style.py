@@ -51,14 +51,14 @@ def strip_new_attribution(original, rewritten):
 # gkjohnson bans notes sections outright (DRG-87).
 # Let through (tests/test_core.py test_strip_new_emphasis_let_through): any bold span the author wrote anywhere,
 # even moved to a line start or with its label's punctuation changed ("**Risk.**" -> "**Risk:**"); a heading the
-# repo's PR template requires ("## Notes for reviewers"); `__dunder__` identifiers ("__init__ takes", "__main__");
-# anything inside a ``` / ~~~ fence.
+# repo's PR template requires ("## Notes for reviewers", or the same label as a bold line); lowercase `__dunder__`
+# identifiers ("__init__ takes", "__main__"); anything inside a ``` / ~~~ fence (CommonMark closing rules).
 _BOLD_ONLY_RX = re.compile(r"^\s*(\*\*|__)[^*_\n]+?\1\s*:?\s*$")
 _NOTES_SECTION_RX = re.compile(r"^#{1,6}\s+(notes?|notes? (for|to) (the )?reviewers?|reviewer'?s? notes|call-?outs?)\s*:?\s*$", re.I)
 _NOTES_LABEL_RX = re.compile(r"^(notes?|notes? (for|to) (the )?reviewers?|reviewer'?s? notes|call-?outs?|risks?|trade-?offs?)$", re.I)
 _BOLD_LEAD_RX = re.compile(r"^(\s*(?:[-*]\s+)?)(\*\*|__)([^*_\n]{1,40}?:?)\2(\s*:?\s+)(?=\S)")
 _BOLD_SPAN_RX = re.compile(r"(\*\*|__)([^*_\n]+?)\1")
-_FENCE_RX = re.compile(r"^\s*(```|~~~)")
+_FENCE_RX = re.compile(r"^\s{0,3}(`{3,}|~{3,})(.*)$")
 
 
 def _bold_key(t):
@@ -66,7 +66,7 @@ def _bold_key(t):
 
 
 def _is_dunder(delim, inner):
-    return delim == "__" and re.fullmatch(r"\w+", inner.strip()) is not None
+    return delim == "__" and re.fullmatch(r"[a-z_][a-z0-9_]*", inner.strip()) is not None   # "__init__", not "__Notes__"
 
 
 def strip_new_emphasis(original, rewritten, keep_heads=()):
@@ -79,10 +79,14 @@ def strip_new_emphasis(original, rewritten, keep_heads=()):
     changes, kept, fence = [], [], None
     for line in rewritten.split("\n"):
         f = _FENCE_RX.match(line)
-        if fence or f:
+        if fence:                                   # CommonMark: closes on the same char, at least as long, bare
             kept.append(line)
-            if f and (fence is None or f.group(1) == fence):
-                fence = None if fence else f.group(1)
+            if f and f.group(1)[0] == fence[0] and len(f.group(1)) >= len(fence) and not f.group(2).strip():
+                fence = None
+            continue
+        if f and not (f.group(1)[0] == "`" and "`" in f.group(2)):    # "```x```" is inline code, not a fence
+            kept.append(line)
+            fence = f.group(1)
             continue
         only = _BOLD_ONLY_RX.match(line)
         inner = line.strip().strip(":").strip()[2:-2] if only else ""
@@ -93,7 +97,7 @@ def strip_new_emphasis(original, rewritten, keep_heads=()):
                 kept.append(line)
             else:
                 changes.append(f"heading the rewrite added: {line.strip()}")
-        elif only and (_is_dunder(only.group(1), inner) or _bold_key(inner) in had_bold):
+        elif only and (_is_dunder(only.group(1), inner) or _bold_key(inner) in had_bold or norm_heading(inner) in keep):
             kept.append(line)
         elif only and _NOTES_LABEL_RX.match(line.strip(" *_:")):
             changes.append(f"heading the rewrite added: {line.strip()}")
@@ -522,9 +526,10 @@ def _reword_undone(entry, restored):
     for r in restored:
         line = r.strip()
         lead = re.match(r"[-*\s]*\**(\w+)", line)
+        olds = "|".join(re.escape(o) for o in {line, re.sub(r"^[-*\s]+", "", line)} | ({lead.group(1)} if lead else set()))
         if re.sub(_Q, "", e).strip().lower() in (line.lower(), re.sub(r"^[-*\s]+", "", line).lower()):
             return True
-        if lead and re.fullmatch(rf"(?i)(?:reworded |changed )?{_Q}{re.escape(lead.group(1))}{_Q}\s*"
+        if re.fullmatch(rf"(?i)(?:reworded |changed )?{_Q}(?:{olds}){_Q}\s*"
                                  rf"(?:became|->|→|to|changed to|was changed to|reworded to)\s*{_Q}[^\"'`”’]+{_Q}", e):
             return True
     if any(re.search(rf"(?<![\w#]){re.escape(r.strip())}(?![\w])", entry) for r in restored if r.strip()):

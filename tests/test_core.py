@@ -820,12 +820,26 @@ class TestDraftSplit(unittest.TestCase):
         # still stripped: new bold lead-ins and new bold-only lines
         self.assertEqual(keep("x", "**Risk:** none known."), "Risk: none known.")
         self.assertEqual(keep("x", "**Breaking change**"), "Breaking change")
+        # review38 on DRG-87 (CR-b3bef7e8): a required section the rewrite wrote as a bold line keeps its label
+        self.assertIn("**Notes for reviewers**", keep("x", "**Notes for reviewers**\nslow", ["Notes for reviewers"]))
+        # CR-3bfffb4e: a fence closes only on the same char, at least as long, with nothing after it
+        nested = "````md\n```\n**Risk:** y\n```\n**Risk:** z\n````"
+        self.assertEqual(keep("x", nested), nested)
+        self.assertEqual(keep("x", "```\n```python\n**Risk:** y\n```\n**Risk:** z"), "```\n```python\n**Risk:** y\n```\nRisk: z")
+        self.assertEqual(keep("x", "````md\n```\n````\n**Risk:** y"), "````md\n```\n````\nRisk: y")
+        # CR-66a3c1ef: a capitalised word in __ __ is bold, not a dunder
+        self.assertNotIn("__Notes__", keep("x", "__Notes__\nslow"))
+        self.assertEqual(keep("x", "__Risk__: none"), "Risk: none")
 
     def test_polish_notes_keep_bundled_removals(self):
         # CR-29cb8385: a removal entry that also names a restored line must not vanish from the notes
         u = S._reword_undone
         self.assertIs(u('"Fixes" became "Fix"', ["Fixes #947"]), True)
         self.assertIs(u('"Fixes #947"', ["Fixes #947"]), True)
+        # CR-7c9d096d: a reword note quoting the whole restored line was undone in full too
+        self.assertIs(u('"Fixes #947" became "Fix #947"', ["Fixes #947"]), True)
+        self.assertIs(u('Reworded "Fixes #947" to "Fix #947"', ["Fixes #947"]), True)
+        self.assertIs(u("Changed 'Fixes #947' to 'Fix #947'", ["- Fixes #947"]), True)
         self.assertEqual(u('"Fixes #947" line and the sentence saying the fix is backported to 2.3', ["Fixes #947"]), "partly")
         self.assertIs(u('dropped the aside "Closes #120" and kept the retry loop', ["Closes #12"]), False)
         self.assertIs(u('dropped the note that the "related" cache path is gone', ["Related issue: #5"]), False)
