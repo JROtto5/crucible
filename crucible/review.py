@@ -771,18 +771,16 @@ def clean_sites(f, nlines):
 
 # Expression sites (--nits, $0): ReviewBench run 6 missed a high issue at a third route that repeats `baseUrl =
 # url.origin`, the expression a kept finding quoted on its own line in two other routes; the finding's text even named
-# the third route, but its also_at was empty. Measured on run 6's stored reviews (eval/NOTES 2026-11-21): quoted
-# expressions on an added line within 3 lines of the item's own, the first added line repeating one in each OTHER
-# changed file, bare names and expressions in more than 3 other files left out, each site swept once per review: 27 sites on 9 of 25 PRs, reaching 2 missed high
-# issues and 1 missed medium; 17 land on no known issue. Without the last three rules, 136 sites and the same 2 high.
-# Every swept site goes to the verifier with the reviewer's own also_at (sites_note) and is reported only if it holds
-# there, so a wrong site costs verifier tokens, not a finding.
+# the third route, but its also_at was empty. Each rule below was measured on run 6's stored reviews before it was
+# kept (sites swept, missed issues reached, sites on no known issue: eval/NOTES 2026-11-21). Every swept site goes to
+# the verifier with the reviewer's own also_at (sites_note) and is reported only if it holds there, so a wrong site
+# costs verifier tokens, not a finding.
 EXPR_RX = re.compile(r"`([^`\n]{8,80})`")
 EXPR_CODE = re.compile(r"[.(\[:=]")                                 # a bare name (output_dir) isn't an expression
 EXPR_PATH = re.compile(r"[\w./-]+\.\w{1,5}(?::\d+(?:-\d+)?)?")      # a file name or path:line, not an expression
 EXPR_WIN = 3                                                       # lines either side of the item's own line
 EXPR_NEAR = 10                                                     # an item this close, same expression: covered
-EXPR_MAX_FILES = 3                                                 # in more other files than this: too common to mean one flaw
+EXPR_MAX_FILES = 3                                                 # in more other files: too common for one flaw
 
 
 def added_text(files):
@@ -796,9 +794,10 @@ def expr_sites(f, text, others=(), seen=None):
     added line within EXPR_WIN of f's own line. An expression added in more than EXPR_MAX_FILES other files is too
     common to mean one flaw and is left out. Files f already names (its own, its also_at) are skipped, and so is a
     line within EXPR_NEAR of another item (others) that quotes the same expression: that item already reports it.
-    seen (a set of (path, line), updated here) holds sites already listed or swept for another item; a line within
-    EXPR_NEAR of one isn't swept again, so two items quoting the same expression don't both claim one third site. The swept sites are listed in expr_sites for later counting.
-    Unchanged f (same object) when nothing is found."""
+    seen, a set of (path, line, expression) updated here, holds the sites another item already lists or was swept;
+    a line within EXPR_NEAR of one with the same expression isn't swept again, so one third site is claimed once.
+    Trade-off: if that first claimant is dropped, the site goes with it rather than being verified twice for one
+    flaw. The swept sites are listed in expr_sites for later counting. Unchanged f (same object) when none is found."""
     own_file, own_line = f.get("file"), f.get("line") or 0
     near = [t for n, t in text.get(own_file, ()) if abs(n - own_line) <= EXPR_WIN]
     if not near:
@@ -819,30 +818,35 @@ def expr_sites(f, text, others=(), seen=None):
                 where[path] = n
         if len(where) <= EXPR_MAX_FILES:
             hits[sp] = where
-    found = []
+    found, claims = [], []
     for path in sorted(text):
-        n = min((w[path] for w in hits.values() if path in w), default=None)
-        if n is not None and not any(p == path and abs(n - m) <= EXPR_NEAR for p, m in covered) \
-                and not any(q == path and abs(n - m) <= EXPR_NEAR for q, m in seen or ()):
-            found.append(f"{path}:{n}")
+        mine = {sp: w[path] for sp, w in hits.items() if path in w}
+        if not mine:
+            continue
+        n = min(mine.values())
+        if any(p == path and abs(n - m) <= EXPR_NEAR for p, m in covered) or \
+                any(q == path and abs(n - m) <= EXPR_NEAR and sp in mine for q, m, sp in seen or ()):
+            continue
+        found.append(f"{path}:{n}")
+        claims += [(path, n, sp) for sp in mine]
     found = found[:max(0, MAX_SITES - len(f.get("also_at") or []))]
     if not found:
         return f
     if seen is not None:
-        seen.update((x.rsplit(":", 1)[0], int(x.rsplit(":", 1)[1])) for x in found)
+        seen.update(c for c in claims if f"{c[0]}:{c[1]}" in found)
     return dict(f, also_at=list(f.get("also_at") or []) + found, expr_sites=found)
-
-
-def sweep_expr_sites(items, text, others):
-    """expr_sites over items in order: a site any item (others) already lists, or an earlier item swept, isn't swept
-    again, so one third site isn't claimed and verified twice."""
-    seen = {(m["path"].strip(), int(m["line"])) for g in others for x in g.get("also_at") or []
-            if isinstance(x, str) and (m := SITE_RX.match(x))}
-    return [expr_sites(f, text, others, seen) for f in items]
 
 
 def _quoted(f):
     return EXPR_RX.findall(f"{f.get('title') or ''} {f.get('problem') or ''}")
+
+
+def sweep_expr_sites(items, text, others):
+    """expr_sites over items in order: a site another item (others) already lists, or an earlier item was swept, for
+    the same quoted expression isn't swept again, so one third site isn't claimed and verified twice."""
+    seen = {(m["path"].strip(), int(m["line"]), sp) for g in others for x in g.get("also_at") or []
+            if isinstance(x, str) and (m := SITE_RX.match(x)) for sp in _quoted(g)}
+    return [expr_sites(f, text, others, seen) for f in items]
 
 
 def site_lines(repo, sha, changed, items):

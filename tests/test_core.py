@@ -7011,6 +7011,12 @@ class TestNitTier(unittest.TestCase):
         self.assertEqual([x.get("also_at") for x in out], [["c.py:30"], None])     # c.py claimed once
         listed = dict(b, also_at=["c.py:31"])                                     # a reviewer's site 1 line off
         self.assertIs(V.sweep_expr_sites([a], text, [a, listed])[0], a)
+        # a different expression near a claimed site is a different flaw: both are swept
+        text = {"a.py": [(10, "base = url.origin")], "e.py": [(5, "p = os.path.join(root)")],
+                "d.py": [(20, "base = url.origin"), (25, "p = os.path.join(root)")]}
+        e = {"file": "e.py", "line": 5, "title": "`os.path.join(root)`", "problem": ""}
+        self.assertEqual([x.get("also_at") for x in V.sweep_expr_sites([a, e], text, [a, e])],
+                         [["d.py:20"], ["d.py:25"]])
 
     def test_expr_sites_end_to_end_only_with_nits_and_only_when_held(self):
         files = ({"a.py": "x = 1\n", "b.py": "y = 1\n"},

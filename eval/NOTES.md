@@ -1477,11 +1477,12 @@ shipped function on R6's stored reviews and diffs (`git diff --unified=5 base..h
 | variant | sites (25 PRs) | missed high reached | missed medium | on no golden item |
 |---|---|---|---|---|
 | any quoted span (8+ chars), any changed file | 778 | 3 (emdash #4, agents-config #2, translator #9 by position only) | 27 | 506 |
-| span on the item's own line, other files, 1 per file | 136 | 2 | 2 | 103 |
+| span on an added line within 3 of the item's own, other files, 1 per file | 136 | 2 | 2 | 103 |
 | + skip a site within 10 lines of any other item | 96 | 1 (lost emdash #4: a different finding sat 5 lines away) | 2 | 82 |
 | + skip only near an item quoting the same span | 112 | 2 | 2 | 87 |
 | + no bare names, no span in > 3 other files | 35 on 10 PRs | 2 | 1 | 21 |
-| **+ each site claimed once per review (shipped, self-review round 1)** | **27 on 9 PRs** | **2 (emdash #4, agents-config #2)** | **1** | **17** |
+| + each site claimed once per review (self-review round 1) | 27 on 9 PRs | 2 | 1 | 17 |
+| **+ once per review per expression (shipped, round 2)** | **31 on 10 PRs** | **2 (emdash #4, agents-config #2)** | **1** | **19** |
 The emdash item's own finding was unverified in R6 (the nit-reserve bug, fixed 0fad47f), and an unverified claim keeps
 no sites, so both fixes are needed for it. If both sites hold and the judge matches them, macro high recall goes up
 about 4.8 points (emdash 2/3 -> 3/3, agents-config 1/3 -> 2/3, over 14 PRs): an estimate, for run 7 to measure.
@@ -1492,3 +1493,7 @@ Self-review round 1 (review44, $1.21): NOT_GREEN, 1 medium (no eval: the run abo
 unchanged" was wrong for the verifier of an item that gets sites) and 4 lows (docs said "own line" for a ±3 window;
 two items quoting one expression both claimed the same third site; the finding and sweep paths untested end to end;
 added_text rebuilt per swept item). All fixed; the shared-site fix took the replay from 35 to 27 sites.
+Self-review round 2 (review45, $0.73): NOT_GREEN, 3 lows, answered before the fix commit: two comment lines over the
+wrap width (fixed; the numbers moved here), the eval was at 8b1ae92 not HEAD (deferred: the later commits only
+remove sites), and the one-claim rule blocked a different expression near a claimed site (fixed: keyed by
+expression, 27 -> 31 sites; a dropped first claimant takes its site with it, kept on purpose and documented).
