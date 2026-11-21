@@ -830,6 +830,11 @@ class TestDraftSplit(unittest.TestCase):
         # CR-66a3c1ef: a capitalised word in __ __ is bold, not a dunder
         self.assertNotIn("__Notes__", keep("x", "__Notes__\nslow"))
         self.assertEqual(keep("x", "__Risk__: none"), "Risk: none")
+        # review39 (CR-de694dfa): a fence inside a nested list item is still code
+        nested_li = "- a\n  - b\n\n    ```md\n    **Risk:** y\n    ```\n**Risk:** z"
+        self.assertEqual(keep("x", nested_li), nested_li.replace("**Risk:** z", "Risk: z"))
+        # CR-23314803: inline ```x``` opens no fence, so what follows is still checked
+        self.assertEqual(keep("x", "```foo``` is handled.\n**Risk:** y"), "```foo``` is handled.\nRisk: y")
 
     def test_polish_notes_keep_bundled_removals(self):
         # CR-29cb8385: a removal entry that also names a restored line must not vanish from the notes
@@ -840,6 +845,10 @@ class TestDraftSplit(unittest.TestCase):
         self.assertIs(u('"Fixes #947" became "Fix #947"', ["Fixes #947"]), True)
         self.assertIs(u('Reworded "Fixes #947" to "Fix #947"', ["Fixes #947"]), True)
         self.assertIs(u("Changed 'Fixes #947' to 'Fix #947'", ["- Fixes #947"]), True)
+        # review39 (CR-7f278c8e): the reworded text is still in the body next to the put-back line, so it stands
+        body = "Fixes #947\n\nCopy buffers by default; fixes #947.\n\nAdd copy."
+        self.assertEqual(u('"Fixes #947" became "Copy buffers by default; fixes #947."', ["Fixes #947"], body), "partly")
+        self.assertIs(u('"Fixes #947" became "Fix #947"', ["Fixes #947"], "Fixes #947\n\nAdd copy."), True)
         self.assertEqual(u('"Fixes #947" line and the sentence saying the fix is backported to 2.3', ["Fixes #947"]), "partly")
         self.assertIs(u('dropped the aside "Closes #120" and kept the retry loop', ["Closes #12"]), False)
         self.assertIs(u('dropped the note that the "related" cache path is gone', ["Related issue: #5"]), False)

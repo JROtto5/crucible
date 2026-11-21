@@ -52,13 +52,13 @@ def strip_new_attribution(original, rewritten):
 # Let through (tests/test_core.py test_strip_new_emphasis_let_through): any bold span the author wrote anywhere,
 # even moved to a line start or with its label's punctuation changed ("**Risk.**" -> "**Risk:**"); a heading the
 # repo's PR template requires ("## Notes for reviewers", or the same label as a bold line); lowercase `__dunder__`
-# identifiers ("__init__ takes", "__main__"); anything inside a ``` / ~~~ fence (CommonMark closing rules).
+# identifiers ("__init__ takes", "__main__"); anything inside a ``` / ~~~ fence (CommonMark closing rules, any indent).
 _BOLD_ONLY_RX = re.compile(r"^\s*(\*\*|__)[^*_\n]+?\1\s*:?\s*$")
 _NOTES_SECTION_RX = re.compile(r"^#{1,6}\s+(notes?|notes? (for|to) (the )?reviewers?|reviewer'?s? notes|call-?outs?)\s*:?\s*$", re.I)
 _NOTES_LABEL_RX = re.compile(r"^(notes?|notes? (for|to) (the )?reviewers?|reviewer'?s? notes|call-?outs?|risks?|trade-?offs?)$", re.I)
 _BOLD_LEAD_RX = re.compile(r"^(\s*(?:[-*]\s+)?)(\*\*|__)([^*_\n]{1,40}?:?)\2(\s*:?\s+)(?=\S)")
 _BOLD_SPAN_RX = re.compile(r"(\*\*|__)([^*_\n]+?)\1")
-_FENCE_RX = re.compile(r"^\s{0,3}(`{3,}|~{3,})(.*)$")
+_FENCE_RX = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")     # any indent: a fence in a nested list item is still code
 
 
 def _bold_key(t):
@@ -76,17 +76,13 @@ def strip_new_emphasis(original, rewritten, keep_heads=()):
     had = {re.sub(r"\s+", " ", l.strip()).lower() for l in original.split("\n")}
     had_bold = {_bold_key(m.group(2)) for m in _BOLD_SPAN_RX.finditer(original)}
     keep = {norm_heading(h) for h in keep_heads}
-    changes, kept, fence = [], [], None
-    for line in rewritten.split("\n"):
-        f = _FENCE_RX.match(line)
-        if fence:                                   # CommonMark: closes on the same char, at least as long, bare
+    from .readiness import _unfenced
+    lines = rewritten.split("\n")
+    outside = set(_unfenced(lines, _FENCE_RX))
+    changes, kept = [], []
+    for i, line in enumerate(lines):
+        if i not in outside:
             kept.append(line)
-            if f and f.group(1)[0] == fence[0] and len(f.group(1)) >= len(fence) and not f.group(2).strip():
-                fence = None
-            continue
-        if f and not (f.group(1)[0] == "`" and "`" in f.group(2)):    # "```x```" is inline code, not a fence
-            kept.append(line)
-            fence = f.group(1)
             continue
         only = _BOLD_ONLY_RX.match(line)
         inner = line.strip().strip(":").strip()[2:-2] if only else ""
@@ -518,10 +514,10 @@ def keep_required_lines(original, rewritten, slug=None):
 _Q = r"[\"'`“”‘’]"
 
 
-def _reword_undone(entry, restored):
+def _reword_undone(entry, restored, body=""):
     """True: the removal entry is only a reword/drop of a line keep_required_lines put back ('"Fixes" became "Fix"',
     or the restored line itself), so it didn't happen. "partly": it names a restored line but says more (that part
-    stands). False: unrelated."""
+    stands), or the reworded text is still in `body` (the restore added the line back beside it). False: unrelated."""
     e = entry.strip().rstrip(".")
     for r in restored:
         line = r.strip()
@@ -529,9 +525,12 @@ def _reword_undone(entry, restored):
         olds = "|".join(re.escape(o) for o in {line, re.sub(r"^[-*\s]+", "", line)} | ({lead.group(1)} if lead else set()))
         if re.sub(_Q, "", e).strip().lower() in (line.lower(), re.sub(r"^[-*\s]+", "", line).lower()):
             return True
-        if re.fullmatch(rf"(?i)(?:reworded |changed )?{_Q}(?:{olds}){_Q}\s*"
-                                 rf"(?:became|->|→|to|changed to|was changed to|reworded to)\s*{_Q}[^\"'`”’]+{_Q}", e):
-            return True
+        m = re.fullmatch(rf"(?i)(?:reworded |changed )?{_Q}(?:{olds}){_Q}\s*"
+                         rf"(?:became|->|→|to|changed to|was changed to|reworded to)\s*{_Q}([^\"'`”’]+){_Q}", e)
+        if m:                                       # the put-back lines don't count: "Fix" is inside "Fixes #947"
+            rest = "\n".join(l for l in body.split("\n") if l.strip() not in {x.strip() for x in restored})
+            new = re.escape(m.group(1).strip().rstrip("."))
+            return "partly" if new and re.search(rf"(?i)(?<!\w){new}(?!\w)", rest) else True
     if any(re.search(rf"(?<![\w#]){re.escape(r.strip())}(?![\w])", entry) for r in restored if r.strip()):
         return "partly"
     return False
@@ -578,7 +577,7 @@ def polish(repo, project, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-
     # the notes must match the output: a reword the restore undid ("Fixes" became "Fix") did not happen
     removed = []
     for r in out["removed"]:
-        undone = _reword_undone(r, restored)
+        undone = _reword_undone(r, restored, body)
         if undone is True:
             continue
         removed.append(r + (" (the required line was put back, the rest of this removal stands)" if undone else ""))
