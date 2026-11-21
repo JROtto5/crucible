@@ -1454,3 +1454,33 @@ nit cases 22/22 planted issues (7059200 run: 22/22), false blocking 0 on 9 clean
 (nit-py-reliability; 7059200: maintainability-cross), nits kept 69 (21 on clean cases; was 23), dropped 6. Every case
 cost $0.19-$0.58 of its $1.50, so no case comes near the reserve and the eval can't move either way; the cost shows only
 on budget-capped ReviewBench PRs (run 2's PRs 1 and 13 are the shape to watch on the next run).
+
+### 2026-11-21 · R6's 14 missed high issues by bucket, and expression sites ($0)
+
+**Buckets** (R6, 25 PRs, 1 round; read from `results.details.json` sha256 35747222e118…, each PR's kept review.json and
+golden, at $0; n = 36 high golden, 22 found, 14 missed). Beside BLAZE 2's held-out split (exchange
+2026-11-20-blaze-miss-split: serious 5 never raised / 0 raised then dropped / 2 too low, n = 13 serious):
+| bucket | n | items (class) |
+|---|---|---|
+| never raised | 4 | jadx #1 (nullable captured var in a lambda), CrabTrap #21 (UI now depends on an endpoint that 503s in one config), apilix #26 (writer/reader field names differ), Codebase-Conversion #33 (container build fails) |
+| raised, then dropped by the verifier | 2 | TechDebtMCP #0 ("others do it too"), tp_152 #0 ("predates"; also cited at the guide). Both refutations fixed 19396cf (11-20) |
+| raised in another file than the fault | 2 | tp_152 #1 (at AddressBook, fault in Model), apilix #0 (at the lockfile, fault in package.json) |
+| found at one site, a sibling site not carried | 3 | emdash #4 (same `url.origin` flaw found in 2 routes, the 3rd not cited though the text named it), agents-config #2 (same `@` import in prose, cited in a sibling template), apilix #29 (sibling of #28) |
+| right site, different mechanism (or judged to another item) | 3 | apilix #28/#35 (raised "switch discards unsaved edits", golden is "switch doesn't flush the debounced save"), translator #9 (the `break` finding covers 411-450 but was matched to #0/#14) |
+| raised too low | 0 | (severity doesn't count on the High view) |
+Reading: 4 of 14 never raised against BLAZE's 5 of 13 serious; 10 of our 14 were raised somewhere.
+
+**Expression sites (built, feat/expr-sites).** For the sibling bucket: when a kept item quotes a code expression in
+backticks that is on its own added line, crucible lists the first added line repeating it in each other changed file
+as an extra `also_at` site, which the verifier then checks like the reviewer's own sites. Variants, replayed with the
+shipped function on R6's stored reviews and diffs (`git diff --unified=5 base..head` of each PR's snapshot, blaze-3):
+| variant | sites (25 PRs) | missed high reached | missed medium | on no golden item |
+|---|---|---|---|---|
+| any quoted span (8+ chars), any changed file | 778 | 3 (emdash #4, agents-config #2, translator #9 by position only) | 27 | 506 |
+| span on the item's own line, other files, 1 per file | 136 | 2 | 2 | 103 |
+| + skip a site within 10 lines of any other item | 96 | 1 (lost emdash #4: a different finding sat 5 lines away) | 2 | 82 |
+| + skip only near an item quoting the same span | 112 | 2 | 2 | 87 |
+| **+ no bare names, no span in > 3 other files (shipped)** | **35 on 10 PRs** | **2 (emdash #4, agents-config #2)** | **1** | **21** |
+The emdash item's own finding was unverified in R6 (the nit-reserve bug, fixed 0fad47f), and an unverified claim keeps
+no sites, so both fixes are needed for it. If both sites hold and the judge matches them, macro high recall goes up
+about 4.8 points (emdash 2/3 -> 3/3, agents-config 1/3 -> 2/3, over 14 PRs): an estimate, for run 7 to measure.

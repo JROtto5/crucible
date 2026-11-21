@@ -6962,6 +6962,58 @@ class TestNitTier(unittest.TestCase):
         many = {"file": "a.py", "line": 1, "also_at": [f"a.py:{i}" for i in range(2, 30)]}
         self.assertEqual(len(V.clean_sites(many, {"a.py": 40})["also_at"]), V.MAX_SITES)
 
+    def test_expr_sites(self):
+        """ReviewBench run 6: `baseUrl = url.origin` found in two routes, missed in a third that repeats it."""
+        text = {"r/login.ts": [(27, "  const x = 1;"), (28, "  const baseUrl = url.origin;"), (29, "  output_dir = 2")],
+                "r/setup.ts": [(10, "import a"), (55, "  const baseUrl = url.origin;"), (56, "  const baseUrl = url.origin;")],
+                "r/meta.ts": [(4, "  return baseUrl = url.origin")],
+                "r/far.ts": [(9, "  // nothing here"), (12, "  output_dir = 3")]}
+        f = {"file": "r/login.ts", "line": 28, "title": "routes use `baseUrl = url.origin`",
+             "problem": "`output_dir` and `r/setup.ts:55` and `getPublicOrigin()` and `url.origin` too"}
+        out = V.expr_sites(f, text)
+        self.assertEqual(out["also_at"], ["r/meta.ts:4", "r/setup.ts:55"])          # first line per other file
+        self.assertEqual(out["expr_sites"], out["also_at"])
+        self.assertNotIn("also_at", f)                                              # f itself untouched
+        # a bare name, a path and an expression not on the item's own line sweep nothing
+        for quote in ("`output_dir`", "`r/setup.ts:55`", "`getPublicOrigin()`"):
+            g = dict(f, title="t", problem=quote)
+            self.assertIs(V.expr_sites(g, text), g, quote)
+        g = dict(f, line=200)
+        self.assertIs(V.expr_sites(g, text), g)                                     # own line not added: unchanged
+        # files f already names are skipped; room is MAX_SITES minus its own also_at
+        out = V.expr_sites(dict(f, also_at=["r/setup.ts:56"]), text)
+        self.assertEqual(out["also_at"], ["r/setup.ts:56", "r/meta.ts:4"])
+        full = dict(f, also_at=[f"r/far.ts:{i}" for i in range(V.MAX_SITES)])
+        self.assertIs(V.expr_sites(full, text), full)
+        # another item quoting the same expression within EXPR_NEAR already reports that site; a different one doesn't
+        same = {"file": "r/setup.ts", "line": 60, "title": "`baseUrl = url.origin` here too", "problem": ""}
+        other = {"file": "r/setup.ts", "line": 50, "title": "`setup_state` overwritten", "problem": "`step: 1`"}
+        self.assertEqual(V.expr_sites(f, text, [f, same])["also_at"], ["r/meta.ts:4"])
+        self.assertEqual(V.expr_sites(f, text, [f, other])["also_at"], ["r/meta.ts:4", "r/setup.ts:55"])
+        # in more than EXPR_MAX_FILES other files: too common to be one flaw
+        common = {f"r/m{i}.ts": [(1, "  const baseUrl = url.origin;")] for i in range(V.EXPR_MAX_FILES + 1)}
+        g = dict(f, problem="")
+        self.assertIs(V.expr_sites(g, dict(common, **{"r/login.ts": text["r/login.ts"]})), g)
+        three = {k: v for k, v in list(common.items())[:V.EXPR_MAX_FILES]}
+        self.assertEqual(len(V.expr_sites(g, dict(three, **{"r/login.ts": text["r/login.ts"]}))["also_at"]),
+                         V.EXPR_MAX_FILES)
+
+    def test_expr_sites_end_to_end_only_with_nits_and_only_when_held(self):
+        files = ({"a.py": "x = 1\n", "b.py": "y = 1\n"},
+                 {"a.py": "x = 2\nbase = req.origin\n" + "".join(f"y{i} = {i}\n" for i in range(30)),
+                  "b.py": "y = 2\nw = 3\nbase = req.origin\n"})
+        nit = dict(self._f("internal origin", 2), problem="uses `base = req.origin` behind a proxy")
+        r, calls = self._run([nit], repo_files=files, sites_hold=["b.py:3"])
+        v = next(c for c in calls if c["kind"] == "verify_nits")
+        self.assertIn("The same flaw is also claimed at: b.py:3.", v["prompt"])
+        self.assertEqual(r["nits"][0]["also_at"], ["b.py:3"])
+        self.assertEqual(r["nits"][0]["expr_sites"], ["b.py:3"])
+        r, _ = self._run([nit], repo_files=files, sites_hold=[])
+        self.assertNotIn("also_at", r["nits"][0])                    # swept, not held: not reported
+        self.assertEqual(r["nits"][0]["expr_sites"], ["b.py:3"])     # but countable
+        _, calls = self._run([nit], repo_files=files, nits=None)
+        self.assertTrue(all("also claimed" not in c["prompt"] for c in calls))
+
     def test_no_also_at_leaves_verifier_prompts_and_schemas_as_before(self):
         r, calls = self._run([self._f("a nit", 2)])
         v = next(c for c in calls if c["kind"] == "verify_nits")
