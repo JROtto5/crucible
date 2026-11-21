@@ -579,13 +579,14 @@ def polish(repo, project, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-
     body, shaped = strip_new_emphasis(parts["body"], body, heads)
     if shaped:
         log(f"  undid formatting the rewrite added: {shaped}")
-    body, restored = keep_required_lines(parts["body"], body, upstream_slug(repo))
+    slug = upstream_slug(repo)
+    body, restored = keep_required_lines(parts["body"], body, slug)
     if restored:
         log(f"  restored required line(s) the rewrite dropped: {restored}")
     # the notes must match the output: a reword the restore undid ("Fixes" became "Fix") did not happen
     removed = []
     for r in out["removed"]:
-        undone = _reword_undone(r, restored, body, upstream_slug(repo))
+        undone = _reword_undone(r, restored, body, slug)
         if undone is True:
             continue
         removed.append(r + (" (the required line was put back, the rest of this removal stands)" if undone else ""))

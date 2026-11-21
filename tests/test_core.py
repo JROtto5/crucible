@@ -796,6 +796,17 @@ class TestDraftSplit(unittest.TestCase):
         finally:
             S.claude = orig
         self.assertIn("**Note for reviewers**", open(os.path.join(d, "PR_DRAFT.polished.md")).read())
+        # review42 (CR-d9727a93): polish passes the repo slug, so this repo's issue URL counts as "#947"
+        open(os.path.join(d, "PR_DRAFT.md"), "w").write("Fixes #947\n\nCopy.\n")
+        S.claude = lambda *a, **k: ({"title": "Copy", "body": "Copy; see https://github.com/o/r/issues/947 for the fix.",
+                                     "removed": ['"Fixes" became "fix"'], "kept_facts": []}, 0.0)
+        orig_slug, S.upstream_slug = S.upstream_slug, lambda *_: "o/r"
+        try:
+            S.polish(d, "t__polish_bold", log=lambda *_: None)
+        finally:
+            S.claude, S.upstream_slug = orig, orig_slug
+        self.assertIn('"Fixes" became "fix" (the required line was put back',
+                      open(os.path.join(d, "PR_DRAFT.polish-notes.md")).read())
 
 
     def test_strip_new_emphasis_let_through(self):
