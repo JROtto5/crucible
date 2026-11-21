@@ -7017,6 +7017,24 @@ class TestNitTier(unittest.TestCase):
         e = {"file": "e.py", "line": 5, "title": "`os.path.join(root)`", "problem": ""}
         self.assertEqual([x.get("also_at") for x in V.sweep_expr_sites([a, e], text, [a, e])],
                          [["d.py:20"], ["d.py:25"]])
+        # one item quoting two expressions: another item covering only the first doesn't block the second's site
+        text = {"a.py": [(10, "base = url.origin; p = os.path.join(root)")], "x.py": [(20, "p = os.path.join(root)")],
+                "y.py": [(1, "base = url.origin")]}
+        two = {"file": "a.py", "line": 10, "title": "`base = url.origin`", "problem": "and `os.path.join(root)`"}
+        g = {"file": "x.py", "line": 22, "title": "`base = url.origin` here", "problem": ""}
+        self.assertEqual(V.sweep_expr_sites([two], text, [two, g])[0]["also_at"], ["x.py:20", "y.py:1"])
+        # only the expression on the reported line is claimed: the other one's later line stays open to its own item
+        apart = {"a.py": [(10, "base = url.origin; p = os.path.join(root)")], "h.py": [(3, "p = os.path.join(root)")],
+                 "w.py": [(10, "base = url.origin"), (15, "p = os.path.join(root)")]}
+        h = {"file": "h.py", "line": 3, "title": "`os.path.join(root)`", "problem": ""}
+        self.assertEqual([x.get("also_at") for x in V.sweep_expr_sites([two, h], apart, [two, h])],
+                         [["w.py:10"], ["w.py:15"]])
+        # a reviewer's listed site claims only the expressions on its own line
+        lister = {"file": "z.py", "line": 1, "title": "`base = url.origin`", "problem": "`os.path.join(root)`",
+                  "also_at": ["x.py:20"]}
+        self.assertEqual(V.sweep_expr_sites([a], dict(text, **{"x.py": [(20, "p = os.path.join(root)"),
+                                                                        (25, "base = url.origin")]}),
+                                            [a, lister])[0]["also_at"], ["x.py:25", "y.py:1"])
 
     def test_expr_sites_end_to_end_only_with_nits_and_only_when_held(self):
         files = ({"a.py": "x = 1\n", "b.py": "y = 1\n"},

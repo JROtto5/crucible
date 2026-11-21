@@ -808,7 +808,7 @@ def expr_sites(f, text, others=(), seen=None):
         return f
     named = {own_file} | {m["path"].strip() for s in f.get("also_at") or []
                           if isinstance(s, str) and (m := SITE_RX.match(s))}
-    covered = [(g.get("file"), g.get("line") or 0) for g in others if g is not f and spans & set(_quoted(g))]
+    covered = [(g.get("file"), g.get("line") or 0, q) for g in others if g is not f for q in _quoted(g)]
     hits = {}                                       # span -> {path: first added line repeating it}
     for sp in spans:
         where = {}
@@ -820,15 +820,16 @@ def expr_sites(f, text, others=(), seen=None):
             hits[sp] = where
     found, claims = [], []
     for path in sorted(text):
-        mine = {sp: w[path] for sp, w in hits.items() if path in w}
+        # each expression is checked at its own line, against items and claims for the same expression only (one
+        # quoted span inside another counts as the same: `url.origin` and `baseUrl = url.origin`)
+        mine = {sp: w[path] for sp, w in hits.items() if path in w
+                and not any(p == path and abs(w[path] - m) <= EXPR_NEAR and (q in sp or sp in q)
+                            for p, m, q in [*covered, *(seen or ())])}
         if not mine:
             continue
         n = min(mine.values())
-        if any(p == path and abs(n - m) <= EXPR_NEAR for p, m in covered) or \
-                any(q == path and abs(n - m) <= EXPR_NEAR and sp in mine for q, m, sp in seen or ()):
-            continue
         found.append(f"{path}:{n}")
-        claims += [(path, n, sp) for sp in mine]
+        claims += [(path, n, sp) for sp, m in mine.items() if m == n]
     found = found[:max(0, MAX_SITES - len(f.get("also_at") or []))]
     if not found:
         return f
@@ -844,8 +845,15 @@ def _quoted(f):
 def sweep_expr_sites(items, text, others):
     """expr_sites over items in order: a site another item (others) already lists, or an earlier item was swept, for
     the same quoted expression isn't swept again, so one third site isn't claimed and verified twice."""
-    seen = {(m["path"].strip(), int(m["line"]), sp) for g in others for x in g.get("also_at") or []
-            if isinstance(x, str) and (m := SITE_RX.match(x)) for sp in _quoted(g)}
+    seen = set()
+    for g in others:                         # a listed site claims only the quoted expressions on its own line
+        for x in g.get("also_at") or []:
+            m = SITE_RX.match(x) if isinstance(x, str) else None
+            if not m:
+                continue
+            path, line = m["path"].strip(), int(m["line"])
+            seen |= {(path, line, sp) for sp in _quoted(g)
+                     if any(sp in t and abs(k - line) <= EXPR_WIN for k, t in text.get(path, ()))}
     return [expr_sites(f, text, others, seen) for f in items]
 
 

@@ -1482,7 +1482,8 @@ shipped function on R6's stored reviews and diffs (`git diff --unified=5 base..h
 | + skip only near an item quoting the same span | 112 | 2 | 2 | 87 |
 | + no bare names, no span in > 3 other files | 35 on 10 PRs | 2 | 1 | 21 |
 | + each site claimed once per review (self-review round 1) | 27 on 9 PRs | 2 | 1 | 17 |
-| **+ once per review per expression (shipped, round 2)** | **31 on 10 PRs** | **2 (emdash #4, agents-config #2)** | **1** | **19** |
+| + once per review per expression (round 2) | 31 on 10 PRs | 2 | 1 | 19 |
+| **+ covered and claims per expression too (shipped, round 3)** | **30 on 9 PRs** | **2 (emdash #4, agents-config #2)** | **1** | **19** |
 The emdash item's own finding was unverified in R6 (the nit-reserve bug, fixed 0fad47f), and an unverified claim keeps
 no sites, so both fixes are needed for it. If both sites hold and the judge matches them, macro high recall goes up
 about 4.8 points (emdash 2/3 -> 3/3, agents-config 1/3 -> 2/3, over 14 PRs): an estimate, for run 7 to measure.
@@ -1497,3 +1498,9 @@ Self-review round 2 (review45, $0.73): NOT_GREEN, 3 lows, answered before the fi
 wrap width (fixed; the numbers moved here), the eval was at 8b1ae92 not HEAD (deferred: the later commits only
 remove sites), and the one-claim rule blocked a different expression near a claimed site (fixed: keyed by
 expression, 27 -> 31 sites; a dropped first claimant takes its site with it, kept on purpose and documented).
+Self-review round 3 (review46, $0.29): NOT_GREEN, 1 medium (no bug-case eval) + 1 low (covered, the reviewer-site
+seeding and the claims still per file). Both answered before the fix commit, then fixed (30 sites on 9 PRs).
+Bug cases at the final code, `crucible eval --nits --no-write --budget 1.5` on the 23 js-/py-/ts- cases (the name
+filter also ran clean-py-absent-vs-empty; $9.66): recall 0.913 (19/21 build, 2/2 holdout), any severity 1.0, false
+blocking 0. Same recall as the 11-19 full run; the misses are the known severity calls js-refcount (medium, every run
+since 11-04) and py-test-deleted.
