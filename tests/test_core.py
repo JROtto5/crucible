@@ -6998,6 +6998,20 @@ class TestNitTier(unittest.TestCase):
         self.assertEqual(len(V.expr_sites(g, dict(three, **{"r/login.ts": text["r/login.ts"]}))["also_at"]),
                          V.EXPR_MAX_FILES)
 
+    def test_expr_sites_window_and_one_claim_per_site(self):
+        for off, want in ((3, True), (-3, True), (4, False), (-4, False)):
+            text = {"a.py": [(10 + off, "base = url.origin")], "b.py": [(5, "base = url.origin")]}
+            f = {"file": "a.py", "line": 10, "title": "`base = url.origin`", "problem": ""}
+            self.assertEqual("also_at" in V.expr_sites(f, text), want, off)
+        text = {"a.py": [(10, "base = url.origin")], "b.py": [(20, "base = url.origin")],
+                "c.py": [(30, "base = url.origin")]}
+        a = {"file": "a.py", "line": 10, "title": "`base = url.origin`", "problem": ""}
+        b = {"file": "b.py", "line": 20, "title": "`base = url.origin` again", "problem": ""}
+        out = V.sweep_expr_sites([a, b], text, [a, b])
+        self.assertEqual([x.get("also_at") for x in out], [["c.py:30"], None])     # c.py claimed once
+        listed = dict(b, also_at=["c.py:31"])                                     # a reviewer's site 1 line off
+        self.assertIs(V.sweep_expr_sites([a], text, [a, listed])[0], a)
+
     def test_expr_sites_end_to_end_only_with_nits_and_only_when_held(self):
         files = ({"a.py": "x = 1\n", "b.py": "y = 1\n"},
                  {"a.py": "x = 2\nbase = req.origin\n" + "".join(f"y{i} = {i}\n" for i in range(30)),
@@ -7013,6 +7027,29 @@ class TestNitTier(unittest.TestCase):
         self.assertEqual(r["nits"][0]["expr_sites"], ["b.py:3"])     # but countable
         _, calls = self._run([nit], repo_files=files, nits=None)
         self.assertTrue(all("also claimed" not in c["prompt"] for c in calls))
+
+    def test_expr_sites_reach_findings_and_swept_nits(self):
+        files = ({"a.py": "x = 1\n", "b.py": "y = 1\n"},
+                 {"a.py": "base = req.origin\n" + "".join(f"y{i} = {i}\n" for i in range(30)),
+                  "b.py": "y = 2\nbase = req.origin\n"})
+        from unittest import mock
+        real = self._f
+
+        def quoting(title, line, severity="low", file="a.py"):
+            f = real(title, line, severity, file)
+            return dict(f, problem="uses `base = req.origin`") if title == "division by zero in f" else f
+        with mock.patch.object(self, "_f", quoting):
+            r, calls = self._run([], repo_files=files, sites_hold=["b.py:2"])
+        f = next(f for f in r["findings"] if f["line"] == 1)
+        self.assertEqual((f["also_at"], f["expr_sites"]), (["b.py:2"], ["b.py:2"]))
+        self.assertTrue(any("also claimed at: b.py:2." in c["prompt"] for c in calls
+                            if c["kind"] in ("verify", "verify_cheap")))
+        swept = dict(self._f("swept: internal origin", 1), problem="`base = req.origin` again")
+        r, calls = self._run([], repo_files=files, sweep_out=[swept], sites_hold=["b.py:2"],
+                             budget=5.0)
+        nit = next((n for n in r.get("nits") or [] if n["title"].startswith("swept")), None)
+        self.assertIsNotNone(nit, [c["kind"] for c in calls])
+        self.assertEqual(nit.get("expr_sites"), ["b.py:2"])
 
     def test_no_also_at_leaves_verifier_prompts_and_schemas_as_before(self):
         r, calls = self._run([self._f("a nit", 2)])

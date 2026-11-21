@@ -1471,7 +1471,7 @@ golden, at $0; n = 36 high golden, 22 found, 14 missed). Beside BLAZE 2's held-o
 Reading: 4 of 14 never raised against BLAZE's 5 of 13 serious; 10 of our 14 were raised somewhere.
 
 **Expression sites (built, feat/expr-sites).** For the sibling bucket: when a kept item quotes a code expression in
-backticks that is on its own added line, crucible lists the first added line repeating it in each other changed file
+backticks that is on an added line within 3 lines of its own, crucible lists the first added line repeating it in each other changed file
 as an extra `also_at` site, which the verifier then checks like the reviewer's own sites. Variants, replayed with the
 shipped function on R6's stored reviews and diffs (`git diff --unified=5 base..head` of each PR's snapshot, blaze-3):
 | variant | sites (25 PRs) | missed high reached | missed medium | on no golden item |
@@ -1480,7 +1480,15 @@ shipped function on R6's stored reviews and diffs (`git diff --unified=5 base..h
 | span on the item's own line, other files, 1 per file | 136 | 2 | 2 | 103 |
 | + skip a site within 10 lines of any other item | 96 | 1 (lost emdash #4: a different finding sat 5 lines away) | 2 | 82 |
 | + skip only near an item quoting the same span | 112 | 2 | 2 | 87 |
-| **+ no bare names, no span in > 3 other files (shipped)** | **35 on 10 PRs** | **2 (emdash #4, agents-config #2)** | **1** | **21** |
+| + no bare names, no span in > 3 other files | 35 on 10 PRs | 2 | 1 | 21 |
+| **+ each site claimed once per review (shipped, self-review round 1)** | **27 on 9 PRs** | **2 (emdash #4, agents-config #2)** | **1** | **17** |
 The emdash item's own finding was unverified in R6 (the nit-reserve bug, fixed 0fad47f), and an unverified claim keeps
 no sites, so both fixes are needed for it. If both sites hold and the judge matches them, macro high recall goes up
 about 4.8 points (emdash 2/3 -> 3/3, agents-config 1/3 -> 2/3, over 14 PRs): an estimate, for run 7 to measure.
+Eval at 8b1ae92, `crucible eval --nits --no-write --budget 1.5 --cases nit- clean-` (17 cases, $7.04, local): nit
+cases 22/22, false blocking 0 on 9 clean cases and 0 on nit cases (11-20 at 67cb577: 22/22, 0, 1), nits kept 75 (22 on
+clean cases), dropped 9. last-run.json keeps no sites, so this shows no regression, not whether the sweep fired.
+Self-review round 1 (review44, $1.21): NOT_GREEN, 1 medium (no eval: the run above; the CHANGELOG's "prompts are
+unchanged" was wrong for the verifier of an item that gets sites) and 4 lows (docs said "own line" for a ±3 window;
+two items quoting one expression both claimed the same third site; the finding and sweep paths untested end to end;
+added_text rebuilt per swept item). All fixed; the shared-site fix took the replay from 35 to 27 sites.
