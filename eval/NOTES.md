@@ -1454,3 +1454,53 @@ nit cases 22/22 planted issues (7059200 run: 22/22), false blocking 0 on 9 clean
 (nit-py-reliability; 7059200: maintainability-cross), nits kept 69 (21 on clean cases; was 23), dropped 6. Every case
 cost $0.19-$0.58 of its $1.50, so no case comes near the reserve and the eval can't move either way; the cost shows only
 on budget-capped ReviewBench PRs (run 2's PRs 1 and 13 are the shape to watch on the next run).
+
+### 2026-11-21 · R6's 14 missed high issues by bucket, and expression sites ($0)
+
+**Buckets** (R6, 25 PRs, 1 round; read from `results.details.json` sha256 35747222e118…, each PR's kept review.json and
+golden, at $0; n = 36 high golden, 22 found, 14 missed). Beside BLAZE 2's held-out split (exchange
+2026-11-20-blaze-miss-split: serious 5 never raised / 0 raised then dropped / 2 too low, n = 13 serious):
+| bucket | n | items (class) |
+|---|---|---|
+| never raised | 4 | jadx #1 (nullable captured var in a lambda), CrabTrap #21 (UI now depends on an endpoint that 503s in one config), apilix #26 (writer/reader field names differ), Codebase-Conversion #33 (container build fails) |
+| raised, then dropped by the verifier | 2 | TechDebtMCP #0 ("others do it too"), tp_152 #0 ("predates"; also cited at the guide). Both refutations fixed 19396cf (11-20) |
+| raised in another file than the fault | 2 | tp_152 #1 (at AddressBook, fault in Model), apilix #0 (at the lockfile, fault in package.json) |
+| found at one site, a sibling site not carried | 3 | emdash #4 (same `url.origin` flaw found in 2 routes, the 3rd not cited though the text named it), agents-config #2 (same `@` import in prose, cited in a sibling template), apilix #29 (sibling of #28) |
+| right site, different mechanism (or judged to another item) | 3 | apilix #28/#35 (raised "switch discards unsaved edits", golden is "switch doesn't flush the debounced save"), translator #9 (the `break` finding covers 411-450 but was matched to #0/#14) |
+| raised too low | 0 | (severity doesn't count on the High view) |
+Reading: 4 of 14 never raised against BLAZE's 5 of 13 serious; 10 of our 14 were raised somewhere.
+
+**Expression sites (built, feat/expr-sites).** For the sibling bucket: when a kept item quotes a code expression in
+backticks that is on an added line within 3 lines of its own, crucible lists the first added line repeating it in each other changed file
+as an extra `also_at` site, which the verifier then checks like the reviewer's own sites. Variants, replayed with the
+shipped function on R6's stored reviews and diffs (`git diff --unified=5 base..head` of each PR's snapshot, blaze-3):
+| variant | sites (25 PRs) | missed high reached | missed medium | on no golden item |
+|---|---|---|---|---|
+| any quoted span (8+ chars), any changed file | 778 | 3 (emdash #4, agents-config #2, translator #9 by position only) | 27 | 506 |
+| span on an added line within 3 of the item's own, other files, 1 per file | 136 | 2 | 2 | 103 |
+| + skip a site within 10 lines of any other item | 96 | 1 (lost emdash #4: a different finding sat 5 lines away) | 2 | 82 |
+| + skip only near an item quoting the same span | 112 | 2 | 2 | 87 |
+| + no bare names, no span in > 3 other files | 35 on 10 PRs | 2 | 1 | 21 |
+| + each site claimed once per review (self-review round 1) | 27 on 9 PRs | 2 | 1 | 17 |
+| + once per review per expression (round 2) | 31 on 10 PRs | 2 | 1 | 19 |
+| **+ covered and claims per expression too (shipped, round 3)** | **30 on 9 PRs** | **2 (emdash #4, agents-config #2)** | **1** | **19** |
+The emdash item's own finding was unverified in R6 (the nit-reserve bug, fixed 0fad47f), and an unverified claim keeps
+no sites, so both fixes are needed for it. If both sites hold and the judge matches them, macro high recall goes up
+about 4.8 points (emdash 2/3 -> 3/3, agents-config 1/3 -> 2/3, over 14 PRs): an estimate, for run 7 to measure.
+Eval at 8b1ae92, `crucible eval --nits --no-write --budget 1.5 --cases nit- clean-` (17 cases, $7.04, local): nit
+cases 22/22, false blocking 0 on 9 clean cases and 0 on nit cases (11-20 at 67cb577: 22/22, 0, 1), nits kept 75 (22 on
+clean cases), dropped 9. last-run.json keeps no sites, so this shows no regression, not whether the sweep fired.
+Self-review round 1 (review44, $1.21): NOT_GREEN, 1 medium (no eval: the run above; the CHANGELOG's "prompts are
+unchanged" was wrong for the verifier of an item that gets sites) and 4 lows (docs said "own line" for a ±3 window;
+two items quoting one expression both claimed the same third site; the finding and sweep paths untested end to end;
+added_text rebuilt per swept item). All fixed; the shared-site fix took the replay from 35 to 27 sites.
+Self-review round 2 (review45, $0.73): NOT_GREEN, 3 lows, answered before the fix commit: two comment lines over the
+wrap width (fixed; the numbers moved here), the eval was at 8b1ae92 not HEAD (deferred: the later commits only
+remove sites), and the one-claim rule blocked a different expression near a claimed site (fixed: keyed by
+expression, 27 -> 31 sites; a dropped first claimant takes its site with it, kept on purpose and documented).
+Self-review round 3 (review46, $0.29): NOT_GREEN, 1 medium (no bug-case eval) + 1 low (covered, the reviewer-site
+seeding and the claims still per file). Both answered before the fix commit, then fixed (30 sites on 9 PRs).
+Bug cases at the final code, `crucible eval --nits --no-write --budget 1.5` on the 23 js-/py-/ts- cases (the name
+filter also ran clean-py-absent-vs-empty; $9.66): recall 0.913 (19/21 build, 2/2 holdout), any severity 1.0, false
+blocking 0. Same recall as the 11-19 full run; the misses are the known severity calls js-refcount (medium, every run
+since 11-04) and py-test-deleted.

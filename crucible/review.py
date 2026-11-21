@@ -769,6 +769,94 @@ def clean_sites(f, nlines):
     return dict(f, also_at=out[:MAX_SITES]) if out else f
 
 
+# Expression sites (--nits, $0): ReviewBench run 6 missed a high issue at a third route that repeats `baseUrl =
+# url.origin`, the expression a kept finding quoted on its own line in two other routes; the finding's text even named
+# the third route, but its also_at was empty. Each rule below was measured on run 6's stored reviews before it was
+# kept (sites swept, missed issues reached, sites on no known issue: eval/NOTES 2026-11-21). Every swept site goes to
+# the verifier with the reviewer's own also_at (sites_note) and is reported only if it holds there, so a wrong site
+# costs verifier tokens, not a finding.
+EXPR_RX = re.compile(r"`([^`\n]{8,80})`")
+EXPR_CODE = re.compile(r"[.(\[:=]")                                 # a bare name (output_dir) isn't an expression
+EXPR_PATH = re.compile(r"[\w./-]+\.\w{1,5}(?::\d+(?:-\d+)?)?")      # a file name or path:line, not an expression
+EXPR_WIN = 3                                                       # lines either side of the item's own line
+EXPR_NEAR = 10                                                     # an item this close, same expression: covered
+EXPR_MAX_FILES = 3                                                 # in more other files: too common for one flaw
+
+
+def added_text(files):
+    """parsed diff -> {path: [(HEAD line, text)]} for the lines the change adds or rewrites."""
+    return {f["path"]: [(n, t) for h in f["hunks"] for k, t, _, n in h["lines"] if k == "+"] for f in files}
+
+
+def expr_sites(f, text, others=(), seen=None):
+    """f with also_at extended by the first added line in each other changed file that repeats a code expression f
+    quotes in backticks (title or problem; 8+ chars, with one of . ( [ : =, not a bare path) and that also sits on an
+    added line within EXPR_WIN of f's own line. An expression added in more than EXPR_MAX_FILES other files is too
+    common to mean one flaw and is left out. Files f already names (its own, its also_at) are skipped, and so is a
+    line within EXPR_NEAR of another item (others) that quotes the same expression: that item already reports it.
+    seen, a set of (path, line, expression) updated here, holds the sites another item already lists or was swept;
+    a line within EXPR_NEAR of one with the same expression isn't swept again, so one third site is claimed once.
+    Trade-off: if that first claimant is dropped, the site goes with it rather than being verified twice for one
+    flaw. The swept sites are listed in expr_sites for later counting. Unchanged f (same object) when none is found."""
+    own_file, own_line = f.get("file"), f.get("line") or 0
+    near = [t for n, t in text.get(own_file, ()) if abs(n - own_line) <= EXPR_WIN]
+    if not near:
+        return f
+    spans = {s for s in _quoted(f) if EXPR_CODE.search(s) and not EXPR_PATH.fullmatch(s.strip())
+             and any(s in t for t in near)}
+    if not spans:
+        return f
+    named = {own_file} | {m["path"].strip() for s in f.get("also_at") or []
+                          if isinstance(s, str) and (m := SITE_RX.match(s))}
+    covered = [(g.get("file"), g.get("line") or 0, q) for g in others if g is not f for q in _quoted(g)]
+    hits = {}                                       # span -> {path: first added line repeating it}
+    for sp in spans:
+        where = {}
+        for path in sorted(text):
+            n = next((n for n, t in text[path] if sp in t), None) if path not in named else None
+            if n is not None:
+                where[path] = n
+        if len(where) <= EXPR_MAX_FILES:
+            hits[sp] = where
+    found, claims = [], []
+    for path in sorted(text):
+        # each expression is checked at its own line, against items and claims for the same expression only (one
+        # quoted span inside another counts as the same: `url.origin` and `baseUrl = url.origin`)
+        mine = {sp: w[path] for sp, w in hits.items() if path in w
+                and not any(p == path and abs(w[path] - m) <= EXPR_NEAR and (q in sp or sp in q)
+                            for p, m, q in [*covered, *(seen or ())])}
+        if not mine:
+            continue
+        n = min(mine.values())
+        found.append(f"{path}:{n}")
+        claims += [(path, n, sp) for sp, m in mine.items() if m == n]
+    found = found[:max(0, MAX_SITES - len(f.get("also_at") or []))]
+    if not found:
+        return f
+    if seen is not None:
+        seen.update(c for c in claims if f"{c[0]}:{c[1]}" in found)
+    return dict(f, also_at=list(f.get("also_at") or []) + found, expr_sites=found)
+
+
+def _quoted(f):
+    return EXPR_RX.findall(f"{f.get('title') or ''} {f.get('problem') or ''}")
+
+
+def sweep_expr_sites(items, text, others):
+    """expr_sites over items in order: a site another item (others) already lists, or an earlier item was swept, for
+    the same quoted expression isn't swept again, so one third site isn't claimed and verified twice."""
+    seen = set()
+    for g in others:                         # a listed site claims only the quoted expressions on its own line
+        for x in g.get("also_at") or []:
+            m = SITE_RX.match(x) if isinstance(x, str) else None
+            if not m:
+                continue
+            path, line = m["path"].strip(), int(m["line"])
+            seen |= {(path, line, sp) for sp in _quoted(g)
+                     if any(sp in t and abs(k - line) <= EXPR_WIN for k, t in text.get(path, ()))}
+    return [expr_sites(f, text, others, seen) for f in items]
+
+
 def site_lines(repo, sha, changed, items):
     """{path: line count at HEAD} for the changed paths that some item's also_at names (git show only those)."""
     named = {SITE_RX.match(x)["path"].strip() for f in items for x in f.get("also_at") or []
@@ -1754,6 +1842,9 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                     f["line"] = readiness.draft_file_line(draft_full, f["line"])
                 nit_cands.append(f)
         tok_split = (tok_before, budget.token_snapshot())
+        if nits:
+            both = sweep_expr_sites(cands + nit_cands, added_text(files), cands + nit_cands)
+            cands, nit_cands = both[:len(cands)], both[len(cands):]
         if any(f.get("also_at") for f in cands + nit_cands):
             nl = site_lines(repo, sha, [f["path"] for f in files], cands + nit_cands)
             cands, nit_cands = [clean_sites(f, nl) for f in cands], [clean_sites(f, nl) for f in nit_cands]
@@ -1882,6 +1973,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 record["nit_sweep"]["nits"] = new_swept
                 extra = NIT_BATCH_EST_USD * -(-new_swept // NIT_BATCH)
                 review_cost += sub.own                 # a review call: booked as review cost, not verification
+                swept = sweep_expr_sites(swept, added_text(files), cands + carried + reverify + nit_cands + swept)
                 if any(f.get("also_at") for f in swept):
                     nl = site_lines(repo, sha, [f["path"] for f in files], swept)
                     swept = [clean_sites(f, nl) for f in swept]

@@ -6962,6 +6962,119 @@ class TestNitTier(unittest.TestCase):
         many = {"file": "a.py", "line": 1, "also_at": [f"a.py:{i}" for i in range(2, 30)]}
         self.assertEqual(len(V.clean_sites(many, {"a.py": 40})["also_at"]), V.MAX_SITES)
 
+    def test_expr_sites(self):
+        """ReviewBench run 6: `baseUrl = url.origin` found in two routes, missed in a third that repeats it."""
+        text = {"r/login.ts": [(27, "  const x = 1;"), (28, "  const baseUrl = url.origin;"), (29, "  output_dir = 2")],
+                "r/setup.ts": [(10, "import a"), (55, "  const baseUrl = url.origin;"), (56, "  const baseUrl = url.origin;")],
+                "r/meta.ts": [(4, "  return baseUrl = url.origin")],
+                "r/far.ts": [(9, "  // nothing here"), (12, "  output_dir = 3")]}
+        f = {"file": "r/login.ts", "line": 28, "title": "routes use `baseUrl = url.origin`",
+             "problem": "`output_dir` and `r/setup.ts:55` and `getPublicOrigin()` and `url.origin` too"}
+        out = V.expr_sites(f, text)
+        self.assertEqual(out["also_at"], ["r/meta.ts:4", "r/setup.ts:55"])          # first line per other file
+        self.assertEqual(out["expr_sites"], out["also_at"])
+        self.assertNotIn("also_at", f)                                              # f itself untouched
+        # a bare name, a path and an expression not on the item's own line sweep nothing
+        for quote in ("`output_dir`", "`r/setup.ts:55`", "`getPublicOrigin()`"):
+            g = dict(f, title="t", problem=quote)
+            self.assertIs(V.expr_sites(g, text), g, quote)
+        g = dict(f, line=200)
+        self.assertIs(V.expr_sites(g, text), g)                                     # own line not added: unchanged
+        # files f already names are skipped; room is MAX_SITES minus its own also_at
+        out = V.expr_sites(dict(f, also_at=["r/setup.ts:56"]), text)
+        self.assertEqual(out["also_at"], ["r/setup.ts:56", "r/meta.ts:4"])
+        full = dict(f, also_at=[f"r/far.ts:{i}" for i in range(V.MAX_SITES)])
+        self.assertIs(V.expr_sites(full, text), full)
+        # another item quoting the same expression within EXPR_NEAR already reports that site; a different one doesn't
+        same = {"file": "r/setup.ts", "line": 60, "title": "`baseUrl = url.origin` here too", "problem": ""}
+        other = {"file": "r/setup.ts", "line": 50, "title": "`setup_state` overwritten", "problem": "`step: 1`"}
+        self.assertEqual(V.expr_sites(f, text, [f, same])["also_at"], ["r/meta.ts:4"])
+        self.assertEqual(V.expr_sites(f, text, [f, other])["also_at"], ["r/meta.ts:4", "r/setup.ts:55"])
+        # in more than EXPR_MAX_FILES other files: too common to be one flaw
+        common = {f"r/m{i}.ts": [(1, "  const baseUrl = url.origin;")] for i in range(V.EXPR_MAX_FILES + 1)}
+        g = dict(f, problem="")
+        self.assertIs(V.expr_sites(g, dict(common, **{"r/login.ts": text["r/login.ts"]})), g)
+        three = {k: v for k, v in list(common.items())[:V.EXPR_MAX_FILES]}
+        self.assertEqual(len(V.expr_sites(g, dict(three, **{"r/login.ts": text["r/login.ts"]}))["also_at"]),
+                         V.EXPR_MAX_FILES)
+
+    def test_expr_sites_window_and_one_claim_per_site(self):
+        for off, want in ((3, True), (-3, True), (4, False), (-4, False)):
+            text = {"a.py": [(10 + off, "base = url.origin")], "b.py": [(5, "base = url.origin")]}
+            f = {"file": "a.py", "line": 10, "title": "`base = url.origin`", "problem": ""}
+            self.assertEqual("also_at" in V.expr_sites(f, text), want, off)
+        text = {"a.py": [(10, "base = url.origin")], "b.py": [(20, "base = url.origin")],
+                "c.py": [(30, "base = url.origin")]}
+        a = {"file": "a.py", "line": 10, "title": "`base = url.origin`", "problem": ""}
+        b = {"file": "b.py", "line": 20, "title": "`base = url.origin` again", "problem": ""}
+        out = V.sweep_expr_sites([a, b], text, [a, b])
+        self.assertEqual([x.get("also_at") for x in out], [["c.py:30"], None])     # c.py claimed once
+        listed = dict(b, also_at=["c.py:31"])                                     # a reviewer's site 1 line off
+        self.assertIs(V.sweep_expr_sites([a], text, [a, listed])[0], a)
+        # a different expression near a claimed site is a different flaw: both are swept
+        text = {"a.py": [(10, "base = url.origin")], "e.py": [(5, "p = os.path.join(root)")],
+                "d.py": [(20, "base = url.origin"), (25, "p = os.path.join(root)")]}
+        e = {"file": "e.py", "line": 5, "title": "`os.path.join(root)`", "problem": ""}
+        self.assertEqual([x.get("also_at") for x in V.sweep_expr_sites([a, e], text, [a, e])],
+                         [["d.py:20"], ["d.py:25"]])
+        # one item quoting two expressions: another item covering only the first doesn't block the second's site
+        text = {"a.py": [(10, "base = url.origin; p = os.path.join(root)")], "x.py": [(20, "p = os.path.join(root)")],
+                "y.py": [(1, "base = url.origin")]}
+        two = {"file": "a.py", "line": 10, "title": "`base = url.origin`", "problem": "and `os.path.join(root)`"}
+        g = {"file": "x.py", "line": 22, "title": "`base = url.origin` here", "problem": ""}
+        self.assertEqual(V.sweep_expr_sites([two], text, [two, g])[0]["also_at"], ["x.py:20", "y.py:1"])
+        # only the expression on the reported line is claimed: the other one's later line stays open to its own item
+        apart = {"a.py": [(10, "base = url.origin; p = os.path.join(root)")], "h.py": [(3, "p = os.path.join(root)")],
+                 "w.py": [(10, "base = url.origin"), (15, "p = os.path.join(root)")]}
+        h = {"file": "h.py", "line": 3, "title": "`os.path.join(root)`", "problem": ""}
+        self.assertEqual([x.get("also_at") for x in V.sweep_expr_sites([two, h], apart, [two, h])],
+                         [["w.py:10"], ["w.py:15"]])
+        # a reviewer's listed site claims only the expressions on its own line
+        lister = {"file": "z.py", "line": 1, "title": "`base = url.origin`", "problem": "`os.path.join(root)`",
+                  "also_at": ["x.py:20"]}
+        self.assertEqual(V.sweep_expr_sites([a], dict(text, **{"x.py": [(20, "p = os.path.join(root)"),
+                                                                        (25, "base = url.origin")]}),
+                                            [a, lister])[0]["also_at"], ["x.py:25", "y.py:1"])
+
+    def test_expr_sites_end_to_end_only_with_nits_and_only_when_held(self):
+        files = ({"a.py": "x = 1\n", "b.py": "y = 1\n"},
+                 {"a.py": "x = 2\nbase = req.origin\n" + "".join(f"y{i} = {i}\n" for i in range(30)),
+                  "b.py": "y = 2\nw = 3\nbase = req.origin\n"})
+        nit = dict(self._f("internal origin", 2), problem="uses `base = req.origin` behind a proxy")
+        r, calls = self._run([nit], repo_files=files, sites_hold=["b.py:3"])
+        v = next(c for c in calls if c["kind"] == "verify_nits")
+        self.assertIn("The same flaw is also claimed at: b.py:3.", v["prompt"])
+        self.assertEqual(r["nits"][0]["also_at"], ["b.py:3"])
+        self.assertEqual(r["nits"][0]["expr_sites"], ["b.py:3"])
+        r, _ = self._run([nit], repo_files=files, sites_hold=[])
+        self.assertNotIn("also_at", r["nits"][0])                    # swept, not held: not reported
+        self.assertEqual(r["nits"][0]["expr_sites"], ["b.py:3"])     # but countable
+        _, calls = self._run([nit], repo_files=files, nits=None)
+        self.assertTrue(all("also claimed" not in c["prompt"] for c in calls))
+
+    def test_expr_sites_reach_findings_and_swept_nits(self):
+        files = ({"a.py": "x = 1\n", "b.py": "y = 1\n"},
+                 {"a.py": "base = req.origin\n" + "".join(f"y{i} = {i}\n" for i in range(30)),
+                  "b.py": "y = 2\nbase = req.origin\n"})
+        from unittest import mock
+        real = self._f
+
+        def quoting(title, line, severity="low", file="a.py"):
+            f = real(title, line, severity, file)
+            return dict(f, problem="uses `base = req.origin`") if title == "division by zero in f" else f
+        with mock.patch.object(self, "_f", quoting):
+            r, calls = self._run([], repo_files=files, sites_hold=["b.py:2"])
+        f = next(f for f in r["findings"] if f["line"] == 1)
+        self.assertEqual((f["also_at"], f["expr_sites"]), (["b.py:2"], ["b.py:2"]))
+        self.assertTrue(any("also claimed at: b.py:2." in c["prompt"] for c in calls
+                            if c["kind"] in ("verify", "verify_cheap")))
+        swept = dict(self._f("swept: internal origin", 1), problem="`base = req.origin` again")
+        r, calls = self._run([], repo_files=files, sweep_out=[swept], sites_hold=["b.py:2"],
+                             budget=5.0)
+        nit = next((n for n in r.get("nits") or [] if n["title"].startswith("swept")), None)
+        self.assertIsNotNone(nit, [c["kind"] for c in calls])
+        self.assertEqual(nit.get("expr_sites"), ["b.py:2"])
+
     def test_no_also_at_leaves_verifier_prompts_and_schemas_as_before(self):
         r, calls = self._run([self._f("a nit", 2)])
         v = next(c for c in calls if c["kind"] == "verify_nits")
