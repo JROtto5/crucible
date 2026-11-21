@@ -852,6 +852,9 @@ class TestDraftSplit(unittest.TestCase):
         # review40 (CR-4ef64f32): "fix" in other prose is not the reword
         self.assertIs(u('"Fixes" became "Fix"', ["Fixes #947"], "Fixes #947\n\nThis fix copies the buffers."), True)
         self.assertEqual(u('"Fixes" became "Fix"', ["Fixes #947"], "Fixes #947\n\nFix #947 by copying."), "partly")
+        # review41 (CR-db629bc8): this repo's issue URL and "#947" are the same issue
+        self.assertEqual(u('"Fixes" became "Fix"', ["Fixes #947"], "Fixes #947\n\nFix https://github.com/o/r/issues/947 by copying.",
+                           "o/r"), "partly")
         self.assertEqual(u('"Fixes #947" line and the sentence saying the fix is backported to 2.3', ["Fixes #947"]), "partly")
         self.assertIs(u('dropped the aside "Closes #120" and kept the retry loop', ["Closes #12"]), False)
         self.assertIs(u('dropped the note that the "related" cache path is gone', ["Related issue: #5"]), False)

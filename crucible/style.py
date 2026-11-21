@@ -514,7 +514,7 @@ def keep_required_lines(original, rewritten, slug=None):
 _Q = r"[\"'`“”‘’]"
 
 
-def _reword_undone(entry, restored, body=""):
+def _reword_undone(entry, restored, body="", slug=None):
     """True: the removal entry is only a reword/drop of a line keep_required_lines put back ('"Fixes" became "Fix"',
     or the restored line itself), so it didn't happen. "partly": it names a restored line but says more (that part
     stands), or the reworded text is still in `body` (the restore added the line back beside it). False: unrelated."""
@@ -531,12 +531,12 @@ def _reword_undone(entry, restored, body=""):
             # it stands only where the new text is a whole line, or sits on a line linking the same issue: a word
             # like "fix" in other prose isn't the reword, and the put-back line itself doesn't count
             new = m.group(1).strip().rstrip(".").lower()
-            refs = _issue_refs(line)
+            refs = _issue_refs(line, slug)
             for l in body.split("\n"):
                 t = re.sub(r"^[-*\s]+", "", l.strip()).rstrip(".").lower()
                 if l.strip() == line or not new:
                     continue
-                if t == new or (refs and refs & _issue_refs(l) and re.search(rf"(?<!\w){re.escape(new)}(?!\w)", t)):
+                if t == new or (refs and refs & _issue_refs(l, slug) and re.search(rf"(?<!\w){re.escape(new)}(?!\w)", t)):
                     return "partly"
             return True
     if any(re.search(rf"(?<![\w#]){re.escape(r.strip())}(?![\w])", entry) for r in restored if r.strip()):
@@ -585,7 +585,7 @@ def polish(repo, project, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-
     # the notes must match the output: a reword the restore undid ("Fixes" became "Fix") did not happen
     removed = []
     for r in out["removed"]:
-        undone = _reword_undone(r, restored, body)
+        undone = _reword_undone(r, restored, body, upstream_slug(repo))
         if undone is True:
             continue
         removed.append(r + (" (the required line was put back, the rest of this removal stands)" if undone else ""))
