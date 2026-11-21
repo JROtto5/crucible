@@ -49,31 +49,60 @@ def strip_new_attribution(original, rewritten):
 # A line that is only bold text ("**Note for reviewers**", "__Risks:__"), a reviewer-notes heading, and a bold
 # lead-in ("**Risk:** none known."). Rewrites add them unasked; WRITING.md counts them as machine tells and
 # gkjohnson bans notes sections outright (DRG-87).
+# Let through (tests/test_core.py test_strip_new_emphasis_let_through): any bold span the author wrote anywhere,
+# even moved to a line start or with its label's punctuation changed ("**Risk.**" -> "**Risk:**"); a heading the
+# repo's PR template requires ("## Notes for reviewers"); `__dunder__` identifiers ("__init__ takes", "__main__");
+# anything inside a ``` / ~~~ fence.
 _BOLD_ONLY_RX = re.compile(r"^\s*(\*\*|__)[^*_\n]+?\1\s*:?\s*$")
 _NOTES_SECTION_RX = re.compile(r"^#{1,6}\s+(notes?|notes? (for|to) (the )?reviewers?|reviewer'?s? notes|call-?outs?)\s*:?\s*$", re.I)
 _NOTES_LABEL_RX = re.compile(r"^(notes?|notes? (for|to) (the )?reviewers?|reviewer'?s? notes|call-?outs?|risks?|trade-?offs?)$", re.I)
 _BOLD_LEAD_RX = re.compile(r"^(\s*(?:[-*]\s+)?)(\*\*|__)([^*_\n]{1,40}?:?)\2(\s*:?\s+)(?=\S)")
+_BOLD_SPAN_RX = re.compile(r"(\*\*|__)([^*_\n]+?)\1")
+_FENCE_RX = re.compile(r"^\s*(```|~~~)")
 
 
-def strip_new_emphasis(original, rewritten):
+def _bold_key(t):
+    return re.sub(r"\s+", " ", t.strip(" \t:.;,!?")).lower()
+
+
+def _is_dunder(delim, inner):
+    return delim == "__" and re.fullmatch(r"\w+", inner.strip()) is not None
+
+
+def strip_new_emphasis(original, rewritten, keep_heads=()):
     """-> (rewritten without bold-only lines and reviewer-notes headings the original didn't have, and with the
     bold taken off lead-ins it didn't have; list of changes). The text under such a heading stays: only the shape
-    is the rewrite's, the facts are the author's."""
+    is the rewrite's, the facts are the author's. `keep_heads`: the PR template's required headings, never cut."""
     had = {re.sub(r"\s+", " ", l.strip()).lower() for l in original.split("\n")}
-    had_leads = {m.group(3).strip(" :").lower() for l in original.split("\n") for m in [_BOLD_LEAD_RX.match(l)] if m}
-    changes, kept = [], []
+    had_bold = {_bold_key(m.group(2)) for m in _BOLD_SPAN_RX.finditer(original)}
+    keep = {norm_heading(h) for h in keep_heads}
+    changes, kept, fence = [], [], None
     for line in rewritten.split("\n"):
+        f = _FENCE_RX.match(line)
+        if fence or f:
+            kept.append(line)
+            if f and (fence is None or f.group(1) == fence):
+                fence = None if fence else f.group(1)
+            continue
+        only = _BOLD_ONLY_RX.match(line)
+        inner = line.strip().strip(":").strip()[2:-2] if only else ""
         if re.sub(r"\s+", " ", line.strip()).lower() in had:
             kept.append(line)
-        elif _NOTES_SECTION_RX.match(line) or (_BOLD_ONLY_RX.match(line) and _NOTES_LABEL_RX.match(line.strip(" *_:"))):
+        elif _NOTES_SECTION_RX.match(line):
+            if norm_heading(line.lstrip("#")) in keep:
+                kept.append(line)
+            else:
+                changes.append(f"heading the rewrite added: {line.strip()}")
+        elif only and (_is_dunder(only.group(1), inner) or _bold_key(inner) in had_bold):
+            kept.append(line)
+        elif only and _NOTES_LABEL_RX.match(line.strip(" *_:")):
             changes.append(f"heading the rewrite added: {line.strip()}")
-        elif _BOLD_ONLY_RX.match(line):             # a fact the rewrite put in bold keeps its words
-            m = _BOLD_ONLY_RX.match(line)
-            kept.append(line.replace(m.group(1), ""))
+        elif only:                                  # a fact the rewrite put in bold keeps its words
+            kept.append(line.replace(only.group(1), ""))
             changes.append(f"bold line the rewrite added: {line.strip()}")
         else:
             m = _BOLD_LEAD_RX.match(line)
-            if m and m.group(3).strip(" :").lower() not in had_leads:
+            if m and not _is_dunder(m.group(2), m.group(3)) and _bold_key(m.group(3)) not in had_bold:
                 line = m.group(1) + m.group(3) + m.group(4) + line[m.end():]
                 changes.append(f"bold lead-in the rewrite added: {m.group(3).strip()}")
             kept.append(line)
@@ -482,6 +511,27 @@ def keep_required_lines(original, rewritten, slug=None):
     return body, missing
 
 
+_Q = r"[\"'`“”‘’]"
+
+
+def _reword_undone(entry, restored):
+    """True: the removal entry is only a reword/drop of a line keep_required_lines put back ('"Fixes" became "Fix"',
+    or the restored line itself), so it didn't happen. "partly": it names a restored line but says more (that part
+    stands). False: unrelated."""
+    e = entry.strip().rstrip(".")
+    for r in restored:
+        line = r.strip()
+        lead = re.match(r"[-*\s]*\**(\w+)", line)
+        if re.sub(_Q, "", e).strip().lower() in (line.lower(), re.sub(r"^[-*\s]+", "", line).lower()):
+            return True
+        if lead and re.fullmatch(rf"(?i)(?:reworded |changed )?{_Q}{re.escape(lead.group(1))}{_Q}\s*"
+                                 rf"(?:became|->|→|to|changed to|was changed to|reworded to)\s*{_Q}[^\"'`”’]+{_Q}", e):
+            return True
+    if any(re.search(rf"(?<![\w#]){re.escape(r.strip())}(?![\w])", entry) for r in restored if r.strip()):
+        return "partly"
+    return False
+
+
 def polish(repo, project, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-opus-5-5"), budget_usd=1.0, log=print):
     from .readiness import NOTES_MARKER, find_draft, split_draft, template_headings, template_text
     path, full = find_draft(repo)
@@ -498,7 +548,7 @@ def polish(repo, project, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-
         are referenced). Keep EVERY factual statement, number, command and test result from the original; do not add any
         claim that isn't in the original or provable from the checkout (you may read the code). If the original or
         the code shows a real trade-off or risky spot, say it in one plain sentence in the body; never add a bold
-        lead-in, a bold-only line or a notes section the original doesn't have. No emoji, no "This PR ..." openers, no filler words, no marketing tone. Do not add any AI or tool attribution
+        lead-in, a bold-only line or a notes section the original doesn't have (a section the template requires is fine). No emoji, no "This PR ..." openers, no filler words, no marketing tone. Do not add any AI or tool attribution
         (no "Generated with ..." footer, no AI Co-authored-by trailer); keep such a line only if the original has it.
         {'Required template sections: ' + str(heads) if heads else ''}
         Return the new title and body, a list of anything you removed (so the author can check), and the facts you kept.
@@ -514,16 +564,19 @@ def polish(repo, project, model=os.environ.get("CRUCIBLE_ASSIST_MODEL", "claude-
     if added_attr:
         log(f"  dropped AI attribution the rewrite added: {added_attr}")
         out["removed"] = list(out["removed"]) + [f"AI attribution added by the rewrite: {a}" for a in added_attr]
-    body, shaped = strip_new_emphasis(parts["body"], body)
+    body, shaped = strip_new_emphasis(parts["body"], body, heads)
     if shaped:
         log(f"  undid formatting the rewrite added: {shaped}")
     body, restored = keep_required_lines(parts["body"], body, upstream_slug(repo))
     if restored:
         log(f"  restored required line(s) the rewrite dropped: {restored}")
     # the notes must match the output: a reword the restore undid ("Fixes" became "Fix") did not happen
-    leads = {re.match(r"[-*\s]*(\**\w+)", r).group(1).strip("*").lower() for r in restored if re.match(r"[-*\s]*\**\w", r)}
-    removed = [r for r in out["removed"] if not any(l.strip() in r for l in restored)
-               and not any(re.search(rf"[\"'`“]{re.escape(w)}[\"'`”]", r, re.I) for w in leads)]
+    removed = []
+    for r in out["removed"]:
+        undone = _reword_undone(r, restored)
+        if undone is True:
+            continue
+        removed.append(r + (" (the required line was put back, the rest of this removal stands)" if undone else ""))
     txt = f"# {out['title']}\n\n{body.strip()}\n"
     # carry the author's notes over, so the polished draft still has them, marked off; a `# Title` block before
     # `# Body` lands in the notes too, and the new title is already on top

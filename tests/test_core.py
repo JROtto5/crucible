@@ -798,6 +798,39 @@ class TestDraftSplit(unittest.TestCase):
         self.assertIn("**Note for reviewers**", open(os.path.join(d, "PR_DRAFT.polished.md")).read())
 
 
+    def test_strip_new_emphasis_let_through(self):
+        # review37 on DRG-87 (CR-bb3b9165, CR-5fde51b7, CR-5e503f3f, CR-d77a3be8): what the strip must leave alone
+        keep = lambda o, r, h=(): S.strip_new_emphasis(o, r, h)[0]
+        # a heading the PR template requires, even if the author's draft lacked it
+        self.assertIn("## Notes for reviewers", keep("Fixes a bug.\n", "## Summary\n\nFixes a bug.\n\n## Notes for reviewers\n\nnone",
+                                                     ["Summary", "Notes for reviewers"]))
+        self.assertNotIn("## Notes", keep("Fix a.\n", "## Notes\n\nFix a."))       # ... but not one nobody asked for
+        # the author's bold moved to a line start, or its label punctuation changed
+        self.assertIn("**`transferBuffers: true`** avoids", keep("The copy takes 44 ms; **`transferBuffers: true`** avoids it.",
+                                                                "**`transferBuffers: true`** avoids the 44 ms copy."))
+        self.assertIn("**Risk:** none", keep("The copy is slow. **Risk:** none known.", "**Risk:** none known."))
+        self.assertIn("**Risk:** none", keep("**Risk.** none known.", "**Risk:** none known."))
+        self.assertIn("**Breaking: no more transfer.**", keep("**Breaking: no more transfer**", "**Breaking: no more transfer.**"))
+        # dunder identifiers are not bold
+        self.assertEqual(keep("- `__init__` takes the args", "- __init__ now takes the args"), "- __init__ now takes the args")
+        self.assertEqual(keep("Run `__main__`.", "__main__"), "__main__")
+        # fenced code is never touched
+        fenced = "```md\n**Risk:** none\n## Notes\n```"
+        self.assertEqual(keep("x", fenced), fenced)
+        # still stripped: new bold lead-ins and new bold-only lines
+        self.assertEqual(keep("x", "**Risk:** none known."), "Risk: none known.")
+        self.assertEqual(keep("x", "**Breaking change**"), "Breaking change")
+
+    def test_polish_notes_keep_bundled_removals(self):
+        # CR-29cb8385: a removal entry that also names a restored line must not vanish from the notes
+        u = S._reword_undone
+        self.assertIs(u('"Fixes" became "Fix"', ["Fixes #947"]), True)
+        self.assertIs(u('"Fixes #947"', ["Fixes #947"]), True)
+        self.assertEqual(u('"Fixes #947" line and the sentence saying the fix is backported to 2.3', ["Fixes #947"]), "partly")
+        self.assertIs(u('dropped the aside "Closes #120" and kept the retry loop', ["Closes #12"]), False)
+        self.assertIs(u('dropped the note that the "related" cache path is gone', ["Related issue: #5"]), False)
+
+
 class TestReviewLogic(unittest.TestCase):
     def test_honesty_caps(self):
         f = V.apply_honesty({"severity": "critical", "caused_by_this_change": False, "reachable_in_real_use": True})
