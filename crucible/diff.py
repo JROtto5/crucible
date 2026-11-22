@@ -251,13 +251,34 @@ def _chunk(files, max_chars):
     return chunks, sorted(set(uncovered))
 
 
+def _strip_code_whitespace(line):
+    """Drop whitespace outside quoted literals on one line; whitespace inside '...', "..." or `...` is data
+    (a regex or message), so changing it is not formatting. Quote state does not carry across lines: an unclosed
+    quote (an apostrophe in a comment) keeps the rest of that line, which can only hide churn, never invent it."""
+    out, quote, esc = [], None, False
+    for c in line:
+        if quote:
+            out.append(c)
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == quote:
+                quote = None
+        elif c in "'\"`":
+            quote = c; out.append(c)
+        elif not c.isspace():
+            out.append(c)
+    return "".join(out)
+
+
 def formatting_only_hunks(files):
-    """Hunks whose removed and added lines are identical once whitespace is ignored."""
+    """Hunks whose removed and added lines are identical once whitespace outside string literals is ignored."""
     out = []
     for f in files:
         for h in f["hunks"]:
-            rem = [re.sub(r"\s+", "", t) for k, t, *_ in h["lines"] if k == "-"]
-            add = [re.sub(r"\s+", "", t) for k, t, *_ in h["lines"] if k == "+"]
+            rem = [_strip_code_whitespace(t) for k, t, *_ in h["lines"] if k == "-"]
+            add = [_strip_code_whitespace(t) for k, t, *_ in h["lines"] if k == "+"]
             if (rem or add) and "".join(rem) == "".join(add):
                 out.append(f"{f['path']}:{h['new_start']}")
     return out
