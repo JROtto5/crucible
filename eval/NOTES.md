@@ -1504,3 +1504,25 @@ Bug cases at the final code, `crucible eval --nits --no-write --budget 1.5` on t
 filter also ran clean-py-absent-vs-empty; $9.66): recall 0.913 (19/21 build, 2/2 holdout), any severity 1.0, false
 blocking 0. Same recall as the 11-19 full run; the misses are the known severity calls js-refcount (medium, every run
 since 11-04) and py-test-deleted.
+
+### 2026-11-22 · lockfile -> manifest sites, from R6's wrong-file bucket (apilix #0), $0 replay + eval
+
+**Replay ($0, blaze-3, the shipped `manifest_sites` on every kept and dropped item of runs 4-6, `git diff --unified=5
+base..sha` of each PR's snapshot):** R4 0 sites; R5 1 (apilix, package-lock.json:14 -> server/package.json:17); R6 1
+(apilix, package-lock.json:13 -> server/package.json:17). The golden high #0 spans server/package.json 1-23; the
+lockfile item matched only medium #18 at the lockfile in both runs. No other kept lockfile item in 75 PR runs, so the
+rule has no false-site exposure on the bench and an expected gain of 1 of apilix's 11 items (~0.6 points of macro high
+recall over 14 PRs), if the verifier holds the site and the judge matches it: for run 7.
+
+**Fixture, three tries (2 rounds per arm each, `--nits --budget 1.5`, HEAD vs main 29ced3b, $10.95 total):**
+| fixture | HEAD | main | where raised |
+|---|---|---|---|
+| auth.js requires jsonwebtoken, multer 1.x | 2/2 | 2/2 | package.json (multer CVE findings beside it) |
+| no code uses jsonwebtoken (apilix-like) | 1/2 (via the swept site) | 0/2 (1 line-only hit on the multer item, not real) | lockfile 3/4; the true item dropped 2/4 |
+| **shipped**: auth.js requires it, multer 2.x, keywords + line 10 | **2/2** | **2/2** | package.json, all 4 |
+The middle shape was dropped: the verifier's refutation there ("an extra root dependency in the lock is pruned, not an
+`npm ci` error", from memory, low confidence) is right. npm 11.20 `npm ci --dry-run`: an extra lock dependency installs
+fine (5 packages, the extra one pruned); a declared dependency missing from the lock fails with EUSAGE "not in sync".
+So golden #0's "npm ci will fail" mechanism is wrong; its real harm is the "Cannot find module" crash its own text
+names. The shipped case guards the class at the ceiling; the sweep is covered by tests (unit, end-to-end held/not held,
+mutation-checked) and this replay.

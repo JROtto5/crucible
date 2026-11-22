@@ -857,6 +857,62 @@ def sweep_expr_sites(items, text, others):
     return [expr_sites(f, text, others, seen) for f in items]
 
 
+# Manifest sites (--nits, $0): ReviewBench runs 5 and 6 both kept "the lockfile lists bcryptjs and jsonwebtoken, which
+# package.json doesn't declare" at server/package-lock.json, matched only to a medium issue there; the high one sat in
+# server/package.json, which the change also edits. The where-it-sits paragraph (NITS_NOTE) already asks for the
+# manifest and was not followed either time. So a lockfile item whose text names its manifest gets the manifest's
+# first changed line as a site, checked by the verifier like any other. Same directory only: a workspace root's
+# lockfile has no single manifest. On runs 4-6 this fires on that one item (eval/NOTES 2026-11-22).
+LOCK_MANIFEST = {"package-lock.json": "package.json", "npm-shrinkwrap.json": "package.json", "yarn.lock": "package.json",
+                 "pnpm-lock.yaml": "package.json", "bun.lock": "package.json", "bun.lockb": "package.json",
+                 "Cargo.lock": "Cargo.toml", "poetry.lock": "pyproject.toml", "uv.lock": "pyproject.toml",
+                 "pdm.lock": "pyproject.toml", "Pipfile.lock": "Pipfile", "Gemfile.lock": "Gemfile",
+                 "go.sum": "go.mod", "composer.lock": "composer.json", "mix.lock": "mix.exs",
+                 "pubspec.lock": "pubspec.yaml", "Package.resolved": "Package.swift"}
+
+
+def first_changed_lines(files):
+    """parsed diff -> {path: the first HEAD line the change adds, or that follows a line it removes}."""
+    out = {}
+    for f in files:
+        if f.get("deleted"):
+            continue
+        for h in f["hunks"]:
+            at = h["new_start"]
+            for k, _, _, n in h["lines"]:
+                if k in "+-":
+                    out[f["path"]] = n if k == "+" else max(at, 1)
+                    break
+                at = (n or at) + 1
+            if f["path"] in out:
+                break
+    return out
+
+
+def manifest_sites(f, first):
+    """f with also_at extended by its manifest's first changed line (first: first_changed_lines) when f sits in a
+    lockfile, names that manifest's file name in its title, problem or fix, and the change edits the manifest in the
+    same directory. Recorded in manifest_site for counting. Unchanged f (same object) otherwise, or when f already
+    names the manifest or has MAX_SITES sites."""
+    d, _, name = (f.get("file") or "").rpartition("/")
+    man = LOCK_MANIFEST.get(name)
+    path = f"{d}/{man}" if d and man else man
+    if not man or path not in first or man not in f"{f.get('title') or ''} {f.get('problem') or ''} {f.get('fix') or ''}":
+        return f
+    sites = list(f.get("also_at") or [])
+    if len(sites) >= MAX_SITES or any(isinstance(s, str) and (m := SITE_RX.match(s)) and m["path"].strip() == path
+                                      for s in sites):
+        return f
+    site = f"{path}:{first[path]}"
+    return dict(f, also_at=sites + [site], manifest_site=site)
+
+
+def sweep_sites(items, files, others):
+    """The $0 site sweeps over items, in order: expression sites, then manifest sites."""
+    first = first_changed_lines(files)
+    return [manifest_sites(f, first) for f in sweep_expr_sites(items, added_text(files), others)]
+
+
 def site_lines(repo, sha, changed, items):
     """{path: line count at HEAD} for the changed paths that some item's also_at names (git show only those)."""
     named = {SITE_RX.match(x)["path"].strip() for f in items for x in f.get("also_at") or []
@@ -1843,7 +1899,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 nit_cands.append(f)
         tok_split = (tok_before, budget.token_snapshot())
         if nits:
-            both = sweep_expr_sites(cands + nit_cands, added_text(files), cands + nit_cands)
+            both = sweep_sites(cands + nit_cands, files, cands + nit_cands)
             cands, nit_cands = both[:len(cands)], both[len(cands):]
         if any(f.get("also_at") for f in cands + nit_cands):
             nl = site_lines(repo, sha, [f["path"] for f in files], cands + nit_cands)
@@ -1973,7 +2029,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 record["nit_sweep"]["nits"] = new_swept
                 extra = NIT_BATCH_EST_USD * -(-new_swept // NIT_BATCH)
                 review_cost += sub.own                 # a review call: booked as review cost, not verification
-                swept = sweep_expr_sites(swept, added_text(files), cands + carried + reverify + nit_cands + swept)
+                swept = sweep_sites(swept, files, cands + carried + reverify + nit_cands + swept)
                 if any(f.get("also_at") for f in swept):
                     nl = site_lines(repo, sha, [f["path"] for f in files], swept)
                     swept = [clean_sites(f, nl) for f in swept]
