@@ -1918,6 +1918,14 @@ class TestEvalScoring(unittest.TestCase):
         self.assertEqual(s["issues_found"], ["a", "b"])
         bug = {"kind": "bug", "file": "b.py", "lines": [5], "keywords": []}
         self.assertEqual(E.score_case({"status": "done", "findings": [], "dropped": [], "nits": [nit]}, bug)["nit_hits"], 1)
+        # a blocking finding at the lockfile whose verified site is the manifest catches a bug labelled there
+        lock = {"severity": "important", "file": "s/package-lock.json", "line": 9, "title": "x", "problem": "",
+                "also_at": ["s/package.json:12"]}
+        bug = {"kind": "bug", "file": "s/package.json", "lines": [12], "keywords": []}
+        s = E.score_case({"status": "done", "findings": [lock], "dropped": []}, bug)
+        self.assertEqual((s["caught"], s["caught_any_severity"], s["extra_blocking"]), (True, True, 0))
+        s = E.score_case({"status": "done", "findings": [dict(lock, also_at=[])], "dropped": []}, bug)
+        self.assertEqual((s["caught"], s["extra_blocking"]), (False, 1))
 
     def test_cases_are_well_formed(self):
         from crucible import evalrun as E
@@ -7074,6 +7082,59 @@ class TestNitTier(unittest.TestCase):
         nit = next((n for n in r.get("nits") or [] if n["title"].startswith("swept")), None)
         self.assertIsNotNone(nit, [c["kind"] for c in calls])
         self.assertEqual(nit.get("expr_sites"), ["b.py:2"])
+
+    def test_first_changed_lines(self):
+        from crucible import diff as D
+        raw = ("diff --git a/p.json b/p.json\n--- a/p.json\n+++ b/p.json\n@@ -12,4 +12,5 @@\n a\n b\n+c\n d\n e\n"
+               "diff --git a/q.toml b/q.toml\n--- a/q.toml\n+++ b/q.toml\n@@ -3,4 +3,3 @@\n a\n b\n-c\n d\n"
+               "diff --git a/r.txt b/r.txt\ndeleted file mode 100644\n--- a/r.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n")
+        self.assertEqual(V.first_changed_lines(D.parse(raw)), {"p.json": 14, "q.toml": 5})
+
+    def test_manifest_sites(self):
+        """ReviewBench runs 5 and 6: a lockfile/manifest mismatch at the lockfile, the high issue in the manifest."""
+        first = {"server/package.json": 17, "server/package-lock.json": 13, "Cargo.toml": 4}
+        f = {"file": "server/package-lock.json", "line": 13, "title": "Lockfile lists bcryptjs",
+             "problem": "server/package.json doesn't declare them"}
+        out = V.manifest_sites(f, first)
+        self.assertEqual((out["also_at"], out["manifest_site"]), (["server/package.json:17"], "server/package.json:17"))
+        self.assertNotIn("also_at", f)
+        self.assertEqual(V.manifest_sites(dict(f, problem="", fix="add them to package.json"), first)["also_at"],
+                         ["server/package.json:17"])
+        self.assertEqual(V.manifest_sites({"file": "Cargo.lock", "line": 1, "title": "Cargo.toml pins 1.2"},
+                                          first)["also_at"], ["Cargo.toml:4"])
+        for g in (dict(f, problem="the integrity hash is stale"),               # doesn't name the manifest
+                  dict(f, file="package-lock.json"),                            # root lockfile: manifest not changed
+                  dict(f, file="server/package.json"),                          # not a lockfile
+                  dict(f, also_at=["server/package.json:3"]),                   # already names it
+                  dict(f, also_at=[f"a.py:{i}" for i in range(V.MAX_SITES)])):  # no room
+            self.assertIs(V.manifest_sites(g, first), g)
+        # "Gemfile" inside "Gemfile.lock" is the lockfile naming itself; only the manifest on its own counts
+        gem = {"file": "Gemfile.lock", "line": 3, "title": "Gemfile.lock pins nokogiri 1.13", "problem": ""}
+        self.assertIs(V.manifest_sites(gem, {"Gemfile": 2}), gem)
+        self.assertEqual(V.manifest_sites(dict(gem, problem="the Gemfile doesn't list it"), {"Gemfile": 2})["also_at"],
+                         ["Gemfile:2"])
+        self.assertEqual(V.manifest_sites(dict(f, problem="`server/package.json` lacks them"), first)["also_at"],
+                         ["server/package.json:17"])
+        self.assertEqual(V.manifest_sites(dict(f, also_at=["x.js:2"]), first)["also_at"],
+                         ["x.js:2", "server/package.json:17"])
+
+    def test_manifest_sites_end_to_end(self):
+        lock = '{\n  "packages": {\n    "": {\n      "dependencies": {\n        "a": "1"\n      }\n    }\n  }\n}\n'
+        files = ({"s/package.json": '{\n  "dependencies": {\n    "a": "1"\n  }\n}\n', "s/package-lock.json": lock},
+                 {"s/package.json": '{\n  "dependencies": {\n    "a": "1",\n    "b": "2"\n  }\n}\n',
+                  "s/package-lock.json": lock.replace('"a": "1"', '"a": "1",\n        "c": "3"')})
+        nit = dict(self._f("lockfile lists c", 6, file="s/package-lock.json"),
+                   problem="s/package.json doesn't declare c")
+        r, calls = self._run([nit], repo_files=files, sites_hold=["s/package.json:3"])
+        v = next(c for c in calls if c["kind"] == "verify_nits")
+        self.assertIn("The same flaw is also claimed at: s/package.json:3.", v["prompt"])
+        self.assertEqual((r["nits"][0]["also_at"], r["nits"][0]["manifest_site"]),
+                         (["s/package.json:3"], "s/package.json:3"))
+        r, _ = self._run([nit], repo_files=files, sites_hold=[])
+        self.assertNotIn("also_at", r["nits"][0])                    # not held: not reported, still countable
+        self.assertEqual(r["nits"][0]["manifest_site"], "s/package.json:3")
+        _, calls = self._run([nit], repo_files=files, nits=None)
+        self.assertTrue(all("also claimed" not in c["prompt"] for c in calls))
 
     def test_no_also_at_leaves_verifier_prompts_and_schemas_as_before(self):
         r, calls = self._run([self._f("a nit", 2)])

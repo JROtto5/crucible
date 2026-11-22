@@ -14,7 +14,8 @@ problem is in the first commit, as in a PR with follow-up commits: "caused by th
 recall flatters the reviewer. Holdout cases come from real catches and are never used to justify a prompt change; the
 summary reports their recall and false blocking separately, so a gain on build cases that doesn't carry over shows.
 A bug counts as caught when a kept finding at a blocking severity (critical/important) hits it: in the labelled file,
-AND either naming one of the labelled root-cause keywords or citing a labelled line (±1). Proximity alone is not
+AND either naming one of the labelled root-cause keywords or citing a labelled line (±1); a verified also_at site
+counts at its own place, as the ReviewBench adapter reports it. Proximity alone is not
 enough on tiny fixtures, where an unrelated finding ("no tests for mean()") can sit within a few lines. Clean cases should produce
 no blocking findings at all. Every case runs in its own temporary CRUCIBLE_HOME, so nothing leaks between cases
 or into the user's state."""
@@ -148,10 +149,10 @@ def score_case(rev, exp):
         out["issues_found"] = sorted(i["name"] for i in exp["issues"] if any(hits(f, i) for f in pool))
         out["false_blocking"] = len(blocking)
     elif exp["kind"] == "bug":
-        out["caught"] = any(hits(f, exp) for f in blocking)
-        out["caught_any_severity"] = any(hits(f, exp) for f in kept)
+        out["caught"] = any(hits(f, exp) for f in with_sites(blocking))
+        out["caught_any_severity"] = any(hits(f, exp) for f in with_sites(kept))
         out["true_dropped"] = sum(1 for f in dropped if hits(f, exp))
-        out["extra_blocking"] = sum(1 for f in blocking if not hits(f, exp))
+        out["extra_blocking"] = sum(1 for f in blocking if not any(hits(g, exp) for g in with_sites([f])))
     else:
         out["false_blocking"] = len(blocking)
     return out

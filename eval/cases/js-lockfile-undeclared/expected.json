@@ -1,0 +1,17 @@
+{
+ "kind": "bug",
+ "split": "build",
+ "source": "class of ReviewBench runs 5 and 6's apilix miss (code requires a package the lockfile lists but package.json doesn't declare; kept at the lockfile while the fix is in package.json); written from the class, not the PR",
+ "message": "server: JWT login and file uploads",
+ "file": "server/package.json",
+ "lines": [
+  10
+ ],
+ "keywords": [
+  "jsonwebtoken",
+  "not declared",
+  "undeclared",
+  "missing from package.json",
+  "cannot find module"
+ ]
+}
