@@ -1514,11 +1514,12 @@ lockfile item matched only medium #18 at the lockfile in both runs. No other kep
 rule has no false-site exposure on the bench and an expected gain of 1 of apilix's 11 items (~0.6 points of macro high
 recall over 14 PRs), if the verifier holds the site and the judge matches it: for run 7.
 
-**Fixture, three tries (2 rounds per arm each, `--nits --budget 1.5`, HEAD vs main 29ced3b, $10.95 total):**
+**Fixture, four tries (2 rounds per arm each, `--nits --budget 1.5`, HEAD vs main 29ced3b, $10.95 total):**
 | fixture | HEAD | main | where raised |
 |---|---|---|---|
-| auth.js requires jsonwebtoken, multer 1.x | 2/2 | 2/2 | package.json (multer CVE findings beside it) |
-| no code uses jsonwebtoken (apilix-like) | 1/2 (via the swept site) | 0/2 (1 line-only hit on the multer item, not real) | lockfile 3/4; the true item dropped 2/4 |
+| auth.js requires jsonwebtoken, multer 1.x, lines 10-14 | 2/2 | 2/2 | package.json (multer CVE findings beside it) |
+| no code uses jsonwebtoken, multer 1.x, lines 10-14 | 2/2 | 2/2 (1 of them only a line hit by the multer CVE item at :12, the true item dropped at the lockfile) | package.json 3, lockfile 1 |
+| no code uses it, multer 2.x, line 10 (apilix-like) | 1/2 (via the swept site) | 0/2 | lockfile 3/4; the true item dropped 2/4 |
 | **shipped**: auth.js requires it, multer 2.x, keywords + line 10 | **2/2** | **2/2** | package.json, all 4 |
 The middle shape was dropped: the verifier's refutation there ("an extra root dependency in the lock is pruned, not an
 `npm ci` error", from memory, low confidence) is right. npm 11.20 `npm ci --dry-run`: an extra lock dependency installs
