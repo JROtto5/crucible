@@ -251,14 +251,46 @@ def _chunk(files, max_chars):
     return chunks, sorted(set(uncovered))
 
 
+# Falsifiers (tests/test_core.py test_formatting_only_keeps_whitespace_inside_string_literals). Must flag:
+# `foo( 'a b' , x )` -> `foo('a b', x)`; `x = f( 1 )  # don't` -> `x = f(1)  # don't`. Must let through: whitespace
+# changed inside '...', "..." or `...` on the line (a regex `(    \(` -> `(  \(`), after an escaped quote, or after
+# an unclosed apostrophe in a comment.
+def _strip_code_whitespace(line):
+    """Drop whitespace outside quoted literals on one line; whitespace inside '...', "..." or `...` is data
+    (a regex or message), so changing it is not formatting. Quote state does not carry across lines, so the body
+    lines of a triple-quoted string or template literal are still treated as code. An unclosed quote (an
+    apostrophe in a comment) keeps the rest of that line, which can only hide churn there."""
+    out, quote, esc = [], None, False
+    for c in line:
+        if quote:
+            out.append(c)
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == quote:
+                quote = None
+        elif c in "'\"`":
+            quote = c; out.append(c)
+        elif not c.isspace():
+            out.append(c)
+    return "".join(out)
+
+
 def formatting_only_hunks(files):
-    """Hunks whose removed and added lines are identical once whitespace is ignored."""
+    """Hunks whose removed and added lines are identical once whitespace outside string literals is ignored."""
     out = []
     for f in files:
         for h in f["hunks"]:
-            rem = [re.sub(r"\s+", "", t) for k, t, *_ in h["lines"] if k == "-"]
-            add = [re.sub(r"\s+", "", t) for k, t, *_ in h["lines"] if k == "+"]
-            if (rem or add) and "".join(rem) == "".join(add):
+            rem = [t for k, t, *_ in h["lines"] if k == "-"]
+            add = [t for k, t, *_ in h["lines"] if k == "+"]
+            if not (rem or add):
+                continue
+            # The literal-aware strip keeps a superset of what \s+ keeps, so only hunks that pass the cheap
+            # check can pass it; this keeps lockfile-sized diffs off the per-character loop.
+            if re.sub(r"\s+", "", "".join(rem)) != re.sub(r"\s+", "", "".join(add)):
+                continue
+            if "".join(map(_strip_code_whitespace, rem)) == "".join(map(_strip_code_whitespace, add)):
                 out.append(f"{f['path']}:{h['new_start']}")
     return out
 

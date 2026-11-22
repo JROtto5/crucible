@@ -223,6 +223,26 @@ diff --git a/test/fixtures/keys.js b/test/fixtures/keys.js
         d = "diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1,1 +1,1 @@\n-foo( x )\n+foo(x)\n@@ -9,1 +9,1 @@\n-a\n+b\n"
         self.assertEqual(D.formatting_only_hunks(D.parse(d)), ["a:1"])
 
+    def test_formatting_only_keeps_whitespace_inside_string_literals(self):
+        # GitPython 7386a157 git/remote.py: the 4 -> 2 spaces inside the regex literal is the whole fix.
+        d = ("diff --git a/r.py b/r.py\n--- a/r.py\n+++ b/r.py\n@@ -1,1 +1,1 @@\n"
+             '-_re = re.compile(r"^ *(.) ([^ ]+)(    \\(.*\\)?$)?")\n'
+             '+_re = re.compile(r"^ *(.) ([^ ]+)(  \\(.*\\)?$)?")\n'
+             "@@ -5,1 +5,1 @@\n-msg = 'a b'\n+msg = 'a  b'\n"
+             "@@ -9,1 +9,1 @@\n-x = `${a} b`\n+x = `${a}  b`\n"
+             "@@ -12,1 +12,1 @@\n-s = \"it\\\" s\"\n+s = \"it\\\"  s\"\n")
+        self.assertEqual(D.formatting_only_hunks(D.parse(d)), [])
+        # Re-indenting or re-spacing code around a string is still churn.
+        d = ("diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1,2 +1,2 @@\n"
+             "-  foo( 'a b' , x )\n-  y='it''s'\n+    foo('a b', x)\n+    y = 'it''s'\n")
+        self.assertEqual(D.formatting_only_hunks(D.parse(d)), ["a:1"])
+        # An apostrophe in a comment leaves the quote open to the end of the line: spacing before it is still
+        # churn, spacing after it is kept (hidden, never invented), and a real change is never flagged.
+        d = ("diff --git a/c b/c\n--- a/c\n+++ b/c\n@@ -1,1 +1,1 @@\n-x = f( 1 )  # don't\n+x = f(1) # don't\n"
+             "@@ -5,1 +5,1 @@\n-x = 1  # don't  go\n+x = 1  # don't go\n"
+             "@@ -9,1 +9,1 @@\n-x = f(1)  # don't\n+x = f(2)  # don't\n")
+        self.assertEqual(D.formatting_only_hunks(D.parse(d)), ["c:1"])
+
 
 class TestBaseAndDirty(unittest.TestCase):
     def test_default_base_prefers_upstream(self):
