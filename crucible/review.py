@@ -863,8 +863,9 @@ def sweep_expr_sites(items, text, others):
 # manifest and was not followed either time. So a lockfile item whose text names its manifest gets the manifest's
 # first changed line as a site, checked by the verifier like any other. Same directory only: a workspace root's
 # lockfile has no single manifest. On runs 4-6 this fires on that one item (eval/NOTES 2026-11-22).
-LOCK_MANIFEST = {"package-lock.json": "package.json", "npm-shrinkwrap.json": "package.json", "yarn.lock": "package.json",
-                 "pnpm-lock.yaml": "package.json", "bun.lock": "package.json", "bun.lockb": "package.json",
+LOCK_MANIFEST = {"package-lock.json": "package.json", "npm-shrinkwrap.json": "package.json",
+                 "yarn.lock": "package.json", "pnpm-lock.yaml": "package.json", "bun.lock": "package.json",
+                 "bun.lockb": "package.json",
                  "Cargo.lock": "Cargo.toml", "poetry.lock": "pyproject.toml", "uv.lock": "pyproject.toml",
                  "pdm.lock": "pyproject.toml", "Pipfile.lock": "Pipfile", "Gemfile.lock": "Gemfile",
                  "go.sum": "go.mod", "composer.lock": "composer.json", "mix.lock": "mix.exs",
@@ -891,13 +892,15 @@ def first_changed_lines(files):
 
 def manifest_sites(f, first):
     """f with also_at extended by its manifest's first changed line (first: first_changed_lines) when f sits in a
-    lockfile, names that manifest's file name in its title, problem or fix, and the change edits the manifest in the
-    same directory. Recorded in manifest_site for counting. Unchanged f (same object) otherwise, or when f already
-    names the manifest or has MAX_SITES sites."""
+    lockfile, names that manifest's file name on its own (not inside the lockfile's name) in its title, problem or
+    fix, and the change edits the manifest in the same directory. Recorded in manifest_site for counting. Unchanged f
+    (same object) otherwise, or when f already names the manifest or has MAX_SITES sites."""
     d, _, name = (f.get("file") or "").rpartition("/")
     man = LOCK_MANIFEST.get(name)
     path = f"{d}/{man}" if d and man else man
-    if not man or path not in first or man not in f"{f.get('title') or ''} {f.get('problem') or ''} {f.get('fix') or ''}":
+    said = f"{f.get('title') or ''} {f.get('problem') or ''} {f.get('fix') or ''}"
+    # the name on its own: "Gemfile" inside "Gemfile.lock" is the lockfile naming itself, not its manifest
+    if not man or path not in first or not re.search(rf"(?<![\w-]){re.escape(man)}(?![\w-]|\.lock)", said):
         return f
     sites = list(f.get("also_at") or [])
     if len(sites) >= MAX_SITES or any(isinstance(s, str) and (m := SITE_RX.match(s)) and m["path"].strip() == path

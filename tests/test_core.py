@@ -7091,7 +7091,7 @@ class TestNitTier(unittest.TestCase):
         self.assertEqual(V.first_changed_lines(D.parse(raw)), {"p.json": 14, "q.toml": 5})
 
     def test_manifest_sites(self):
-        """ReviewBench runs 5 and 6: a lockfile/manifest mismatch cited at the lockfile, the high issue in package.json."""
+        """ReviewBench runs 5 and 6: a lockfile/manifest mismatch at the lockfile, the high issue in the manifest."""
         first = {"server/package.json": 17, "server/package-lock.json": 13, "Cargo.toml": 4}
         f = {"file": "server/package-lock.json", "line": 13, "title": "Lockfile lists bcryptjs",
              "problem": "server/package.json doesn't declare them"}
@@ -7108,6 +7108,13 @@ class TestNitTier(unittest.TestCase):
                   dict(f, also_at=["server/package.json:3"]),                   # already names it
                   dict(f, also_at=[f"a.py:{i}" for i in range(V.MAX_SITES)])):  # no room
             self.assertIs(V.manifest_sites(g, first), g)
+        # "Gemfile" inside "Gemfile.lock" is the lockfile naming itself; only the manifest on its own counts
+        gem = {"file": "Gemfile.lock", "line": 3, "title": "Gemfile.lock pins nokogiri 1.13", "problem": ""}
+        self.assertIs(V.manifest_sites(gem, {"Gemfile": 2}), gem)
+        self.assertEqual(V.manifest_sites(dict(gem, problem="the Gemfile doesn't list it"), {"Gemfile": 2})["also_at"],
+                         ["Gemfile:2"])
+        self.assertEqual(V.manifest_sites(dict(f, problem="`server/package.json` lacks them"), first)["also_at"],
+                         ["server/package.json:17"])
         self.assertEqual(V.manifest_sites(dict(f, also_at=["x.js:2"]), first)["also_at"],
                          ["x.js:2", "server/package.json:17"])
 
