@@ -251,12 +251,15 @@ def _chunk(files, max_chars):
     return chunks, sorted(set(uncovered))
 
 
+# Falsifiers (tests/test_core.py test_formatting_only_keeps_whitespace_inside_string_literals). Must flag:
+# `foo( 'a b' , x )` -> `foo('a b', x)`; `x = f( 1 )  # don't` -> `x = f(1)  # don't`. Must let through: whitespace
+# changed inside '...', "..." or `...` on the line (a regex `(    \(` -> `(  \(`), after an escaped quote, or after
+# an unclosed apostrophe in a comment.
 def _strip_code_whitespace(line):
     """Drop whitespace outside quoted literals on one line; whitespace inside '...', "..." or `...` is data
     (a regex or message), so changing it is not formatting. Quote state does not carry across lines, so the body
     lines of a triple-quoted string or template literal are still treated as code. An unclosed quote (an
-    apostrophe in a comment) keeps the rest of that line, which can only hide churn there.
-    Tests: test_formatting_only_keeps_whitespace_inside_string_literals."""
+    apostrophe in a comment) keeps the rest of that line, which can only hide churn there."""
     out, quote, esc = [], None, False
     for c in line:
         if quote:
