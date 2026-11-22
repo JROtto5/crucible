@@ -236,6 +236,12 @@ diff --git a/test/fixtures/keys.js b/test/fixtures/keys.js
         d = ("diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1,2 +1,2 @@\n"
              "-  foo( 'a b' , x )\n-  y='it''s'\n+    foo('a b', x)\n+    y = 'it''s'\n")
         self.assertEqual(D.formatting_only_hunks(D.parse(d)), ["a:1"])
+        # An apostrophe in a comment leaves the quote open to the end of the line: spacing before it is still
+        # churn, spacing after it is kept (hidden, never invented), and a real change is never flagged.
+        d = ("diff --git a/c b/c\n--- a/c\n+++ b/c\n@@ -1,1 +1,1 @@\n-x = f( 1 )  # don't\n+x = f(1) # don't\n"
+             "@@ -5,1 +5,1 @@\n-x = 1  # don't  go\n+x = 1  # don't go\n"
+             "@@ -9,1 +9,1 @@\n-x = f(1)  # don't\n+x = f(2)  # don't\n")
+        self.assertEqual(D.formatting_only_hunks(D.parse(d)), ["c:1"])
 
 
 class TestBaseAndDirty(unittest.TestCase):

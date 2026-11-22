@@ -253,8 +253,10 @@ def _chunk(files, max_chars):
 
 def _strip_code_whitespace(line):
     """Drop whitespace outside quoted literals on one line; whitespace inside '...', "..." or `...` is data
-    (a regex or message), so changing it is not formatting. Quote state does not carry across lines: an unclosed
-    quote (an apostrophe in a comment) keeps the rest of that line, which can only hide churn, never invent it."""
+    (a regex or message), so changing it is not formatting. Quote state does not carry across lines, so the body
+    lines of a triple-quoted string or template literal are still treated as code. An unclosed quote (an
+    apostrophe in a comment) keeps the rest of that line, which can only hide churn there.
+    Tests: test_formatting_only_keeps_whitespace_inside_string_literals."""
     out, quote, esc = [], None, False
     for c in line:
         if quote:
@@ -277,9 +279,15 @@ def formatting_only_hunks(files):
     out = []
     for f in files:
         for h in f["hunks"]:
-            rem = [_strip_code_whitespace(t) for k, t, *_ in h["lines"] if k == "-"]
-            add = [_strip_code_whitespace(t) for k, t, *_ in h["lines"] if k == "+"]
-            if (rem or add) and "".join(rem) == "".join(add):
+            rem = [t for k, t, *_ in h["lines"] if k == "-"]
+            add = [t for k, t, *_ in h["lines"] if k == "+"]
+            if not (rem or add):
+                continue
+            # The literal-aware strip keeps a superset of what \s+ keeps, so only hunks that pass the cheap
+            # check can pass it; this keeps lockfile-sized diffs off the per-character loop.
+            if re.sub(r"\s+", "", "".join(rem)) != re.sub(r"\s+", "", "".join(add)):
+                continue
+            if "".join(map(_strip_code_whitespace, rem)) == "".join(map(_strip_code_whitespace, add)):
                 out.append(f"{f['path']}:{h['new_start']}")
     return out
 
