@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""A stand-in for `claude -p` for the action's dry run: no model call, no key, no cost.
+
+It answers crucible's structured-output calls from the --json-schema alone: a review call gets one low finding on
+the first added line of the diff in its prompt, a verification call keeps it, and anything else gets the schema's
+empty shape. That runs the whole pipeline (diff, passes, verification, verdict, report, comment) for real."""
+import json, re, sys
+
+
+def empty(schema):
+    t = schema.get("type")
+    if "enum" in schema:
+        return schema["enum"][-1]
+    if t == "object":
+        return {k: empty(v) for k, v in (schema.get("properties") or {}).items() if k in schema.get("required", [])}
+    return {"array": [], "string": "", "boolean": False, "integer": 0, "number": 0}.get(t)
+
+
+def first_added_line(prompt):
+    """-> (path, line) of the first added line in a unified diff, or None."""
+    path, line = None, None
+    for row in prompt.splitlines():
+        if row.startswith("+++ "):
+            path = row[4:].strip()
+            path = path[2:] if path.startswith("b/") else path
+        elif row.startswith("@@") and path:
+            m = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)", row)
+            line = int(m.group(1)) if m else None
+        elif line is not None and row.startswith("+"):
+            return path, line
+        elif line is not None and not row.startswith("-"):
+            line += 1
+    return None
+
+
+def answer(schema, prompt):
+    props = schema.get("properties") or {}
+    if "findings" in props:
+        at = first_added_line(prompt)
+        f = [] if not at else [{
+            "severity": "low", "file": at[0], "line": at[1], "title": "[dry run] placeholder finding",
+            "problem": "Dry run: no model was called. This finding only shows where a real one would appear.",
+            "caused_by_this_change": True, "reachable_in_real_use": True,
+            "wrong_if": "the action ran without dry-run", "fix": "nothing to fix"}]
+        return {**empty(schema), "summary": "Dry run: no model was called.", "findings": f}
+    if "keep" in props:
+        return {**empty(schema), "keep": True, "severity": "low", "confidence": "high", "method": "read",
+                "actions": "dry run: nothing read", "evidence": "dry run: no model was called"}
+    return empty(schema)
+
+
+def main(argv):
+    schema = json.loads(argv[argv.index("--json-schema") + 1]) if "--json-schema" in argv else {"type": "object"}
+    if "--version" in argv:
+        print("0.0.0 (crucible dry run)")
+        return
+    out = {"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": 0,
+           "result": "", "usage": {}, "structured_output": answer(schema, sys.stdin.read())}
+    print(json.dumps(out))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

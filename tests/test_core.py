@@ -8680,5 +8680,57 @@ class TestDemo(unittest.TestCase):
         self.assertIn("not empty", str(e.exception.code))
 
 
+class TestAction(unittest.TestCase):
+    """The GitHub Action's two scripts: the dry-run stand-in for `claude -p` and the comment builder."""
+    ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+    def _load(self, name, path):
+        import importlib.machinery, importlib.util
+        loader = importlib.machinery.SourceFileLoader(name, os.path.join(self.ROOT, "action", path))
+        m = importlib.util.module_from_spec(importlib.util.spec_from_loader(name, loader))
+        loader.exec_module(m)
+        return m
+
+    def test_dry_run_answers_every_schema_crucible_sends(self):
+        fake = self._load("claude_dry_run", "claude-dry-run")
+        diff = "diff --git a/x.py b/x.py\n--- a/x.py\n+++ b/x.py\n@@ -3,2 +3,3 @@ def f():\n     a = 1\n-    b = 2\n+    b = 3\n"
+        r = fake.answer(V.FINDINGS_SCHEMA, diff)
+        self.assertEqual([(f["file"], f["line"], f["severity"]) for f in r["findings"]], [("x.py", 4, "low")])
+        for schema in (V.FINDINGS_SCHEMA, V.VERIFY_SCHEMA, V.VERIFY_SITES_SCHEMA, V.NIT_VERDICTS_SCHEMA, V.SWEEP_SCHEMA):
+            out = fake.answer(schema, diff)
+            self.assertTrue(set(schema.get("required", [])) <= set(out), schema.get("required"))
+        self.assertTrue(fake.answer(V.VERIFY_SCHEMA, "")["keep"])
+        self.assertEqual(fake.answer(V.FINDINGS_SCHEMA, "no diff here")["findings"], [])
+
+    def test_dry_run_review_end_to_end(self):
+        """The real subprocess path (util.claude) against the stand-in: a finding is raised, verified and reported."""
+        from crucible import demo
+        from unittest import mock
+        b = tempfile.mkdtemp()
+        shutil.copy(os.path.join(self.ROOT, "action", "claude-dry-run"), os.path.join(b, "claude"))
+        os.chmod(os.path.join(b, "claude"), 0o755)
+        d = demo.make(os.path.join(tempfile.mkdtemp(), "demo"))
+        with mock.patch.dict(os.environ, {"PATH": b + os.pathsep + os.environ["PATH"], "CRUCIBLE_HOME": tempfile.mkdtemp()}):
+            out = U.read_json(os.path.join(V.run_review(d, "main", offline=True, no_exec=True, log=lambda *_: None),
+                                           "review.json"))
+        self.assertEqual(out["status"], "done", out.get("reason"))
+        self.assertEqual([(f["file"], f["title"]) for f in out["findings"]], [("shelf.py", "[dry run] placeholder finding")])
+        self.assertEqual(out["coverage"]["reviewed"], out["coverage"]["files"])
+
+    def test_comment_body(self):
+        c = self._load("action_comment", "comment.py")
+        report = "# crucible · o/r @ abc\n\n**Verdict: NOT_GREEN**\n\nkey sk-ant-SECRET123 quoted\n(report: /home/runner/x/report.md)\n"
+        body = c.build(report, "0123456789abcdef", dry_run=True, secrets=["sk-ant-SECRET123", "", "short"],
+                       verdict="NOT_GREEN")
+        self.assertTrue(body.startswith(c.MARKER))                   # how a later run finds the comment to update
+        self.assertIn("`0123456789`: **NOT_GREEN** (dry run", body)
+        self.assertNotIn("SECRET123", body)
+        self.assertNotIn("/home/runner", body)
+        big = c.build("x" * 200000, "0" * 40)
+        self.assertLessEqual(len(big), c.LIMIT)
+        self.assertIn("[cut:", big)
+        self.assertTrue(big.rstrip().endswith("</details>"))
+
+
 if __name__ == "__main__":
     unittest.main()

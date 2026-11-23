@@ -1,0 +1,139 @@
+name: crucible review
+description: Review a pull request with crucible (checks, a Claude reviewer, per-finding verification) and post the report as a PR comment.
+author: JROtto5
+branding:
+  icon: check-circle
+  color: gray-dark
+
+inputs:
+  anthropic-api-key:
+    description: Anthropic API key (or set claude-code-oauth-token). Not needed with dry-run.
+    required: false
+  claude-code-oauth-token:
+    description: A Claude subscription token from `claude setup-token`, instead of an API key.
+    required: false
+  budget:
+    description: USD cap for the review. A review cut short by it can't be GREEN.
+    default: "3"
+  base:
+    description: Branch or commit to diff against (default origin/<the PR's base branch>).
+    default: ""
+  path:
+    description: The repository to review (default the workspace).
+    default: "."
+  exec:
+    description: >-
+      "true" lets crucible run the project's lint/test commands and lets the verifier run code from the PR. Off by
+      default: the job holds your key, and the PR's code is not trusted.
+    default: "false"
+  args:
+    description: Extra arguments for `crucible review`, e.g. "--nits".
+    default: ""
+  comment:
+    description: '"true" posts the report as a PR comment (updated in place on later runs). Needs pull-requests: write.'
+    default: "true"
+  dry-run:
+    description: '"true" runs the whole pipeline with a stand-in for the Claude CLI: no key, no cost, a placeholder finding.'
+    default: "false"
+  claude-code-version:
+    description: The @anthropic-ai/claude-code npm version to install.
+    default: "2.1.325"
+
+outputs:
+  verdict:
+    description: GREEN, NOT_GREEN or FAILED.
+    value: ${{ steps.review.outputs.verdict }}
+  report:
+    description: Path of the report (Markdown).
+    value: ${{ steps.review.outputs.report }}
+  comment-url:
+    description: URL of the PR comment, when one was posted.
+    value: ${{ steps.post.outputs.url }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: install crucible
+      shell: bash
+      run: python -m pip install --quiet "$GITHUB_ACTION_PATH"
+
+    - name: install the Claude Code CLI
+      if: inputs.dry-run != 'true'
+      shell: bash
+      env:
+        VERSION: ${{ inputs.claude-code-version }}
+      run: npm install --global --silent "@anthropic-ai/claude-code@$VERSION" && claude --version
+
+    - name: use the dry-run stand-in for the Claude CLI
+      if: inputs.dry-run == 'true'
+      shell: bash
+      run: |
+        mkdir -p "$RUNNER_TEMP/crucible-bin"
+        install -m 755 "$GITHUB_ACTION_PATH/action/claude-dry-run" "$RUNNER_TEMP/crucible-bin/claude"
+        echo "$RUNNER_TEMP/crucible-bin" >> "$GITHUB_PATH"
+
+    - name: review
+      id: review
+      shell: bash
+      working-directory: ${{ inputs.path }}
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
+        CRUCIBLE_HOME: ${{ runner.temp }}/crucible-home
+        BASE: ${{ inputs.base || format('origin/{0}', github.base_ref) }}
+        BUDGET: ${{ inputs.budget }}
+        EXEC: ${{ inputs.exec }}
+        ARGS: ${{ inputs.args }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_BODY: ${{ github.event.pull_request.body }}
+      run: |
+        if [ "$DRY_RUN" != true ] && [ -z "$ANTHROPIC_API_KEY$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+          echo "::error::crucible needs anthropic-api-key or claude-code-oauth-token (fork PRs get no secrets), or dry-run: true"
+          exit 1
+        fi
+        if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+          echo "::error::crucible needs the history back to the merge-base: use actions/checkout with fetch-depth: 0"
+          exit 1
+        fi
+        [ -n "$ANTHROPIC_API_KEY" ] || unset ANTHROPIC_API_KEY
+        [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || unset CLAUDE_CODE_OAUTH_TOKEN
+        # the PR's title and body are what crucible judges as the description (not if the repo tracks its own)
+        if [ -n "$PR_TITLE" ] && [ ! -e PR_DRAFT.md ]; then
+          python -c 'import os; open("PR_DRAFT.md", "w").write("## Title\n" + os.environ["PR_TITLE"] + "\n\n## Body\n" + os.environ.get("PR_BODY", "") + "\n")'
+        fi
+        flags=(--base "$BASE" --budget "$BUDGET" --offline)
+        [ "$EXEC" = true ] || flags+=(--no-exec)
+        read -r -a extra <<< "$ARGS"
+        crucible review . "${flags[@]}" "${extra[@]}" || true
+        report="$RUNNER_TEMP/crucible-report.md"
+        crucible status . > "$report" || true
+        if grep -q '^\*\*Verdict: GREEN\*\*' "$report"; then verdict=GREEN
+        elif grep -q '^\*\*Verdict: NOT_GREEN\*\*' "$report"; then verdict=NOT_GREEN
+        else verdict=FAILED; fi
+        echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+        echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        echo "report=$report" >> "$GITHUB_OUTPUT"
+        echo "crucible verdict: $verdict"
+        cat "$report" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: post the report on the PR
+      id: post
+      if: inputs.comment == 'true' && github.event.pull_request.number
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR: ${{ github.event.pull_request.number }}
+        SHA: ${{ steps.review.outputs.sha }}
+        REPORT: ${{ steps.review.outputs.report }}
+        VERDICT: ${{ steps.review.outputs.verdict }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
+      run: |
+        python "$GITHUB_ACTION_PATH/action/comment.py" build "$REPORT" "$RUNNER_TEMP/crucible-comment.md"
+        echo "url=$(python "$GITHUB_ACTION_PATH/action/comment.py" post "$RUNNER_TEMP/crucible-comment.md")" >> "$GITHUB_OUTPUT"

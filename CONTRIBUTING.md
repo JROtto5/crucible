@@ -31,7 +31,7 @@ The unit tests need only git and Python 3.10+. They stub every model call, cost 
 4. **One line in `CHANGELOG.md`**, dated, saying what changed for a user and why.
 5. **A self-review.** Run `crucible review . --base <the commit before yours>` and answer every finding (`crucible answer CR-… fixed|refuted|deferred "…"`) until it is GREEN.
 
-Keep the safe defaults: crucible never posts comments, never pushes, never approves, and never loads a checked-out project's `.claude/` settings. A change that weakens any of these won't be merged.
+Keep the safe defaults: the crucible CLI never posts comments, never pushes, never approves, and never loads a checked-out project's `.claude/` settings. The GitHub Action (`action.yml`) is the one place that posts, and only the report, on the repository whose workflow runs it; it runs with `--no-exec` unless the workflow turns execution on. A change that weakens any of these won't be merged.
 
 ## Style
 

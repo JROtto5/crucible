@@ -1,0 +1,60 @@
+name: action
+
+# The GitHub Action (action.yml) in dry-run mode: the whole pipeline with a stand-in for the Claude CLI, so it
+# needs no key and costs nothing. One job reviews a fixture repo (`crucible demo`) and checks the outputs; on a PR
+# from this repository, a second job reviews the PR itself and posts the comment.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  fixture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: make the fixture repo
+        run: PYTHONPATH=. python3 -m crucible demo "$RUNNER_TEMP/demo"
+      - id: crucible
+        uses: ./
+        with:
+          path: ${{ runner.temp }}/demo
+          base: main
+          dry-run: "true"
+          comment: "false"
+      - name: check the outputs
+        env:
+          VERDICT: ${{ steps.crucible.outputs.verdict }}
+          REPORT: ${{ steps.crucible.outputs.report }}
+        run: |
+          test "$VERDICT" = NOT_GREEN                     # one unanswered placeholder finding
+          grep -q '\[dry run\] placeholder finding' "$REPORT"
+          grep -q 'shelf.py:' "$REPORT"
+          grep -q 'coverage: 2/2 files' "$REPORT"
+
+  this-pr:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: crucible
+        uses: ./
+        with:
+          dry-run: "true"
+      - name: check the comment was posted
+        env:
+          URL: ${{ steps.crucible.outputs.comment-url }}
+          VERDICT: ${{ steps.crucible.outputs.verdict }}
+        run: |
+          echo "verdict $VERDICT, comment $URL"
+          case "$URL" in https://github.com/*/pull/*#issuecomment-*) ;; *) exit 1 ;; esac
+          test "$VERDICT" != FAILED

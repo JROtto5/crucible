@@ -56,6 +56,39 @@ On your own change, commit it and run `crucible review path/to/repo --budget 3`;
 
 On a private, unofficial run of [ReviewBench](https://github.com/review-bench/ReviewBench) (the 25 test PRs behind review-bench.ai, scored locally with the benchmark's own judge, one round, 2026-11-19, crucible 85fc223), crucible's grounded F1 was **73.7 on high-severity issues**, which would place it about #5 on the site's high-severity table, and 70.4 across all severities, at a mean $2.13 per PR. It was not submitted to the site and nobody else has reproduced it. With 25 PRs and one round, one high-severity issue moves F1 by about 2 points. Method, per-PR notes and the misses: [eval/NOTES.md](eval/NOTES.md) ("ReviewBench run 6").
 
+## Run it on pull requests (GitHub Action)
+
+`action.yml` in this repo reviews a PR in CI and posts the report as a PR comment, updated in place on later pushes. The crucible CLI itself still never posts: the action's last step does, on your repository, because you added the workflow.
+
+```yaml
+# .github/workflows/crucible.yml
+name: crucible
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  review:
+    # fork PRs get no secrets; never switch this to pull_request_target, which would run with your key on their code
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0              # crucible diffs against the merge-base
+      - uses: JROtto5/crucible@main
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}   # or claude-code-oauth-token: (from `claude setup-token`)
+          budget: 3
+```
+
+The PR's title and body are judged as its description. By default the action runs with `--no-exec --offline`: no lint or test commands from the PR, the verifier only reads, and no GitHub lookups. `exec: "true"` turns execution back on for repos where every PR author is trusted. Other inputs: `base`, `path`, `args` (extra `crucible review` flags), `comment`, `claude-code-version` (default 2.1.325) and `dry-run`. Outputs: `verdict` (GREEN, NOT_GREEN or FAILED), `report` and `comment-url`. The action doesn't fail the job on NOT_GREEN; test `steps.<id>.outputs.verdict` if you want it to.
+
+`dry-run: "true"` runs the whole pipeline with a stand-in for the Claude CLI that raises one placeholder finding, so it needs no key and costs nothing. This repo's own CI runs it on every PR ([.github/workflows/action.yml](.github/workflows/action.yml)): once on a fixture made by `crucible demo`, checking the outputs, and once on the PR itself, posting the comment.
+
 ## Commands
 
 ```text
