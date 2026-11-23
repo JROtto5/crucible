@@ -3452,9 +3452,38 @@ class TestNoExec(unittest.TestCase):
         from crucible import cli
         seen = []
         with mock.patch("crucible.review.run_review", lambda *a, **kw: seen.append(kw["no_exec"])), \
-                mock.patch.object(cli, "cmd_status", lambda a: 0):
+                mock.patch.object(cli, "cmd_status", lambda a: 0), mock.patch.object(U, "claude_cli_path", lambda: "/bin/claude"):
             cli.main(["review", ".", "--no-exec"]); cli.main(["review", "."])
         self.assertEqual(seen, [True, False])
+
+
+class TestClaudeCliMissing(unittest.TestCase):
+    """A fresh install without Claude Code used to run the project's checks, then end in 'Review FAILED:
+    FileNotFoundError: ... 'claude''. The model commands now stop first with what to install."""
+
+    def test_model_commands_stop_before_any_work(self):
+        from unittest import mock
+        from crucible import cli
+        ran = []
+        with mock.patch("crucible.review.run_review", lambda *a, **kw: ran.append(1)), \
+                mock.patch.object(U, "claude_cli_path", lambda: None), mock.patch("sys.stderr"):
+            for argv in (["review", "."], ["learn", "."], ["polish", "."], ["eval"]):
+                with self.assertRaises(SystemExit) as e:
+                    cli.main(argv)
+                self.assertIn("Claude Code CLI", str(e.exception.code), argv)
+        self.assertEqual(ran, [])
+
+    def test_offline_commands_do_not_need_it(self):
+        from unittest import mock
+        from crucible import cli
+        with mock.patch.object(U, "claude_cli_path", lambda: None), mock.patch.object(cli, "cmd_stats", lambda a: None):
+            cli.main(["stats"])            # no exit: stats reads stored reviews only
+
+    def test_missing_binary_in_a_model_call_is_a_clear_failure(self):
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"PATH": tempfile.mkdtemp()}), self.assertRaises(U.Failed) as e:
+            U.claude("p", U.MODELS["haiku"], {"type": "object"}, tempfile.gettempdir(), tools=None)
+        self.assertIn("Claude Code CLI", str(e.exception))
 
 
 class TestRerunSameCommit(unittest.TestCase):

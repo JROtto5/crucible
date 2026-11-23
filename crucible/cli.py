@@ -20,7 +20,11 @@
 crucible never pushes, comments, approves or posts. A human submits."""
 import argparse, datetime as dt, os, re, sys
 from . import __version__
+from . import util
 from .util import Failed, HOME, MODELS, project_dir, project_key, read_json, write_json
+
+# commands that call the model: they stop up front, before any checks run, when the Claude Code CLI is missing
+MODEL_CMDS = {"review", "learn", "prep", "polish", "reply", "eval"}
 
 
 def _p(repo):
@@ -314,6 +318,8 @@ def main(argv=None):
     ev.add_argument("--cache", help="shared review/verification cache dir across cases and runs (default: none)")
     ev.add_argument("--no-write", action="store_true", help="don't update eval/RESULTS.md and history (eval/last-run.json is still written)")
     a = p.parse_args(argv)
+    if a.cmd in MODEL_CMDS and not util.claude_cli_path():
+        sys.exit(f"crucible: {util.CLI_MISSING}")
     {"review": cmd_review, "status": cmd_status, "answer": cmd_answer, "waive": cmd_waive, "learn": cmd_learn, "prep": cmd_prep,
      "polish": cmd_polish, "reply": cmd_reply, "vote": cmd_vote, "remember": cmd_remember, "proposals": cmd_proposals, "eval": cmd_eval,
      "routing-replay": cmd_routing_replay, "anchor-replay": cmd_anchor_replay, "stats": cmd_stats,

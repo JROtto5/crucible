@@ -1,5 +1,5 @@
 """Shared helpers: git, state paths, the model call, budget tracking."""
-import hashlib, json, os, re, subprocess, threading
+import hashlib, json, os, re, shutil, subprocess, threading
 
 HOME = os.path.expanduser(os.environ.get("CRUCIBLE_HOME", "~/.crucible"))
 
@@ -340,6 +340,15 @@ def fable_fallback():
 UNSUPPORTED_RX = re.compile(r"does not support this model|version [\d.]+ or newer is required", re.I)
 
 
+CLI_MISSING = ("Claude Code CLI ('claude') not found on PATH. crucible makes every model call through it: install it "
+               "(https://docs.claude.com/en/docs/claude-code/setup), log in (`claude`, or set ANTHROPIC_API_KEY), then retry.")
+
+
+def claude_cli_path():
+    """-> the `claude` executable crucible will run, or None."""
+    return shutil.which("claude")
+
+
 def is_limit(err):
     return bool(LIMIT_RX.search(str(err)) or UNSUPPORTED_RX.search(str(err)))
 
@@ -389,6 +398,8 @@ def _claude_once(prompt, model, schema, cwd, budget, tools, effort, timeout, kin
     try:
         r = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, encoding="utf-8",
                            errors="replace", input=prompt, timeout=timeout)
+    except FileNotFoundError:
+        raise Failed(CLI_MISSING)
     except subprocess.TimeoutExpired:
         if budget:
             budget.meter(None, kind, bool(tools))      # it may well have used tokens; unknown is not zero
