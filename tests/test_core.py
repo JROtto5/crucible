@@ -8429,9 +8429,10 @@ class TestLensMode(unittest.TestCase):
 
     def test_author_flag_takes_several_models_by_family_or_id(self):
         self.assertEqual(V.parse_authors("opus, sonnet"), {"claude-opus-5-5", "claude-sonnet-5-5"})
-        self.assertEqual(V.parse_authors("claude-opus-5-5"), {"claude-opus-5-5"})
+        self.assertEqual(V.parse_authors("Claude-Opus-5-5"), {"claude-opus-5-5"})
         self.assertEqual(V.parse_authors("Fable claude-x-9"), {"claude-fable-5-2", "claude-x-9"})
         self.assertEqual(V.parse_authors(None), set())
+        self.assertEqual(V.unknown_authors(V.parse_authors("opsu,sonnet,claude-x-9")), ["opsu"])
         with tempfile.TemporaryDirectory() as d:
             repo, _ = self._repo(d)
             base = sh(repo, "git", "merge-base", "main", "HEAD")
@@ -8439,26 +8440,39 @@ class TestLensMode(unittest.TestCase):
                 rv, vf, au = V.choose_models(repo, base, "opus,sonnet")
             self.assertEqual((rv, au), ("claude-fable-5-2", ["claude-opus-5-5", "claude-sonnet-5-5"]))
 
+    def test_a_rerun_with_a_new_author_rereviews(self):
+        """The thin-checkout note says to pass --author; on the same commit that must not return the cached verdict."""
+        prev = {"status": "done", "inputs": V.review_inputs(".", "b", lens=True)}
+        self.assertIsNone(V.stale_inputs(prev, V.review_inputs(".", "b", lens=True)))
+        self.assertIn("--author", V.stale_inputs(prev, V.review_inputs(".", "b", lens=True, author="opus")))
+        prev["inputs"] = V.review_inputs(".", "b", lens=True, author="sonnet,opus")
+        self.assertIsNone(V.stale_inputs(prev, V.review_inputs(".", "b", lens=True, author="opus sonnet")))
+
     def test_thin_checkout_is_recorded_with_what_it_lacks(self):
         """A scratch repo of the base tree and the head tree (as BLAZE 2 builds for its crucible lens) has no PR
-        trailers or draft. The review says so, and --author fills the author gap."""
+        trailers or draft. The review says so; --author and a draft clear it; a base with history records nothing."""
         with tempfile.TemporaryDirectory() as d:
-            repo, _ = self._repo(d)           # base is the repo's root commit; the trailer names no model family
+            repo, draft = self._repo(d)       # base is the repo's root commit; the trailer names no model family
             dd, _, _ = self._run(d, repo, lens=True)
             thin = U.read_json(os.path.join(dd, "review.json"))["thin_repo"]
             self.assertEqual(thin["commits"], 1)
             self.assertEqual(len(thin["missing"]), 1); self.assertIn("--author", thin["missing"][0])
-            base = sh(repo, "git", "merge-base", "main", "HEAD"); head = sh(repo, "git", "rev-parse", "HEAD")
-            self.assertEqual(V.thin_repo(repo, base, head, {"claude-opus-5-5"}, True, lens=False),
-                             {"commits": 1, "missing": []})
-            self.assertIn("--draft", V.thin_repo(repo, base, head, {"claude-opus-5-5"}, False)["missing"][0])
-            # with history under the base, nothing is recorded
-            sh(repo, "git", "checkout", "-q", "main")
-            for i in range(2):
-                open(os.path.join(repo, "src", "b.js"), "w").write(f"export const b = {i};\n")
-                sh(repo, "git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A")
-                sh(repo, "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", f"b{i}")
-            self.assertIsNone(V.thin_repo(repo, sh(repo, "git", "rev-parse", "HEAD"), head, set(), False))
+            # a plain round without a draft also misses the PR description
+            dd, _, _ = self._run(d, repo, author="opus")
+            self.assertEqual([m.split(" (")[0] for m in U.read_json(os.path.join(dd, "review.json"))["thin_repo"]["missing"]],
+                             ["PR description"])
+            # --author and --draft together: nothing missing, nothing recorded
+            dd, _, _ = self._run(d, repo, author="opus", draft=draft)
+            self.assertNotIn("thin_repo", U.read_json(os.path.join(dd, "review.json")))
+        with tempfile.TemporaryDirectory() as d:
+            repo, _ = self._repo(d)
+            env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
+                       GIT_COMMITTER_EMAIL="t@t", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+            g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True, env=env)
+            g("checkout", "-q", "main"); open(os.path.join(repo, "src", "b.js"), "w").write("export const b = 0;\n")
+            g("add", "-A"); g("commit", "-qm", "b"); g("checkout", "-q", "x"); g("rebase", "-q", "main")
+            dd, _, _ = self._run(d, repo, lens=True)     # same change and no author, but the base has a parent
+            self.assertNotIn("thin_repo", U.read_json(os.path.join(dd, "review.json")))
 
     def test_small_tier_flag_and_env(self):
         self.assertFalse(V.small_tier_enabled(None, False))

@@ -29,7 +29,7 @@ Reviews HEAD against the branch the PR targets. The default base is `upstream/<d
 - `--skip-checks`: don't run the project's lint/test commands. The verifier may still run small probes (`node -e`, `python3 -c`, the test runner).
 - `--no-exec` (or `CRUCIBLE_NO_EXEC=1`): run nothing from the checkout. Implies `--skip-checks`, and the verifier gets only read tools (Read/Grep/Glob, `git diff|log|show|grep|blame`, `ls`), so every verification is by reading. Use it in sandboxes and on code you don't trust. A later run without the flag re-reviews instead of reusing the read-only verdict. `--base-checks` re-runs failing checks on the base, to tell pre-existing failures from new ones.
 - `--offline`: no GitHub calls (readiness skips the issue, claim and open-PR checks).
-- `--author MODEL`: the model that wrote the change, if any (else read from `Co-Authored-By`). The reviewer is chosen to be a different model.
+- `--author MODEL[,MODEL...]`: the model(s) that wrote the change, as ids or family names (`opus`, `sonnet`, `fable`, `haiku`), added to what the `Co-Authored-By` trailers say. The reviewer is chosen to be a different model. Pass it when the checkout has no PR history (a scratch repo of the base and head trees, or a shallow clone): review.json's `thin_repo` then says what was missing. A token that is neither a family nor a `claude-` id gets a note. A rerun with a different `--author` re-reviews.
 - `--no-tiers`: verify every finding with the strong model only (default: cheap model first, escalate when unsure or blocking).
 - `--route`: a round that changes only docs or PR text gets one cheaper pass. Off by default; `crucible routing-replay` shows why.
 

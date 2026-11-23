@@ -630,7 +630,13 @@ def parse_authors(author):
     as a set of model ids. A token that is neither is kept as given (an id this version doesn't list). Several, because
     a PR can have commits from two models (ReviewBench R6: emdash and nebula had Opus and Sonnet trailers, so Fable
     reviewed them), and a checkout without the PR's commits has no trailers to read that from."""
-    return {MODELS.get(t.lower(), t) for t in re.split(r"[,\s]+", author or "") if t}
+    return {MODELS.get(t, t) for t in re.split(r"[,\s]+", (author or "").lower()) if t}
+
+
+def unknown_authors(authors):
+    """The --author tokens that are neither a family name nor a claude- model id (a typo like `opsu`): kept, so the
+    run still excludes what was meant if it is an id this version doesn't list, but worth a note."""
+    return sorted(a for a in authors if a not in MODELS.values() and not a.startswith("claude-"))
 
 
 def choose_models(repo, base, author=None):
@@ -646,16 +652,18 @@ def thin_repo(repo, base, sha, authors, draft_found, lens=False):
     clone shallow). The diff is the same, but the base is then a root commit and the change one commit: the PR's
     Co-Authored-By trailers are gone, so the author model is unknown and the reviewer may be the model that wrote the
     change; `git log`/`blame` show no per-commit story; and PR_DRAFT.md is absent unless the caller writes it.
-    Returns {"commits": n, "missing": [...]} (missing may be empty when --author and --draft filled the gaps)."""
-    if git(repo, "rev-list", "--parents", "-n", "1", base, check=False).split()[1:]:
+    Returns {"commits": n, "missing": [...]}, or None when nothing is missing (a real repo whose PR branches off its
+    first commit has the trailers and the draft, and gets no note)."""
+    if git(repo, "rev-list", "--parents", "-n", "1", base).split()[1:]:
         return None
     missing = []
     if not authors:
         missing.append("author models (no Co-Authored-By trailers; pass --author, e.g. --author opus,sonnet)")
     if not draft_found and not lens:
         missing.append("PR description (no PR_DRAFT.md; pass --draft)")
-    n = git(repo, "rev-list", "--count", f"{base}..{sha}", check=False)
-    return {"commits": int(n) if n.isdigit() else None, "missing": missing}
+    if not missing:
+        return None
+    return {"commits": int(git(repo, "rev-list", "--count", f"{base}..{sha}")), "missing": missing}
 
 
 # ---------- project knowledge ----------
@@ -1543,13 +1551,15 @@ def anchor_since(repo, prev_sha, f, base=None):
             f"Changes since {prev_sha[:10]} in those files:\n{patch[:6000]}")
 
 
-def review_inputs(repo, base, draft=None, no_exec=False, nits=False, lens=False):
+def review_inputs(repo, base, draft=None, no_exec=False, nits=False, lens=False, author=None):
     """What a verdict depends on besides the commit. PR_DRAFT.md is untracked, so editing it doesn't move HEAD;
     without this a rerun returned the old verdict for a draft it never read (real-use bug i). `no_exec` is recorded
-    only when set, so reviews stored before it existed still match a default run."""
+    only when set, so reviews stored before it existed still match a default run. So is an explicit --author (as the
+    sorted model set): it picks the reviewer, so a rerun that adds it, as the thin-checkout note advises, re-reviews."""
+    au = {"author": sorted(parse_authors(author))} if parse_authors(author) else {}
     if lens:                                           # a lens never reads the draft, so it can't depend on it
         return {"base": base, "draft": None, "draft_sha": None, "lens": True,
-                **({"no_exec": True} if no_exec else {}), **({"nits": True} if nits else {})}
+                **({"no_exec": True} if no_exec else {}), **({"nits": True} if nits else {}), **au}
     try:
         path, text = readiness.find_draft(repo, draft)
     except OSError as e:
@@ -1557,7 +1567,7 @@ def review_inputs(repo, base, draft=None, no_exec=False, nits=False, lens=False)
     # only the submitted part is judged (draft_hash), so editing the author's notes alone keeps the verdict
     return {"base": base, "draft": os.path.abspath(path) if path else None,
             "draft_sha": draft_hash(text) if path else None,
-            **({"no_exec": True} if no_exec else {}), **({"nits": True} if nits else {})}
+            **({"no_exec": True} if no_exec else {}), **({"nits": True} if nits else {}), **au}
 
 
 def keep_draft(d, repo, draft, inputs):
@@ -1632,6 +1642,8 @@ def stale_inputs(prev, inputs):
         return "its verification was read-only (--no-exec)"
     if inputs.get("nits") and not old.get("nits"):     # the reverse is fine: a review with nits has every finding
         return "it was reviewed without --nits"
+    if old.get("author") != inputs.get("author"):
+        return "the --author models changed since its last review"
     return None
 
 
@@ -1760,7 +1772,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         raise Failed("a review of this commit is already running")
-    inputs = review_inputs(repo, base, draft, no_exec, nits, lens)
+    inputs = review_inputs(repo, base, draft, no_exec, nits, lens, author)
     before = read_json(os.path.join(d, "review.json")) or {}
     # failed verifier attempts so far, by finding id, so a recurring failure stops being retried (ids are stable)
     attempts = {f["id"]: f["verification"].get("attempts", 1) for f in before.get("findings") or [] if verify_failed(f)}
@@ -1794,6 +1806,10 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         review_model, verify_model, authors = choose_models(repo, base, author)
         record.update(review_model=review_model, verify_model=verify_model, author_models=authors)
         log(f"  models: review {review_model}, verify {verify_model} (author: {authors or 'unknown'})")
+        odd = unknown_authors(parse_authors(author))
+        if odd:
+            log(f"  note: --author {', '.join(odd)} is not a model family (opus, sonnet, fable, haiku) or a claude- id; "
+                "kept as given")
         if no_exec:
             record["no_exec"] = True
             log("  execution off: no project checks, and the verifier only reads; nothing from the checkout runs")
@@ -1817,8 +1833,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         thin = thin_repo(repo, base, sha, authors, bool(draft_path), lens)
         if thin:
             record["thin_repo"] = thin
-            log(f"  note: thin checkout (the base commit has no parent; {thin['commits']} commit(s) in the change)"
-                + (": missing " + "; ".join(thin["missing"]) if thin["missing"] else ""))
+            log(f"  note: thin checkout (the base commit has no parent; {thin['commits']} commit(s) in the change): "
+                f"missing {'; '.join(thin['missing'])}")
         if cut:
             log(f"  draft: author notes from {os.path.basename(draft_path)}:{cut} on are not judged as the PR body")
         style_json = read_json(os.path.join(project_dir(project), "style.json"), {}) or {}
