@@ -4260,6 +4260,9 @@ class TestStats(unittest.TestCase):
             self.assertIn("Dropped then touched: 1 of 2 verifier drops", ST.report(ST.collect(root)))
             self.assertIn("too few to quote", ST.report(ST.collect(root)))
             self.assertEqual(json.loads(ST.to_json(ST.collect(root)))["overall"]["later_touched"], 1)
+            quotable = ST.later_touched_line({"prior_dropped": ST.QUOTE_N, "later_touched": 3})
+            self.assertIn(f"3 of {ST.QUOTE_N} verifier drops", quotable)
+            self.assertNotIn("too few", quotable)
 
     def test_cli(self):
         with tempfile.TemporaryDirectory() as home:

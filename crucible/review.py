@@ -1457,14 +1457,14 @@ def later_touched(dropped, ranges, files_changed=()):
     this is an upper bound on verifier misses, never a count of them. Dropped by rule (never judged) and scanner or
     style items are left out. Before this, a touched drop vanished from the record (split_prev only keeps the carried
     ones), so the two could not be told apart (BLAZE 11-23 ask 2: 950 of 1,958 drops were unaccounted for)."""
-    out = []
+    out, files_changed = [], set(files_changed)
     for f in dropped:
         vf = f.get("verification") or {}
         if f.get("source") != "review" or vf.get("method") == "rule":
             continue
         line, rs = f.get("line"), ranges.get(f.get("file"), [])
         hit = diff_mod.region_touched(rs, line) if isinstance(line, int) and line > 0 else (
-            bool(rs) or f.get("file") in set(files_changed))
+            bool(rs) or f.get("file") in files_changed)
         out.append({"id": f.get("id"), "file": f.get("file"), "line": line, "title": f.get("title"),
                     "severity": f.get("proposed_severity", f.get("severity")), "later_touched": bool(hit)})
     return out
