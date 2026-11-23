@@ -6,10 +6,11 @@ crucible reviews a pull request on your machine before anyone else sees it. It r
 
 ## Try it in 5 minutes
 
-You need Python 3.10+, git, and the [Claude Code CLI](https://docs.claude.com/en/docs/claude-code/setup), logged in with a Claude subscription or with `ANTHROPIC_API_KEY` set.
+You need Python 3.10+, git, and the [Claude Code CLI](https://docs.claude.com/en/docs/claude-code/setup), logged in with a Claude subscription or with `ANTHROPIC_API_KEY` set. On Debian or Ubuntu, pipx also needs `python3-venv`. `crucible doctor --live` also makes one tiny call to each model a review uses (about $0.02), to prove the account can reach them.
 
 ```sh
 pipx install git+https://github.com/JROtto5/crucible
+crucible doctor                                   # what's missing: Claude Code CLI, its login, git, gh
 crucible demo                                     # ./crucible-demo: a tiny repo with one change on a branch
 crucible review crucible-demo --offline --budget 1
 ```

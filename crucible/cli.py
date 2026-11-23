@@ -11,6 +11,7 @@
   crucible vote    ID up|down "reason" [--repo R]                 feedback; down-votes become memory proposals
   crucible remember PROJECT "lesson"                              curated repeat-mistakes memory
   crucible proposals PROJECT [--accept N]                         review proposed memory entries
+  crucible doctor  [--live]                                       what's missing: CLI, login, git, gh
   crucible demo    [DIR]                                          a tiny sample repo with one change, to try review on
   crucible eval    [--cases ...] [--split S] [--no-tiers] [--label L] score the reviewer on fixtures (eval/)
   crucible routing-replay [--include-self]                        what cost-routing rules would lose, on stored reviews
@@ -136,6 +137,19 @@ def cmd_remember(a):
     with open(os.path.join(project_dir(a.project.replace("/", "__")), "memory.md"), "a", encoding="utf-8") as fh:
         fh.write(f"- {dt.date.today()}: {a.lesson}\n")
     print("remembered")
+
+
+def cmd_doctor(a):
+    from . import doctor
+    rows = doctor.check()
+    print(doctor.report(rows))
+    failed = any(s == doctor.FAIL for s, _, _ in rows)
+    if a.live and not failed:
+        live = doctor.live(doctor.default_models())
+        print("\n" + doctor.report(live))
+        failed = any(s == doctor.FAIL for s, _, _ in live)
+    if failed:
+        sys.exit(1)
 
 
 def cmd_demo(a):
@@ -320,6 +334,8 @@ def main(argv=None):
     sa.add_argument("--include-self", action="store_true", help="include crucible's reviews of itself")
     sa.add_argument("--since", type=_iso_time, help="only reviews finished at or after this local time (YYYY-MM-DD[THH:MM])")
     sa.add_argument("--json", action="store_true", help='machine-readable ("answered": false when there is no data)')
+    dr = s.add_parser("doctor", help="check what crucible needs: Python, git, the Claude Code CLI and its login, gh")
+    dr.add_argument("--live", action="store_true", help="also make one tiny call per model a review uses (a few cents)")
     de = s.add_parser("demo", help="create a tiny sample repo with one change to try a review on")
     de.add_argument("dir", nargs="?", default="crucible-demo", help="where to create it (default ./crucible-demo)")
     ev = s.add_parser("eval", help="run the review on labelled fixture changes (eval/cases) and score it")
@@ -334,10 +350,10 @@ def main(argv=None):
     ev.add_argument("--no-write", action="store_true", help="don't update eval/RESULTS.md and history (eval/last-run.json is still written)")
     a = p.parse_args(argv)
     if a.cmd in MODEL_CMDS and not util.claude_cli_path():
-        sys.exit(f"crucible: {util.CLI_MISSING}")
+        sys.exit(f"crucible: {util.CLI_MISSING} `crucible doctor` lists anything else that's missing.")
     {"review": cmd_review, "status": cmd_status, "answer": cmd_answer, "waive": cmd_waive, "learn": cmd_learn, "prep": cmd_prep,
      "polish": cmd_polish, "reply": cmd_reply, "vote": cmd_vote, "remember": cmd_remember, "proposals": cmd_proposals, "eval": cmd_eval,
-     "demo": cmd_demo, "routing-replay": cmd_routing_replay, "anchor-replay": cmd_anchor_replay, "stats": cmd_stats,
+     "demo": cmd_demo, "doctor": cmd_doctor, "routing-replay": cmd_routing_replay, "anchor-replay": cmd_anchor_replay, "stats": cmd_stats,
      "model-replay": cmd_model_replay}[a.cmd](a)
 
 

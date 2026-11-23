@@ -8759,5 +8759,82 @@ class TestAction(unittest.TestCase):
         self.assertTrue(big.rstrip().endswith("</details>"))
 
 
+class TestDoctor(unittest.TestCase):
+    """`crucible doctor` on a machine described by fakes: what's missing, and the exit code."""
+    HELP = "Usage: claude [options]\n" + " ".join(["--json-schema", "--setting-sources", "--strict-mcp-config",
+                                                  "--no-session-persistence", "--effort", "--max-budget-usd",
+                                                  "--permission-mode"])
+
+    def _run(self, answers):
+        def run(cmd, env=None, timeout=30):
+            return answers.get(" ".join(cmd), (127, ""))
+        return run
+
+    def _rows(self, answers, have=("git", "claude", "gh"), env=None):
+        from crucible import doctor
+        return {w: (s, d) for s, w, d in doctor.check(run=self._run(answers), which=lambda p: f"/bin/{p}" if p in have else None,
+                                                     env=env or {}, home=tempfile.mkdtemp())}
+
+    GOOD = {"git --version": (0, "git version 2.56.0"), "git config user.name": (0, "A\n"),
+            "git config user.email": (0, "a@b.c\n"), "claude --version": (0, "2.1.325 (Claude Code)\n"),
+            "claude auth status": (0, '{"loggedIn": true, "authMethod": "claude.ai"}'), "gh auth status": (0, "")}
+
+    def test_everything_present(self):
+        rows = self._rows(dict(self.GOOD, **{"claude --help": (0, self.HELP)}))
+        self.assertEqual({w for w, (s, _) in rows.items() if s != "ok"}, set(), rows)
+        self.assertIn("2.1.325", rows["Claude Code CLI"][1])
+
+    def test_fresh_container(self):
+        """What the clean python:3.12-slim + pipx install looked like: no claude, no gh, no git identity."""
+        rows = self._rows({"git --version": (0, "git version 2.47.3")}, have=("git",))
+        self.assertEqual(rows["Claude Code CLI"][0], "fail")
+        self.assertIn("docs.claude.com", rows["Claude Code CLI"][1])
+        self.assertNotIn("Claude login", rows)                     # nothing to ask without the CLI
+        self.assertEqual((rows["gh"][0], rows["git identity"][0]), ("warn", "warn"))
+
+    def test_old_cli_and_logged_out(self):
+        rows = self._rows(dict(self.GOOD, **{"claude --version": (0, "2.0.10 (Claude Code)"),
+                                             "claude --help": (0, "--effort --permission-mode"),
+                                             "claude auth status": (1, '{"loggedIn": false}')}))
+        self.assertEqual(rows["Claude Code CLI"][0], "fail")
+        self.assertIn("--json-schema", rows["Claude Code CLI"][1])
+        self.assertEqual(rows["Claude login"][0], "fail")
+
+    def test_api_key_counts_as_logged_in_and_old_fable_is_a_warning(self):
+        rows = self._rows(dict(self.GOOD, **{"claude --help": (0, self.HELP), "claude --version": (0, "2.1.200"),
+                                             "claude auth status": (1, '{"loggedIn": false}')}),
+                          env={"ANTHROPIC_API_KEY": "sk-x"})
+        self.assertEqual(rows["Claude login"], ("ok", "ANTHROPIC_API_KEY is set"))
+        self.assertEqual(rows["Claude Code CLI"][0], "warn")
+        self.assertIn("Fable", rows["Claude Code CLI"][1])
+
+    def test_auth_status_without_json_is_unknown_not_a_failure(self):
+        rows = self._rows(dict(self.GOOD, **{"claude --help": (0, self.HELP), "claude auth status": (1, "unknown command")}))
+        self.assertEqual(rows["Claude login"][0], "warn")
+
+    def test_cli_exit_code_and_live(self):
+        from unittest import mock
+        from crucible import cli, doctor
+        with mock.patch.object(doctor, "check", lambda: [("ok", "python", "3.12")]), mock.patch("builtins.print"):
+            cli.main(["doctor"])                                     # no exit: nothing failed
+        with mock.patch.object(doctor, "check", lambda: [("fail", "git", "missing")]), mock.patch("builtins.print"), \
+                self.assertRaises(SystemExit) as e:
+            cli.main(["doctor"])
+        self.assertEqual(e.exception.code, 1)
+        calls = []
+
+        def call(p, m, s, cwd):
+            calls.append(m)
+            if m == "bad":
+                raise U.Failed("model call failed: no access")
+            return {"ok": True}, 0.001
+        rows = doctor.live(["good", "bad"], call=call)
+        self.assertEqual([r[0] for r in rows], ["ok", "fail"])
+        self.assertEqual(calls, ["good", "bad"])
+        bare = {k: v for k, v in os.environ.items() if not k.startswith("CRUCIBLE_")}
+        with mock.patch.dict(os.environ, bare, clear=True):
+            self.assertEqual(doctor.default_models(), ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"])
+
+
 if __name__ == "__main__":
     unittest.main()

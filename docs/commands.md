@@ -15,6 +15,10 @@ crucible review           # after a fix commit: reviews only what changed since 
 
 The verdict is GREEN when every finding is answered, no important or critical finding is left open (only `fixed` or `refuted` closes one; `deferred` doesn't), every changed file was reviewed, and no project check fails that passes on the base. "Ready to submit" also needs the readiness items to pass or be waived.
 
+## doctor
+
+`crucible doctor [--live]` checks what crucible needs and says how to fix what's missing: Python 3.10+, git (2.28+ for `demo`) and a git identity, the Claude Code CLI with the flags crucible passes (and 2.1.290+ for Fable), its login (`claude auth status`, or `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`, under `CRUCIBLE_CLAUDE_DIR` when set), `gh` and its login (optional), and a writable state directory. It exits 1 when something required is missing. `--live` also makes one tiny call to each model a review would use (reviewer, verifier, cheap verifier; about $0.02 in all).
+
 ## demo
 
 `crucible demo [DIR]` creates a tiny git repo (default `./crucible-demo`): two commits on `main` and one change on the `add-page-count` branch, plus a `PR_DRAFT.md`. The change has a test that passes and a bug it doesn't catch. Review it with `crucible review DIR --offline --budget 1` (about two minutes and $0.25). The commits are the same on every machine, so the README's recorded run is the one you get, model variation aside. It refuses a directory that isn't empty.
