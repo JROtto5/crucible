@@ -20,6 +20,12 @@ body:
   - type: input
     id: version
     attributes:
-      label: crucible --version, OS, and the output of crucible doctor
+      label: crucible --version, Python version, OS
     validations:
       required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: crucible doctor (optional)
+      description: Its output, if the problem might be the setup.
+      render: text
