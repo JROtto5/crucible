@@ -12,13 +12,15 @@ MARKER = "<!-- crucible-report -->"
 LIMIT = 65000                        # GitHub refuses comment bodies over 65,536 characters
 
 
-def build(report, sha, dry_run=False, secrets=(), verdict=""):
+def build(report, sha, dry_run=False, secrets=(), verdict="", reviewed=""):
     lines = [ln for ln in report.splitlines() if not ln.startswith("(report: ")]
     text = "\n".join(lines).strip()
     for s in secrets:                # a finding that quotes the key (e.g. a prompt-injected diff) must not publish it
         if s and len(s) >= 8:
             text = text.replace(s, "***")
     head = f"{MARKER}\n**crucible** on `{sha[:10]}`" + (f": **{verdict}**" if verdict else "")
+    if reviewed and reviewed != sha:     # actions/checkout's default for a PR: the merge into the base
+        head += f" (reviewed as its merge into the base, `{reviewed[:10]}`, the commit the report names)"
     if dry_run:
         head += " (dry run: no model was called, the finding below is a placeholder)"
     body = f"{head}\n\n<details><summary>Report</summary>\n\n{text}\n\n</details>\n"
@@ -58,7 +60,7 @@ def main(argv):
         report = open(argv[1], encoding="utf-8", errors="replace").read()
         secrets = [os.environ.get(k, "") for k in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN")]
         body = build(report, os.environ.get("SHA", ""), os.environ.get("DRY_RUN") == "true", secrets,
-                     os.environ.get("VERDICT", ""))
+                     os.environ.get("VERDICT", ""), os.environ.get("REVIEWED_SHA", ""))
         open(argv[2], "w", encoding="utf-8").write(body)
     elif argv[:1] == ["post"] and len(argv) == 2:
         print(post(open(argv[1], encoding="utf-8").read(), os.environ["GITHUB_REPOSITORY"], os.environ["PR"],

@@ -16,7 +16,7 @@ inputs:
     description: USD cap for the review. A review cut short by it can't be GREEN.
     default: "3"
   base:
-    description: Branch or commit to diff against (default origin/<the PR's base branch>).
+    description: Branch or commit to diff against (default origin/<the PR's base branch>; required outside pull_request events).
     default: ""
   path:
     description: The repository to review (default the workspace).
@@ -130,6 +130,7 @@ runs:
         GH_TOKEN: ${{ github.token }}
         PR: ${{ github.event.pull_request.number }}
         SHA: ${{ github.event.pull_request.head.sha || steps.review.outputs.sha }}
+        REVIEWED_SHA: ${{ steps.review.outputs.sha }}
         REPORT: ${{ steps.review.outputs.report }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         VERDICT: ${{ steps.review.outputs.verdict }}

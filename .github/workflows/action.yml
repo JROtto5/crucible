@@ -35,6 +35,16 @@ jobs:
           grep -q '\[dry run\] placeholder finding' "$REPORT"
           grep -q 'shelf.py:' "$REPORT"
           grep -q 'coverage: 2/2 files' "$REPORT"
+      - id: no-base
+        uses: ./
+        continue-on-error: true
+        with:
+          path: ${{ runner.temp }}/demo
+          base: origin/                                  # what the default gives outside a pull_request event
+          dry-run: "true"
+          comment: "false"
+      - name: check that a missing base stops the action
+        run: test "${{ steps.no-base.outcome }}" = failure
 
   this-pr:
     concurrency:
@@ -57,7 +67,14 @@ jobs:
         env:
           URL: ${{ steps.crucible.outputs.comment-url }}
           VERDICT: ${{ steps.crucible.outputs.verdict }}
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
           echo "verdict $VERDICT, comment $URL"
-          case "$URL" in https://github.com/*/pull/*#issuecomment-*) ;; *) exit 1 ;; esac
+          if [ -z "$URL" ]; then                          # skipped only when a newer push is being reviewed
+            test "$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .head.sha)" != "$HEAD"
+          else
+            case "$URL" in https://github.com/*/pull/*#issuecomment-*) ;; *) exit 1 ;; esac
+          fi
           test "$VERDICT" != FAILED
