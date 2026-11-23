@@ -653,12 +653,14 @@ def thin_repo(repo, base, sha, authors, draft_found, lens=False):
     Co-Authored-By trailers are gone, so the author model is unknown and the reviewer may be the model that wrote the
     change; `git log`/`blame` show no per-commit story; and PR_DRAFT.md is absent unless the caller writes it.
     Returns {"commits": n, "missing": [...]}, or None when nothing is missing (a real repo whose PR branches off its
-    first commit has the trailers and the draft, and gets no note)."""
+    first commit has the trailers and the draft, and gets no note). A heuristic: a young repo's first PR, written by a
+    person with no draft, looks the same, so the items say what crucible doesn't know, not that history was lost."""
     if git(repo, "rev-list", "--parents", "-n", "1", base).split()[1:]:
         return None
     missing = []
     if not authors:
-        missing.append("author models (no Co-Authored-By trailers; pass --author, e.g. --author opus,sonnet)")
+        missing.append("author models (no model named in Co-Authored-By trailers; if a model wrote it, pass --author, "
+                       "e.g. --author opus,sonnet)")
     if not draft_found and not lens:
         missing.append("PR description (no PR_DRAFT.md; pass --draft)")
     if not missing:

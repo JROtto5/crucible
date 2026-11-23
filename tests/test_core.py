@@ -8319,7 +8319,7 @@ class TestLensMode(unittest.TestCase):
         os.makedirs(os.path.dirname(draft)); open(draft, "w").write("Fix f\n\n🤖 Generated with Claude Code\n")
         return repo, draft
 
-    def _run(self, d, repo, **kw):
+    def _run(self, d, repo, logs=None, **kw):
         home, prompts, budgets = os.path.join(d, "home"), [], []
 
         def fake(prompt, model, schema, cwd, budget=None, tools=None, effort="high", timeout=1500, kind="other"):
@@ -8342,7 +8342,7 @@ class TestLensMode(unittest.TestCase):
         os.environ["CRUCIBLE_CACHE"] = os.path.join(home, "cache")
         V.claude = fake
         try:
-            dd = V.run_review(repo, "main", skip_checks=True, log=lambda *_: None, **kw)
+            dd = V.run_review(repo, "main", skip_checks=True, log=logs.append if logs is not None else lambda *_: None, **kw)
             return dd, prompts, budgets
         finally:
             V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
@@ -8453,7 +8453,9 @@ class TestLensMode(unittest.TestCase):
         trailers or draft. The review says so; --author and a draft clear it; a base with history records nothing."""
         with tempfile.TemporaryDirectory() as d:
             repo, draft = self._repo(d)       # base is the repo's root commit; the trailer names no model family
-            dd, _, _ = self._run(d, repo, lens=True)
+            logs = []
+            dd, _, _ = self._run(d, repo, logs=logs, lens=True)
+            self.assertEqual(len([m for m in logs if "thin checkout" in m]), 1)
             thin = U.read_json(os.path.join(dd, "review.json"))["thin_repo"]
             self.assertEqual(thin["commits"], 1)
             self.assertEqual(len(thin["missing"]), 1); self.assertIn("--author", thin["missing"][0])
@@ -8462,8 +8464,13 @@ class TestLensMode(unittest.TestCase):
             self.assertEqual([m.split(" (")[0] for m in U.read_json(os.path.join(dd, "review.json"))["thin_repo"]["missing"]],
                              ["PR description"])
             # --author and --draft together: nothing missing, nothing recorded
-            dd, _, _ = self._run(d, repo, author="opus", draft=draft)
+            logs = []
+            dd, _, _ = self._run(d, repo, logs=logs, author="opus", draft=draft)
             self.assertNotIn("thin_repo", U.read_json(os.path.join(dd, "review.json")))
+            self.assertEqual([m for m in logs if "thin checkout" in m or "not a model family" in m], [])
+            logs = []
+            self._run(d, repo, logs=logs, author="opsu", draft=draft)     # a typo gets a note, and isn't an author gap
+            self.assertEqual(len([m for m in logs if "--author opsu is not a model family" in m]), 1)
         with tempfile.TemporaryDirectory() as d:
             repo, _ = self._repo(d)
             env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t",
@@ -8471,8 +8478,10 @@ class TestLensMode(unittest.TestCase):
             g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True, env=env)
             g("checkout", "-q", "main"); open(os.path.join(repo, "src", "b.js"), "w").write("export const b = 0;\n")
             g("add", "-A"); g("commit", "-qm", "b"); g("checkout", "-q", "x"); g("rebase", "-q", "main")
-            dd, _, _ = self._run(d, repo, lens=True)     # same change and no author, but the base has a parent
+            logs = []
+            dd, _, _ = self._run(d, repo, logs=logs, lens=True)     # same change and no author, but the base has a parent
             self.assertNotIn("thin_repo", U.read_json(os.path.join(dd, "review.json")))
+            self.assertEqual([m for m in logs if "thin checkout" in m], [])
 
     def test_small_tier_flag_and_env(self):
         self.assertFalse(V.small_tier_enabled(None, False))
