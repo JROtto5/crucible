@@ -8650,7 +8650,9 @@ class TestDemo(unittest.TestCase):
         from crucible import demo
         clean = sh(demo.make(os.path.join(tempfile.mkdtemp(), "a")), "git", "rev-parse", "HEAD")
         env = {"GIT_AUTHOR_NAME": "someone", "GIT_COMMITTER_EMAIL": "x@y.z", "GIT_AUTHOR_DATE": "2020-01-01T00:00:00Z",
-               "GIT_DIR": os.path.join(tempfile.mkdtemp(), "elsewhere")}
+               "GIT_DIR": os.path.join(tempfile.mkdtemp(), "elsewhere"), "GIT_CONFIG_COUNT": "2",
+               "GIT_CONFIG_KEY_0": "init.defaultObjectFormat", "GIT_CONFIG_VALUE_0": "sha256",
+               "GIT_CONFIG_KEY_1": "i18n.commitEncoding", "GIT_CONFIG_VALUE_1": "ISO-8859-1"}
         with mock.patch.dict(os.environ, env):
             d = demo.make(os.path.join(tempfile.mkdtemp(), "b"))
         self.assertEqual(sh(d, "git", "rev-parse", "HEAD"), clean)

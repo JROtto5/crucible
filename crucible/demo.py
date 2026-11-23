@@ -62,9 +62,9 @@ BRANCH = "add-page-count"
 
 
 def _git(d, *args, extra=None):
-    # no inherited GIT_* (GIT_DIR, GIT_AUTHOR_NAME, ...): they would win over the fixed identity below, or point
-    # the commands at another repo
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")} | (extra or {})
+    # no inherited GIT_DIR, GIT_AUTHOR_NAME, ...: they would point the commands at another repo or win over the fixed
+    # identity below. GIT_CONFIG_* stays, so a caller's config isolation (CI, hermetic runs) still holds.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") or k.startswith("GIT_CONFIG")} | (extra or {})
     subprocess.run(["git", *args], cwd=d, check=True, capture_output=True, text=True, env=env)
 
 
@@ -75,7 +75,9 @@ def _commit(d, files, msg, when):
     _git(d, "add", "-A")
     # fixed author and dates: every demo repo has the same commits, so the README's recorded run matches yours
     who = {"NAME": "crucible demo", "EMAIL": "demo@example.invalid", "DATE": when}
-    _git(d, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "-m", msg,
+    # the settings of the user's config that would change the commit objects are pinned; --no-verify: a global
+    # pre-commit or commit-msg hook must not edit or refuse a sample commit
+    _git(d, "-c", "commit.gpgsign=false", "-c", "i18n.commitEncoding=UTF-8", "commit", "-q", "--no-verify", "-m", msg,
          extra={f"GIT_{role}_{k}": v for role in ("AUTHOR", "COMMITTER") for k, v in who.items()})
 
 
@@ -85,7 +87,7 @@ def make(path):
     if os.path.exists(d) and os.listdir(d):
         raise FileExistsError(f"{d} exists and is not empty")
     os.makedirs(d, exist_ok=True)
-    _git(d, "init", "-q")
+    _git(d, "init", "-q", "--object-format=sha1")             # init.defaultObjectFormat=sha256 would change every id
     _git(d, "symbolic-ref", "HEAD", "refs/heads/main")      # `init -b` needs git 2.28
     _commit(d, BASE, "shelf: list paging", "2026-01-05T10:00:00+00:00")
     _commit(d, TESTS, "shelf: test page()", "2026-01-05T10:05:00+00:00")
