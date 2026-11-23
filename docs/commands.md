@@ -17,7 +17,7 @@ The verdict is GREEN when every finding is answered, no important or critical fi
 
 ## doctor
 
-`crucible doctor [--live]` checks what crucible needs and says how to fix what's missing: Python 3.10+, git (2.28+ for `demo`) and a git identity, the Claude Code CLI with the flags crucible passes (and 2.1.290+ for Fable), its login (`claude auth status`, or `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`, under `CRUCIBLE_CLAUDE_DIR` when set), `gh` and its login (optional), and a writable state directory. It exits 1 when something required is missing. `--live` also makes one tiny call to each model a review would use (reviewer, verifier, cheap verifier; about $0.02 in all).
+`crucible doctor [--live]` checks what crucible needs and says how to fix what's missing: Python 3.10+, git (2.28+ for `demo`) and a git identity, the Claude Code CLI with the flags crucible passes (and 2.1.290+ for Fable), its login (`claude auth status`, or `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`, under `CRUCIBLE_CLAUDE_DIR` when set), `gh` and its login (optional), and a writable state directory. It exits 1 when something required is missing. `--live` also makes one tiny call to each model a review would use (reviewer, verifier, cheap verifier; about $0.02 in all). It asks without the Fable fallback, so a Fable refusal shows up (as a warning when reviews would move those calls to Opus).
 
 ## demo
 

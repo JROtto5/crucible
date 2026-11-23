@@ -8862,11 +8862,23 @@ class TestDoctor(unittest.TestCase):
     def test_live_probe_does_not_fall_back(self):
         from unittest import mock
         from crucible import doctor
-        once = mock.Mock(side_effect=U.Failed("You've hit your usage limit"))
-        with mock.patch.object(U, "_claude_once", once), mock.patch.object(U, "claude", side_effect=AssertionError):
-            rows = doctor.live([U.MODELS["fable"]])
-        self.assertEqual(rows[0][0], "fail")
-        self.assertEqual(once.call_args.args[1], U.MODELS["fable"])
+        once = mock.Mock(side_effect=U.Failed("model call failed: You've hit your usage limit"))
+        fable = U.MODELS["fable"]
+        with mock.patch.object(U, "_claude_once", once), mock.patch.dict(os.environ, {"CRUCIBLE_FABLE_FALLBACK": "opus"}):
+            rows = doctor.live([fable])
+        self.assertEqual([c.args[1] for c in once.call_args_list], [fable])          # asked once, never as Opus
+        self.assertEqual(rows[0][0], "warn")                                         # reviews still run, on Opus
+        self.assertIn("move its calls to claude-opus-5-5", rows[0][2])
+        with mock.patch.object(U, "_claude_once", once), mock.patch.dict(os.environ, {"CRUCIBLE_FABLE_FALLBACK": "off"}):
+            self.assertEqual(doctor.live([fable])[0][0], "fail")
+        kw = dict(zip(("prompt", "model", "schema", "cwd", "budget", "tools", "effort", "timeout", "kind"),
+                      once.call_args.args))
+        self.assertEqual((kw["tools"], kw["effort"], kw["budget"]), (None, "low", None))
+        once.reset_mock()
+        with mock.patch.object(U, "_claude_once", once):                             # claude() itself still falls back
+            with self.assertRaises(U.Failed):
+                U.claude("p", fable, {}, ".", tools=None)
+        self.assertEqual([c.args[1] for c in once.call_args_list], [fable, U.MODELS["opus"]])
 
     def test_help_is_read_once_and_not_after_a_failed_version(self):
         from crucible import doctor

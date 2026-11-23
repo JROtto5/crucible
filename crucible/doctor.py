@@ -118,8 +118,9 @@ def _auth(run, env):
 def live(models, call=None):
     """One tiny structured call per model. -> [(status, what, detail)]. call(prompt, model, schema, cwd) is
     util.claude's signature (tests stub it)."""
-    # _claude_once, not claude(): a Fable probe refused for a limit must show as a failure, not quietly answer as Opus
-    call = call or (lambda p, m, s, cwd: util._claude_once(p, m, s, cwd, None, None, "low", 180, "doctor"))
+    # no fallback: a Fable probe refused for a limit must show as refused, not quietly answer as Opus
+    call = call or (lambda p, m, s, cwd: util.claude(p, m, s, cwd, tools=None, effort="low", timeout=180,
+                                                     kind="doctor", fallback=False))
     schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]}
     rows = []
     for m in models:
@@ -127,7 +128,9 @@ def live(models, call=None):
             _, cost = call('Reply with {"ok": true}.', m, schema, tempfile.gettempdir())
             rows.append((OK, f"model {m}", f"answered (${cost or 0:.4f})"))
         except util.Failed as e:
-            rows.append((FAIL, f"model {m}", str(e)[:300]))
+            to = util.fable_fallback() if m == util.MODELS["fable"] and util.is_limit(e) else None
+            rows.append((WARN, f"model {m}", f"refused ({str(e)[:200]}); reviews will move its calls to {to}") if to
+                        else (FAIL, f"model {m}", str(e)[:300]))
     return rows
 
 

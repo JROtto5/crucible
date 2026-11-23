@@ -353,15 +353,17 @@ def is_limit(err):
     return bool(LIMIT_RX.search(str(err)) or UNSUPPORTED_RX.search(str(err)))
 
 
-def claude(prompt, model, schema, cwd, budget=None, tools=TOOLS_READ, effort="high", timeout=1500, kind="other"):
+def claude(prompt, model, schema, cwd, budget=None, tools=TOOLS_READ, effort="high", timeout=1500, kind="other",
+           fallback=True):
     """One isolated, structured model call. Raises Failed on any problem. `kind` labels its tokens and cost in the
     budget (Budget.kind_snapshot). A Fable call refused for a spend/usage limit, or by a Claude Code too old for the
     model, is retried once, on its own, on
-    fable_fallback() and noted in the budget (review.json model_fallbacks); the rest of the review keeps its models."""
+    fable_fallback() and noted in the budget (review.json model_fallbacks); the rest of the review keeps its models.
+    fallback=False never retries (`crucible doctor --live` reports the refusal itself)."""
     try:
         return _claude_once(prompt, model, schema, cwd, budget, tools, effort, timeout, kind)
     except Failed as e:
-        to = fable_fallback() if model == MODELS["fable"] else None
+        to = fable_fallback() if model == MODELS["fable"] and fallback else None
         if not to or to == model or not is_limit(e) or str(e) == BUDGET_EXHAUSTED:
             raise
         if budget:
