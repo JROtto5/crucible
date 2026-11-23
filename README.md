@@ -14,7 +14,7 @@ crucible demo                                     # ./crucible-demo: a tiny repo
 crucible review crucible-demo --offline --budget 1
 ```
 
-The demo change adds `page_count()` to a paging helper, with a test that passes. A recorded run (2026-11-23, 1 min 47 s, $0.24), trimmed:
+The demo change adds `page_count()` to a paging helper, with a test that passes. A recorded run (2026-11-23, 89 s, $0.24), trimmed:
 
 ```text
 crucible: crucible-demo HEAD 9ab44f9436 vs main (merge-base dac1f52556)
@@ -23,23 +23,25 @@ crucible: crucible-demo HEAD 9ab44f9436 vs main (merge-base dac1f52556)
   verifying 3 finding(s), one per call (tiers: claude-haiku-5-5 → claude-sonnet-5-5)
 
 **Verdict: NOT_GREEN** · **Ready to submit: no**
-- 2 findings kept · 1 dropped by verification · 1 blocking open · 2 unanswered
+- 3 findings kept · 0 dropped by verification · 2 blocking open · 3 unanswered
 
-### CR-14b1feef · important · `shelf.py:12`
-**page_count() undercounts when the last page is partial**
-`len(items) // size` rounds down. A trailing partial page is not counted, even though page() serves it:
-page(list(range(45)), 3) returns items 40-44, yet page_count(list(range(45))) == 2. [...] The only test
-uses 40 items, an exact multiple, so it can't catch this.
-- wrong if: page_count(list(range(45))) returns 3, or page() is changed so the trailing partial page is not shown.
-- fix: Round up: `return -(-len(items) // size)` [...]
-- verification: verified by executed: [...] The probe returned page_count(range(45)) = 2,
-  page_count(range(40)) = 2, page_count(range(5)) = 0, and len(page(range(45), 3)) = 5. [...]
+### CR-044dd90f · important · `shelf.py:12`
+**page_count() rounds down and drops the last partial page**
+`len(items) // size` is floor division. Whenever len(items) isn't a multiple of size, the last page (which
+page() does return) isn't counted. 45 items gives 2, though page(items, 3) returns [40..44]. [...]
+- wrong if: page_count(list(range(45))) returns 3 and page_count(list(range(5))) returns 1 on this HEAD.
+- fix: Use ceiling division: `return -(-len(items) // size)` or `(len(items) + size - 1) // size`. [...]
+- verification: verified by executed: [...] The probe printed `2 0 2`. page_count(range(45)) returns 2,
+  not the 3 pages page() needs. [...]
 
-### CR-48ce547c · low · `PR_DRAFT.md:2`
-**Description doesn't say how rounding is handled**
+### CR-e84c0689 · important · `test_shelf.py:13`
+**Test only covers an exact multiple of the page size, so it misses the bug**
+
+### CR-6d2a740c · low · `PR_DRAFT.md:2`
+**PR description doesn't mention the rounding or empty-list choice**
 ```
 
-The full report also lists readiness items (no linked issue here) and the finding verification dropped. Fix the bug, commit, and review again: only what changed is re-reviewed. In the recorded second round ($0.20) the important finding was dropped as fixed, and two low ones were left to answer with `crucible answer CR-… fixed|refuted|deferred "why"`. When nothing blocking is open and every finding is answered, the verdict is GREEN.
+Each finding in the full report also says what the verifier read or ran, and the readiness checklist follows (this draft links no issue). Fix the bug, add the missing cases to the test, commit, and run the same command again: only what changed is re-reviewed. In a recorded second round after that fix ($0.20), the important findings were dropped as fixed and two low ones were left to answer with `crucible answer CR-… fixed|refuted|deferred "why"`. When nothing blocking is open and every finding is answered, the verdict is GREEN. Models vary from run to run, so your wording and finding count will differ.
 
 On your own change, commit it and run `crucible review path/to/repo --budget 3`; the base defaults to `upstream/<default>`, then `origin/<default>`. [docs/quickstart.md](docs/quickstart.md) walks through a real merged PR on a public repo (pyinfra) where crucible finds the crash that shipped.
 
