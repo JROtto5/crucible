@@ -75,9 +75,10 @@ def _commit(d, files, msg, when):
     _git(d, "add", "-A")
     # fixed author and dates: every demo repo has the same commits, so the README's recorded run matches yours
     who = {"NAME": "crucible demo", "EMAIL": "demo@example.invalid", "DATE": when}
-    # the settings of the user's config that would change the commit objects are pinned; --no-verify: a global
-    # pre-commit or commit-msg hook must not edit or refuse a sample commit
-    _git(d, "-c", "commit.gpgsign=false", "-c", "i18n.commitEncoding=UTF-8", "commit", "-q", "--no-verify", "-m", msg,
+    # pinned: the config that would change the commit objects, and no hooks (a global core.hooksPath could edit or
+    # refuse a sample commit)
+    _git(d, "-c", "commit.gpgsign=false", "-c", "i18n.commitEncoding=UTF-8", "-c", "core.hooksPath=/dev/null",
+         "commit", "-q", "-m", msg,
          extra={f"GIT_{role}_{k}": v for role in ("AUTHOR", "COMMITTER") for k, v in who.items()})
 
 
@@ -87,8 +88,8 @@ def make(path):
     if os.path.exists(d) and os.listdir(d):
         raise FileExistsError(f"{d} exists and is not empty")
     os.makedirs(d, exist_ok=True)
-    _git(d, "init", "-q", "--object-format=sha1")             # init.defaultObjectFormat=sha256 would change every id
-    _git(d, "symbolic-ref", "HEAD", "refs/heads/main")      # `init -b` needs git 2.28
+    # sha1 whatever init.defaultObjectFormat says, and no template (it can install hooks); git 2.28+
+    _git(d, "init", "-q", "-b", "main", "--object-format=sha1", "--template=")
     _commit(d, BASE, "shelf: list paging", "2026-01-05T10:00:00+00:00")
     _commit(d, TESTS, "shelf: test page()", "2026-01-05T10:05:00+00:00")
     _git(d, "checkout", "-q", "-b", BRANCH)
