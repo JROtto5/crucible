@@ -61,7 +61,10 @@ Tested: `python3 -m unittest`
 BRANCH = "add-page-count"
 
 
-def _git(d, *args, env=None):
+def _git(d, *args, extra=None):
+    # no inherited GIT_* (GIT_DIR, GIT_AUTHOR_NAME, ...): they would win over the fixed identity below, or point
+    # the commands at another repo
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")} | (extra or {})
     subprocess.run(["git", *args], cwd=d, check=True, capture_output=True, text=True, env=env)
 
 
@@ -71,9 +74,9 @@ def _commit(d, files, msg, when):
             f.write(t)
     _git(d, "add", "-A")
     # fixed author and dates: every demo repo has the same commits, so the README's recorded run matches yours
-    env = dict(os.environ, GIT_AUTHOR_DATE=when, GIT_COMMITTER_DATE=when)
-    _git(d, "-c", "user.name=crucible demo", "-c", "user.email=demo@example.invalid", "-c", "commit.gpgsign=false",
-         "commit", "-q", "-m", msg, env=env)
+    who = {"NAME": "crucible demo", "EMAIL": "demo@example.invalid", "DATE": when}
+    _git(d, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "-m", msg,
+         extra={f"GIT_{role}_{k}": v for role in ("AUTHOR", "COMMITTER") for k, v in who.items()})
 
 
 def make(path):

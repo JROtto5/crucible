@@ -8635,7 +8635,8 @@ class TestDemo(unittest.TestCase):
         head = sh(d, "git", "rev-parse", "HEAD")
         self.assertEqual(sh(d, "git", "merge-base", "main", "HEAD"), sh(d, "git", "rev-parse", "main"))
         readme = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "README.md"), encoding="utf-8").read()
-        self.assertIn(f"HEAD {head[:10]} vs main", readme)          # same commits on every machine
+        base = sh(d, "git", "rev-parse", "main")
+        self.assertIn(f"HEAD {head[:10]} vs main (merge-base {base[:10]})", readme)   # same commits on every machine
         self.assertEqual(sh(d, "git", "status", "--porcelain", "--untracked-files=no"), "")
         self.assertTrue(os.path.isfile(os.path.join(d, "PR_DRAFT.md")))
         r = subprocess.run([sys.executable, "-B", "-m", "unittest", "-q"], cwd=d, capture_output=True, text=True)
@@ -8643,6 +8644,16 @@ class TestDemo(unittest.TestCase):
         r = subprocess.run([sys.executable, "-B", "-c", "from shelf import page_count; print(page_count(list(range(45))))"],
                            cwd=d, capture_output=True, text=True)
         self.assertEqual(r.stdout.strip(), "2")                     # ...and the planted bug is there (3 pages needed)
+
+    def test_same_commits_whatever_the_git_environment(self):
+        from unittest import mock
+        from crucible import demo
+        clean = sh(demo.make(os.path.join(tempfile.mkdtemp(), "a")), "git", "rev-parse", "HEAD")
+        env = {"GIT_AUTHOR_NAME": "someone", "GIT_COMMITTER_EMAIL": "x@y.z", "GIT_AUTHOR_DATE": "2020-01-01T00:00:00Z",
+               "GIT_DIR": os.path.join(tempfile.mkdtemp(), "elsewhere")}
+        with mock.patch.dict(os.environ, env):
+            d = demo.make(os.path.join(tempfile.mkdtemp(), "b"))
+        self.assertEqual(sh(d, "git", "rev-parse", "HEAD"), clean)
 
     def test_refuses_a_non_empty_dir(self):
         from crucible import cli
