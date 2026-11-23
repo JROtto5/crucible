@@ -11,6 +11,7 @@
   crucible vote    ID up|down "reason" [--repo R]                 feedback; down-votes become memory proposals
   crucible remember PROJECT "lesson"                              curated repeat-mistakes memory
   crucible proposals PROJECT [--accept N]                         review proposed memory entries
+  crucible demo    [DIR]                                          a tiny sample repo with one change, to try review on
   crucible eval    [--cases ...] [--split S] [--no-tiers] [--label L] score the reviewer on fixtures (eval/)
   crucible routing-replay [--include-self]                        what cost-routing rules would lose, on stored reviews
   crucible anchor-replay --clones DIR [--per-class N] [--votes N] verifier with vs without the reviewer's argument
@@ -134,6 +135,17 @@ def cmd_remember(a):
     with open(os.path.join(project_dir(a.project.replace("/", "__")), "memory.md"), "a", encoding="utf-8") as fh:
         fh.write(f"- {dt.date.today()}: {a.lesson}\n")
     print("remembered")
+
+
+def cmd_demo(a):
+    from . import demo
+    try:
+        d = demo.make(a.dir)
+    except (FileExistsError, OSError) as e:
+        sys.exit(f"crucible: {e}")
+    print(f"demo repo: {d} (branch {demo.BRANCH}, one commit on top of main, PR text in PR_DRAFT.md)\n\n"
+          f"next:\n  crucible review {a.dir} --offline --budget 1\n\n"
+          "--offline skips the GitHub lookups this local repo has no remote for; --budget caps the spend in USD.")
 
 
 def cmd_eval(a):
@@ -307,6 +319,8 @@ def main(argv=None):
     sa.add_argument("--include-self", action="store_true", help="include crucible's reviews of itself")
     sa.add_argument("--since", type=_iso_time, help="only reviews finished at or after this local time (YYYY-MM-DD[THH:MM])")
     sa.add_argument("--json", action="store_true", help='machine-readable ("answered": false when there is no data)')
+    de = s.add_parser("demo", help="create a tiny sample repo with one change to try a review on")
+    de.add_argument("dir", nargs="?", default="crucible-demo", help="where to create it (default ./crucible-demo)")
     ev = s.add_parser("eval", help="run the review on labelled fixture changes (eval/cases) and score it")
     ev.add_argument("--cases", nargs="*", help="substrings of case names to run (default: all)")
     ev.add_argument("--split", choices=("build", "holdout"), help="run only build or only held-out cases (default: both)")
@@ -322,7 +336,7 @@ def main(argv=None):
         sys.exit(f"crucible: {util.CLI_MISSING}")
     {"review": cmd_review, "status": cmd_status, "answer": cmd_answer, "waive": cmd_waive, "learn": cmd_learn, "prep": cmd_prep,
      "polish": cmd_polish, "reply": cmd_reply, "vote": cmd_vote, "remember": cmd_remember, "proposals": cmd_proposals, "eval": cmd_eval,
-     "routing-replay": cmd_routing_replay, "anchor-replay": cmd_anchor_replay, "stats": cmd_stats,
+     "demo": cmd_demo, "routing-replay": cmd_routing_replay, "anchor-replay": cmd_anchor_replay, "stats": cmd_stats,
      "model-replay": cmd_model_replay}[a.cmd](a)
 
 

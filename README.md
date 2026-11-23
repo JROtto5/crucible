@@ -2,13 +2,63 @@
 
 [![tests](https://github.com/JROtto5/crucible/actions/workflows/tests.yml/badge.svg)](https://github.com/JROtto5/crucible/actions/workflows/tests.yml)
 
-**An independent, evidence-first reviewer for the pull requests you send to other people's projects.**
+crucible reviews a pull request on your machine before anyone else sees it. It runs the project's own lint and tests, has a Claude model review the diff (a different model from the one that wrote it, when the commits say which), and then gives each finding to a second model whose only job is to disprove it, by reading the code or running it. What survives is pinned to one commit, and you answer each finding (fixed, refuted or deferred) until the verdict is GREEN. It was built for contributions to other people's open-source projects, so it also holds the PR description to the project's template and house style. It never posts, pushes or approves anything by itself. MIT, Python standard library only.
 
-Before you send a PR to three.js, Colyseus or supabase-js, crucible checks it the way that project's maintainers would. It runs their checks, learns what they actually ask for in review, hunts for real bugs, makes every finding prove itself, and holds the PR description to the project's house style. It never posts anything. You submit.
+## Try it in 5 minutes
+
+You need Python 3.10+, git, and the [Claude Code CLI](https://docs.claude.com/en/docs/claude-code/setup), logged in with a Claude subscription or with `ANTHROPIC_API_KEY` set.
+
+```sh
+pipx install git+https://github.com/JROtto5/crucible
+crucible demo                                     # ./crucible-demo: a tiny repo with one change on a branch
+crucible review crucible-demo --offline --budget 1
+```
+
+The demo change adds `page_count()` to a paging helper, with a test that passes. A recorded run (2026-11-23, 1 min 47 s, $0.24), trimmed:
 
 ```text
-crucible learn   ~/src/three.js                 # maintainer rules + house style from merged PRs
-crucible review  ~/src/three.js --budget 3      # checks → scanners → review → verification → verdict
+crucible: crucible-demo HEAD 9ab44f9436 vs main (merge-base dac1f52556)
+  models: review claude-opus-5-5, verify claude-sonnet-5-5 (author: unknown)
+  review pass 1/1: shelf.py, test_shelf.py
+  verifying 3 finding(s), one per call (tiers: claude-haiku-5-5 → claude-sonnet-5-5)
+
+**Verdict: NOT_GREEN** · **Ready to submit: no**
+- 2 findings kept · 1 dropped by verification · 1 blocking open · 2 unanswered
+
+### CR-14b1feef · important · `shelf.py:12`
+**page_count() undercounts when the last page is partial**
+`len(items) // size` rounds down. A trailing partial page is not counted, even though page() serves it:
+page(list(range(45)), 3) returns items 40-44, yet page_count(list(range(45))) == 2. [...] The only test
+uses 40 items, an exact multiple, so it can't catch this.
+- wrong if: page_count(list(range(45))) returns 3, or page() is changed so the trailing partial page is not shown.
+- fix: Round up: `return -(-len(items) // size)` [...]
+- verification: verified by executed: [...] The probe returned page_count(range(45)) = 2,
+  page_count(range(40)) = 2, page_count(range(5)) = 0, and len(page(range(45), 3)) = 5. [...]
+
+### CR-48ce547c · low · `PR_DRAFT.md:2`
+**Description doesn't say how rounding is handled**
+```
+
+The full report also lists readiness items (no linked issue here) and the finding verification dropped. Fix the bug, commit, and review again: only what changed is re-reviewed. In the recorded second round ($0.20) the important finding was dropped as fixed, and two low ones were left to answer with `crucible answer CR-… fixed|refuted|deferred "why"`. When nothing blocking is open and every finding is answered, the verdict is GREEN.
+
+On your own change, commit it and run `crucible review path/to/repo --budget 3`; the base defaults to `upstream/<default>`, then `origin/<default>`. [docs/quickstart.md](docs/quickstart.md) walks through a real merged PR on a public repo (pyinfra) where crucible finds the crash that shipped.
+
+## What it needs and what it costs
+
+- **Claude Code CLI**, tested with 2.1.325. Every model call goes through `claude -p`, billed to whatever account the CLI is logged in to (`CRUCIBLE_CLAUDE_DIR` picks another config dir). Fable 5.2 (used only when the commits say both Opus and Sonnet wrote the change, or when you choose it) needs 2.1.290 or newer.
+- **Models.** The reviewer is `claude-opus-5-5`, or `claude-sonnet-5-5` when the commits say Opus wrote the change. Each finding is checked first by `claude-haiku-5-5`, then by the other of Opus and Sonnet when it is blocking or the cheap check isn't sure. `CRUCIBLE_REVIEW_MODEL` and `CRUCIBLE_VERIFY_MODEL` override them.
+- **`gh`** (optional, logged in) for `learn`, `reply` and the readiness checks that look up the linked issue and other open PRs. `--offline` skips them.
+- **Cost per review.** The demo: $0.20 to $0.25. Real PRs: on the 25 benchmark PRs below, mean $2.13, median $1.51, max $5.02 with `--budget 5`. An outside team's run on their own PRs averaged $1.53 (max $3.29 on a ~6,000-line diff). `--budget USD` caps spend; a review cut short by it can't be GREEN.
+
+## Benchmark, with its caveats
+
+On a private, unofficial run of [ReviewBench](https://github.com/review-bench/ReviewBench) (the 25 test PRs behind review-bench.ai, scored locally with the benchmark's own judge, one round, 2026-11-19, crucible 85fc223), crucible's grounded F1 was **73.7 on high-severity issues**, which would place it about #5 on the site's high-severity table, and 70.4 across all severities, at a mean $2.13 per PR. It was not submitted to the site and nobody else has reproduced it. With 25 PRs and one round, one high-severity issue moves F1 by about 2 points. Method, per-PR notes and the misses: [eval/NOTES.md](eval/NOTES.md) ("ReviewBench run 6").
+
+## Commands
+
+```text
+crucible learn   ~/src/project                  # maintainer rules + house style from merged PRs
+crucible review  ~/src/project --budget 3       # checks → scanners → review → verification → verdict
 crucible answer  CR-80b53167 fixed "restore for…of; re-added [1,2,3] test"
 crucible status                                  # GREEN / NOT_GREEN + readiness, for this exact commit
 crucible polish                                  # PR_DRAFT.md → PR_DRAFT.polished.md in the project's voice
@@ -165,19 +215,11 @@ crucible's working files (`PR_DRAFT*.md`, `PREP.md`, `REPLIES.md`, `PR.diff`) ar
 
 Model calls run with `--setting-sources ""` and an empty MCP config. A checked-out project's `.claude/` settings and hooks are never loaded, and your own MCP servers stay out of the loop. The reviewer is read-only (git/read tools). The verifier can additionally run tests and `node`, but has no file-write tools.
 
-## Install
+## Install details
 
-New here? [docs/quickstart.md](docs/quickstart.md) is a timed real run on a public repo: crucible finds a crash that shipped in a merged pyinfra PR. [docs/case-studies.md](docs/case-studies.md) shows real catches (and a miss) on upstream PRs, with links. [docs/commands.md](docs/commands.md) is the command reference.
+[docs/case-studies.md](docs/case-studies.md) shows real catches (and a miss) on upstream PRs, with links. [docs/commands.md](docs/commands.md) is the command reference.
 
-
-Requires Python 3.10+, git, `gh`, and the [Claude Code](https://claude.com/claude-code) CLI. Reviews that crucible routes to Fable 5.2 need
-Claude Code 2.1.290 or newer; on an older CLI those calls move to Opus (`CRUCIBLE_FABLE_FALLBACK`), as on a spend
-limit.
-
-```bash
-pipx install git+https://github.com/JROtto5/crucible   # or: pip install --user git+https://github.com/JROtto5/crucible
-crucible --version
-```
+Requirements are under [What it needs](#what-it-needs-and-what-it-costs). On a CLI older than 2.1.290, Fable calls move to Opus (`CRUCIBLE_FABLE_FALLBACK`), as on a spend limit. Without pipx: `pip install --user git+https://github.com/JROtto5/crucible`.
 
 Nothing else is installed: crucible uses only the Python standard library. To work on crucible itself, or to run `crucible eval` (its fixture cases live in the repository, not the package):
 
