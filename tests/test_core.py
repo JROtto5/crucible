@@ -8427,6 +8427,39 @@ class TestLensMode(unittest.TestCase):
             self.assertNotIn("small_tier", rec)
             self.assertEqual(budgets[0], 5.0)
 
+    def test_author_flag_takes_several_models_by_family_or_id(self):
+        self.assertEqual(V.parse_authors("opus, sonnet"), {"claude-opus-5-5", "claude-sonnet-5-5"})
+        self.assertEqual(V.parse_authors("claude-opus-5-5"), {"claude-opus-5-5"})
+        self.assertEqual(V.parse_authors("Fable claude-x-9"), {"claude-fable-5-2", "claude-x-9"})
+        self.assertEqual(V.parse_authors(None), set())
+        with tempfile.TemporaryDirectory() as d:
+            repo, _ = self._repo(d)
+            base = sh(repo, "git", "merge-base", "main", "HEAD")
+            with _mock.patch.dict(os.environ, {"CRUCIBLE_REVIEW_MODEL": "", "CRUCIBLE_VERIFY_MODEL": ""}):
+                rv, vf, au = V.choose_models(repo, base, "opus,sonnet")
+            self.assertEqual((rv, au), ("claude-fable-5-2", ["claude-opus-5-5", "claude-sonnet-5-5"]))
+
+    def test_thin_checkout_is_recorded_with_what_it_lacks(self):
+        """A scratch repo of the base tree and the head tree (as BLAZE 2 builds for its crucible lens) has no PR
+        trailers or draft. The review says so, and --author fills the author gap."""
+        with tempfile.TemporaryDirectory() as d:
+            repo, _ = self._repo(d)           # base is the repo's root commit; the trailer names no model family
+            dd, _, _ = self._run(d, repo, lens=True)
+            thin = U.read_json(os.path.join(dd, "review.json"))["thin_repo"]
+            self.assertEqual(thin["commits"], 1)
+            self.assertEqual(len(thin["missing"]), 1); self.assertIn("--author", thin["missing"][0])
+            base = sh(repo, "git", "merge-base", "main", "HEAD"); head = sh(repo, "git", "rev-parse", "HEAD")
+            self.assertEqual(V.thin_repo(repo, base, head, {"claude-opus-5-5"}, True, lens=False),
+                             {"commits": 1, "missing": []})
+            self.assertIn("--draft", V.thin_repo(repo, base, head, {"claude-opus-5-5"}, False)["missing"][0])
+            # with history under the base, nothing is recorded
+            sh(repo, "git", "checkout", "-q", "main")
+            for i in range(2):
+                open(os.path.join(repo, "src", "b.js"), "w").write(f"export const b = {i};\n")
+                sh(repo, "git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A")
+                sh(repo, "git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", f"b{i}")
+            self.assertIsNone(V.thin_repo(repo, sh(repo, "git", "rev-parse", "HEAD"), head, set(), False))
+
     def test_small_tier_flag_and_env(self):
         self.assertFalse(V.small_tier_enabled(None, False))
         self.assertTrue(V.small_tier_enabled(None, True))

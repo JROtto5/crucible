@@ -625,11 +625,37 @@ def author_models(repo, base):
     return found
 
 
+def parse_authors(author):
+    """--author as given: one or more model ids or family names (opus, sonnet, fable, haiku), comma- or space-separated,
+    as a set of model ids. A token that is neither is kept as given (an id this version doesn't list). Several, because
+    a PR can have commits from two models (ReviewBench R6: emdash and nebula had Opus and Sonnet trailers, so Fable
+    reviewed them), and a checkout without the PR's commits has no trailers to read that from."""
+    return {MODELS.get(t.lower(), t) for t in re.split(r"[,\s]+", author or "") if t}
+
+
 def choose_models(repo, base, author=None):
-    authors = set([author] if author else []) | author_models(repo, base)
+    authors = parse_authors(author) | author_models(repo, base)
     review = os.environ.get("CRUCIBLE_REVIEW_MODEL") or next((m for m in PREFERENCE if m not in authors), PREFERENCE[0])
     verify = os.environ.get("CRUCIBLE_VERIFY_MODEL") or next((m for m in PREFERENCE if m != review), PREFERENCE[0])
     return review, verify, sorted(authors)
+
+
+def thin_repo(repo, base, sha, authors, draft_found, lens=False):
+    """What a checkout without the PR's history can't tell the review, or None when the base commit has a parent.
+    A reviewer that embeds crucible may build a scratch repo from two commits, the base tree and the head tree (or
+    clone shallow). The diff is the same, but the base is then a root commit and the change one commit: the PR's
+    Co-Authored-By trailers are gone, so the author model is unknown and the reviewer may be the model that wrote the
+    change; `git log`/`blame` show no per-commit story; and PR_DRAFT.md is absent unless the caller writes it.
+    Returns {"commits": n, "missing": [...]} (missing may be empty when --author and --draft filled the gaps)."""
+    if git(repo, "rev-list", "--parents", "-n", "1", base, check=False).split()[1:]:
+        return None
+    missing = []
+    if not authors:
+        missing.append("author models (no Co-Authored-By trailers; pass --author, e.g. --author opus,sonnet)")
+    if not draft_found and not lens:
+        missing.append("PR description (no PR_DRAFT.md; pass --draft)")
+    n = git(repo, "rev-list", "--count", f"{base}..{sha}", check=False)
+    return {"commits": int(n) if n.isdigit() else None, "missing": missing}
 
 
 # ---------- project knowledge ----------
@@ -1788,6 +1814,11 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         dctx = (dlabel, "\n".join(draft_full.split("\n")[:cut - 1] if cut else draft_full.split("\n"))) \
             if draft_path else None
         tracked = set(git(repo, "ls-files", "-z").split("\0"))
+        thin = thin_repo(repo, base, sha, authors, bool(draft_path), lens)
+        if thin:
+            record["thin_repo"] = thin
+            log(f"  note: thin checkout (the base commit has no parent; {thin['commits']} commit(s) in the change)"
+                + (": missing " + "; ".join(thin["missing"]) if thin["missing"] else ""))
         if cut:
             log(f"  draft: author notes from {os.path.basename(draft_path)}:{cut} on are not judged as the PR body")
         style_json = read_json(os.path.join(project_dir(project), "style.json"), {}) or {}
