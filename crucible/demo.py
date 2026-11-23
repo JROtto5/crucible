@@ -61,25 +61,27 @@ Tested: `python3 -m unittest`
 BRANCH = "add-page-count"
 
 
+# The README quotes this repo's commit ids, so the settings of a user's config that change them, or that could
+# edit or refuse a sample commit (hooks), are pinned for every command.
+PINNED = ("commit.gpgsign=false", "i18n.commitEncoding=UTF-8", "core.hooksPath=/dev/null", "core.autocrlf=false",
+          "core.attributesFile=/dev/null")
+
+
 def _git(d, *args, extra=None):
     # no inherited GIT_DIR, GIT_AUTHOR_NAME, ...: they would point the commands at another repo or win over the fixed
     # identity below. GIT_CONFIG_* stays, so a caller's config isolation (CI, hermetic runs) still holds.
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") or k.startswith("GIT_CONFIG")} | (extra or {})
-    subprocess.run(["git", *args], cwd=d, check=True, capture_output=True, text=True, env=env)
+    pins = [x for p in PINNED for x in ("-c", p)]
+    subprocess.run(["git", *pins, *args], cwd=d, check=True, capture_output=True, text=True, env=env)
 
 
 def _commit(d, files, msg, when):
     for p, t in files.items():
-        with open(os.path.join(d, p), "w", encoding="utf-8") as f:
+        with open(os.path.join(d, p), "w", encoding="utf-8", newline="\n") as f:      # LF on Windows too
             f.write(t)
     _git(d, "add", "-A")
-    # fixed author and dates: every demo repo has the same commits, so the README's recorded run matches yours
     who = {"NAME": "crucible demo", "EMAIL": "demo@example.invalid", "DATE": when}
-    # pinned: the config that would change the commit objects, and no hooks (a global core.hooksPath could edit or
-    # refuse a sample commit)
-    _git(d, "-c", "commit.gpgsign=false", "-c", "i18n.commitEncoding=UTF-8", "-c", "core.hooksPath=/dev/null",
-         "commit", "-q", "-m", msg,
-         extra={f"GIT_{role}_{k}": v for role in ("AUTHOR", "COMMITTER") for k, v in who.items()})
+    _git(d, "commit", "-q", "-m", msg, extra={f"GIT_{role}_{k}": v for role in ("AUTHOR", "COMMITTER") for k, v in who.items()})
 
 
 def make(path):
@@ -88,8 +90,7 @@ def make(path):
     if os.path.exists(d) and os.listdir(d):
         raise FileExistsError(f"{d} exists and is not empty")
     os.makedirs(d, exist_ok=True)
-    # sha1 whatever init.defaultObjectFormat says, and no template (it can install hooks); git 2.28+
-    _git(d, "init", "-q", "-b", "main", "--object-format=sha1", "--template=")
+    _git(d, "init", "-q", "-b", "main", "--object-format=sha1")      # whatever init.defaultObjectFormat says; git 2.28+
     _commit(d, BASE, "shelf: list paging", "2026-01-05T10:00:00+00:00")
     _commit(d, TESTS, "shelf: test page()", "2026-01-05T10:05:00+00:00")
     _git(d, "checkout", "-q", "-b", BRANCH)
