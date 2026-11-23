@@ -1584,7 +1584,8 @@ sites). Before, any item at the line hid the site, and here it would have hidden
 | any named identifier, own file adds it, ≤3 other files | 115 / 148 / 135 | 3, 2 | 2 | 274 of 398 |
 | + ≤3 names per item | 78 / 93 / 88 | 3, 2 | 1 | 173 of 259 |
 | + call/string line only, judged on the name (round 2) | 36 / 58 / 50 (11 / 14 / 13 PRs) | 3, 2 | 1 (R5 node-postgres #7, at pg-pool/index.js:218) | 82 of 144 |
-| **shipped: + the own file defines it (declaration or `case`), method definitions aren't calls (round 3)** | **18 / 33 / 18 (5 / 11 / 7 PRs)** | **3 (#28, #29, #35), 2 (#28, #29)** | **0** | **40 of 69** |
+| + the own file defines it (declaration or `case`), method definitions aren't calls (round 3) | 18 / 33 / 18 (5 / 11 / 7 PRs) | 3, 2 | 0 | 40 of 69 |
+| **shipped: + constants, enum members and keys define; `with`/`catch`/chained calls are calls (round 4)** | **19 / 32 / 19 (6 / 10 / 8 PRs)** | **3 (#28, #29, #35), 2 (#28, #29)** | **0** | **42 of 70** |
 R6's 2 missed highs are reached twice each (from the store item and the tabs/restore items). R5 had no kept item
 naming these actions. The round-2 variant's one golden-false high (`traceCallback`, which the item's file only called)
 is gone with the definition rule, as are timer/hook names (`clearTimeout`, `useEffect`) an item quotes. Expected gain, if the sites hold and the judge matches them: apilix 2-3 of 11 more high items, about +1.3 to +1.9
@@ -1606,4 +1607,7 @@ here. Round 3 ($1.03): NOT_GREEN, 1 medium + 2 lows: a builtin or hook name (`cl
 file only calls passed the gate (now the own file must define it: the table's last row, same highs, no golden-false
 high); a keyword-less method definition (`public void f(int x) {`, `func (s *S) f(`) counted as a call (now
 `_defines`); an over-wide garbled comment line (re-wrapped). The eval above ran before round 3; round 3 only removes
-sites. Tests 508 -> 511, ruff clean.
+sites. Round 4 ($0.31): NOT_GREEN, 2 lows: `with f(x) as g:`, `catch`, and `f(x).then(function () {` read as method
+definitions (control words added, a chained call after the parameters is a call); a module constant, enum member,
+Go iota entry or reducer-map key in the own file didn't count as defining the name (now it does). Falsifiers both
+ways. Tests 508 -> 511, ruff clean.

@@ -7240,15 +7240,26 @@ class TestNitTier(unittest.TestCase):
         for line in ("    dispatch({ type: 'SWITCH_WORKSPACE', payload })", "      type: 'SWITCH_WORKSPACE',",
                      "  const r = await SWITCH_WORKSPACE(1);", "return run(\"SWITCH_WORKSPACE\")"):
             self.assertTrue(V._calls("SWITCH_WORKSPACE", line), line)
-        for line in ("  if (SWITCH_WORKSPACE(x)) {", "  if SWITCH_WORKSPACE(x) {"):     # a call that opens a block
+        for line in ("  if (SWITCH_WORKSPACE(x)) {", "  if SWITCH_WORKSPACE(x) {",     # calls that open a block
+                     "    with SWITCH_WORKSPACE(x) as f:", "  SWITCH_WORKSPACE(x).then(function () {",
+                     "  } catch SWITCH_WORKSPACE(e) {"):
             self.assertTrue(V._calls("SWITCH_WORKSPACE", line), line)
         for line in ("  | { type: 'SWITCH_WORKSPACE'; payload }", "    case 'SWITCH_WORKSPACE': {",
                      "export async function SWITCH_WORKSPACE(x) {", "    public function SWITCH_WORKSPACE(): void",
                      "const SWITCH_WORKSPACE = (x) => 1", "import { SWITCH_WORKSPACE } from './a';",
                      "  return SWITCH_WORKSPACE;",                                    # named, but not called
                      "  public void SWITCH_WORKSPACE(int x) {", "  async SWITCH_WORKSPACE(x: number) {",  # methods
-                     "func (s *Store) SWITCH_WORKSPACE(x int) {", "  private SWITCH_WORKSPACE(): Promise<void> {"):
+                     "func (s *Store) SWITCH_WORKSPACE(x int) {", "  private SWITCH_WORKSPACE(): Promise<void> {",
+                     "SWITCH_WORKSPACE = 'switch'", "  SWITCH_WORKSPACE: (s, a) => ({ ...s }),",   # constants, keys
+                     "\tSWITCH_WORKSPACE Action = iota", "  SWITCH_WORKSPACE = 'SWITCH_WORKSPACE',",
+                     "  static readonly SWITCH_WORKSPACE = 'sw';"):
             self.assertFalse(V._calls("SWITCH_WORKSPACE", line), line)
+        # what counts as the item's own file defining the name (self-review round 4: constants, enum members, keys)
+        for line in ("SWITCH_WORKSPACE = 'switch'", "  SWITCH_WORKSPACE: (s, a) => ({ ...s }),", "    case 'SWITCH_WORKSPACE': {",
+                     "\tSWITCH_WORKSPACE Action = iota", "  SWITCH_WORKSPACE = 'SWITCH_WORKSPACE',", "SWITCH_WORKSPACE: str = 'x'"):
+            self.assertTrue(V._defines("SWITCH_WORKSPACE", line), line)
+        for line in ("  dispatch({ type: 'SWITCH_WORKSPACE' })", "  if SWITCH_WORKSPACE == x:", "  clearTimeout(t);"):
+            self.assertFalse(V._defines("SWITCH_WORKSPACE", line), line)
 
     def test_name_sites_end_to_end_only_with_nits_and_only_when_held(self):
         files = ({"store.js": "a = 1\n", "ui.js": "b = 1\n"},

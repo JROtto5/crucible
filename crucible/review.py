@@ -965,7 +965,8 @@ NAME_MODS = r"(?:(?:export|public|private|protected|internal|static|async|pub|ov
 NAME_DEF = "def|function|func|fn|class|struct|enum|type|interface|const|let|var|val|module|#\\s*define"
 # a method definition with no keyword (`public void name(int x) {`, `async name(x) {`, `func (s *S) name(x int) {`,
 # `private flush(): Promise<void> {`): only words or a Go receiver before the name, and the line opens a body
-NAME_CTRL = re.compile(r"\b(?:if|elif|while|for|return|await|yield|else|switch|go|defer|not|and|or|new|throw)\b")
+NAME_CTRL = re.compile(r"\b(?:if|elif|while|for|return|await|yield|else|switch|go|defer|not|and|or|new|throw|with|"
+                       r"assert|except|catch|when|match|using|lock|try)\b")
 
 
 def _names(f):
@@ -975,12 +976,16 @@ def _names(f):
 
 
 def _defines(name, line):
-    """line declares name: a declaration keyword before it, a method definition (NAME_CTRL), or a `case` label."""
+    """line declares name: a declaration keyword before it, a `case` label, an assignment or key that starts the line
+    (a module or class constant, an enum member, Go's `NAME Kind = iota`, a reducer map's `NAME: (s, a) => {`), or a
+    keyword-less method definition (only words or a Go receiver before it, not a NAME_CTRL word, and a body opened
+    after the parameters with no further call: `f(x).then(function () {` is a call)."""
     n = re.escape(name)
     if re.search(rf"^\s*{NAME_MODS}(?:{NAME_DEF})\s+\*?\s*{n}(?!\w)", line) \
-            or re.search(rf"^\s*case\s+['\"]?{n}['\"]?\s*:", line):
+            or re.search(rf"^\s*case\s+['\"]?{n}['\"]?\s*:", line) \
+            or re.search(rf"^\s*{NAME_MODS}(?:readonly\s+)?['\"]?{n}['\"]?(?:\s+[\w.]+)?\s*(?:=(?![=>])|:(?!:))", line):
         return True
-    m = re.match(rf"^\s*((?:\([^()]*\)\s*|[\w<>\[\],.*&?]+\s+)*){n}\s*\([^()]*\)[^;=]*?(?:\{{|:)\s*$", line)
+    m = re.match(rf"^\s*((?:\([^()]*\)\s*|[\w<>\[\],.*&?]+\s+)*){n}\s*\([^()]*\)[^;=(]*?(?:\{{|:)\s*$", line)
     return bool(m) and not NAME_CTRL.search(m[1])
 
 
