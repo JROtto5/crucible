@@ -946,10 +946,96 @@ def manifest_sites(f, first):
     return dict(f, also_at=sites + [site], manifest_site=site)
 
 
+# Name sites (--nits, $0): ReviewBench runs 4 and 6 both missed three high issues in apilix, one per call site of a
+# workspace switch (`dispatch({ type: 'SWITCH_WORKSPACE', ... })` in two components, `'CREATE_WORKSPACE'` in one): the
+# switch doesn't flush the store's debounced save. Both runs kept that flaw once, at the store's save effect; its text
+# named the actions, whose reducer cases the change adds in that same file, but listed no call site. So an item that
+# names an identifier (CONST_CASE, or a backticked camelCase/snake_case name) which the change defines in the item's own
+# file (a declaration or a `case` label: a timer or hook the file only calls is not the item's own action) gets, in each
+# other changed code file (up to NAME_MAX_FILES) using it, the first added line that calls it or passes it as a string,
+# checked by the verifier like any other site. Measured on runs 4-6's stored reviews: eval/NOTES 2026-11-23, "name
+# sites". An item naming more than NAME_MAX_NAMES identifiers is about an area, not one action. Unlike expression sites,
+# nothing near a call site covers it: run 6's other item there named the same action for another flaw.
+NAME_RX = re.compile(r"`([A-Za-z_][A-Za-z0-9_]{5,60})`|(?<![\w`.])([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)(?![\w`])")
+NAME_SHAPE = re.compile(r"[a-z][A-Z]|_")                          # camelCase or snake/CONST_CASE: not a plain word
+NAME_MAX_FILES = 3                                                # used in more other files: too common for one flaw
+NAME_MAX_NAMES = 3
+NAME_SKIP = re.compile(r"\.(md|markdown|rst|txt|adoc)$|(^|/)(CHANGELOG|README)[^/]*$", re.I)
+NAME_MODS = r"(?:(?:export|public|private|protected|internal|static|async|pub|override|abstract|final|default)\s+)*"
+NAME_DEF = "def|function|func|fn|class|struct|enum|type|interface|const|let|var|val|module|#\\s*define"
+# a method definition with no keyword (`public void name(int x) {`, `async name(x) {`, `func (s *S) name(x int) {`,
+# `private flush(): Promise<void> {`): only words or a Go receiver before the name, and the line opens a body
+NAME_CTRL = re.compile(r"\b(?:if|elif|while|for|return|await|yield|else|switch|go|defer|not|and|or|new|throw|with|"
+                       r"assert|except|catch|when|match|using|lock|try)\b")
+
+
+def _names(f):
+    """The identifiers f names in its title or problem (see NAME_RX), 6+ chars, camelCase or with an underscore."""
+    said = f"{f.get('title') or ''} {f.get('problem') or ''}"
+    return {a or b for a, b in NAME_RX.findall(said) if len(a or b) >= 6 and NAME_SHAPE.search(a or b)}
+
+
+def _defines(name, line):
+    """line declares name: a declaration keyword before it, a `case` label, an assignment or key that starts the line
+    (a module or class constant, an enum member, Go's `NAME Kind = iota`, a reducer map's `NAME: (s, a) => {`), or a
+    keyword-less method definition (only words or a Go receiver before it, not a NAME_CTRL word, and a body opened
+    after the parameters with no further call: `f(x).then(function () {` is a call)."""
+    n = re.escape(name)
+    if re.search(rf"^\s*{NAME_MODS}(?:{NAME_DEF})\s+\*?\s*{n}(?!\w)", line) \
+            or re.search(rf"^\s*case\s+['\"]?{n}['\"]?\s*:", line) \
+            or re.search(rf"^\s*{NAME_MODS}(?:readonly\s+)?['\"]?{n}['\"]?(?:\s+[\w.]+)?\s*(?:=(?![=>])|:(?!:))", line):
+        return True
+    m = re.match(rf"^\s*((?:\([^()]*\)\s*|[\w<>\[\],.*&?]+\s+)*){n}\s*\([^()]*\)[^;=(]*?(?:\{{|:)\s*$", line)
+    return bool(m) and not NAME_CTRL.search(m[1])
+
+
+def _calls(name, line):
+    """line calls name (name(, .name() or passes it as a string ('name', "name"), and doesn't define it (_defines),
+    import it or list it as a union member (`| { type: 'X' }`). Judged on the name where it can be: `const r = await
+    syncNow(1)` and a `type: 'SWITCH_WORKSPACE',` line of a multi-line action object are calls. The import and union
+    checks are on the line's start, so a continued expression starting with `|` is skipped too."""
+    n = re.escape(name)
+    if _defines(name, line) or re.match(r"\s*(?:import|from|use|require)\b|\s*\|", line):
+        return False
+    return bool(re.search(rf"['\"]{n}['\"]|(?<!\w){n}\s*\(", line))
+
+
+def name_sites(f, text):
+    """f with also_at extended by call sites of an identifier f names (_names, at most NAME_MAX_NAMES of them) that the
+    change defines in f's own file (_defines on an added line): in each other changed code file (not a doc, not a
+    lockfile) whose added lines use it, the first added line that calls it (_calls). An identifier used in more than NAME_MAX_FILES other
+    files is too common to mark one flaw's sites. Files f already names are skipped. Recorded in name_sites for
+    counting. Unchanged f (same object) when none is found."""
+    own = f.get("file")
+    names = _names(f)
+    if not names or len(names) > NAME_MAX_NAMES:
+        return f
+    own_added = [t for _, t in text.get(own, ())]
+    named = {own} | {m["path"].strip() for s in f.get("also_at") or []
+                     if isinstance(s, str) and (m := SITE_RX.match(s))}
+    found = []
+    for nm in sorted(names):
+        rx = re.compile(rf"(?<!\w){re.escape(nm)}(?!\w)")
+        if not any(rx.search(t) and _defines(nm, t) for t in own_added):
+            continue
+        using = [p for p in sorted(text) if p not in named and not NAME_SKIP.search(p)
+                 and p.rpartition("/")[2] not in LOCK_MANIFEST and any(rx.search(t) for _, t in text[p])]
+        if len(using) > NAME_MAX_FILES:
+            continue
+        for p in using:
+            n = next((n for n, t in text[p] if rx.search(t) and _calls(nm, t)), None)
+            if n is not None and f"{p}:{n}" not in found:
+                found.append(f"{p}:{n}")
+    found = found[:max(0, MAX_SITES - len(f.get("also_at") or []))]
+    if not found:
+        return f
+    return dict(f, also_at=list(f.get("also_at") or []) + found, name_sites=found)
+
+
 def sweep_sites(items, files, others):
-    """The $0 site sweeps over items, in order: expression sites, then manifest sites."""
-    first = first_changed_lines(files)
-    return [manifest_sites(f, first) for f in sweep_expr_sites(items, added_text(files), others)]
+    """The $0 site sweeps over items, in order: expression sites, name sites, then manifest sites."""
+    first, text = first_changed_lines(files), added_text(files)
+    return [manifest_sites(name_sites(f, text), first) for f in sweep_expr_sites(items, text, others)]
 
 
 def site_lines(repo, sha, changed, items):
