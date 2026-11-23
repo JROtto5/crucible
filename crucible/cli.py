@@ -23,8 +23,10 @@ from . import __version__
 from . import util
 from .util import Failed, HOME, MODELS, project_dir, project_key, read_json, write_json
 
-# commands that call the model: they stop up front, before any checks run, when the Claude Code CLI is missing
-MODEL_CMDS = {"review", "learn", "prep", "polish", "reply", "eval"}
+# commands that call the model: they stop up front, before any checks run, when the Claude Code CLI is missing.
+# `review` too on a commit it already reviewed (no model call then): `crucible status` prints a stored verdict
+# without the CLI, and one rule for the whole command is simpler to trust than a check after the cache lookups.
+MODEL_CMDS = {"review", "learn", "prep", "polish", "reply", "eval", "anchor-replay", "model-replay"}
 
 
 def _p(repo):

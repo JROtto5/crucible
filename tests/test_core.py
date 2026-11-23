@@ -3467,7 +3467,8 @@ class TestClaudeCliMissing(unittest.TestCase):
         ran = []
         with mock.patch("crucible.review.run_review", lambda *a, **kw: ran.append(1)), \
                 mock.patch.object(U, "claude_cli_path", lambda: None), mock.patch("sys.stderr"):
-            for argv in (["review", "."], ["learn", "."], ["polish", "."], ["eval"]):
+            for argv in (["review", "."], ["learn", "."], ["prep", "."], ["polish", "."], ["reply", "https://github.com/o/r/pull/1"],
+                         ["eval"], ["anchor-replay", "--clones", "/c"], ["model-replay", "--clones", "/c"]):
                 with self.assertRaises(SystemExit) as e:
                     cli.main(argv)
                 self.assertIn("Claude Code CLI", str(e.exception.code), argv)
@@ -4837,10 +4838,12 @@ class TestAnchorReplay(unittest.TestCase):
     def test_cli_passes_its_flags_through(self):
         from unittest import mock
         from crucible import anchoring as A, cli
-        with mock.patch.object(A, "run", return_value=([], {})) as run, mock.patch("builtins.print"):
+        with mock.patch.object(A, "run", return_value=([], {})) as run, mock.patch("builtins.print"), \
+                mock.patch.object(U, "claude_cli_path", lambda: "/bin/claude"):
             cli.main(["anchor-replay", "--clones", "/c1", "/c2", "--per-class", "2", "--jobs", "3", "--budget", "1.5"])
         self.assertEqual(run.call_args.args, (os.path.join(U.HOME, "reviews"), ["/c1", "/c2"], 2, 3, 1.5, False, 1))
-        with mock.patch.object(A, "run", return_value=([], {})) as run, mock.patch("builtins.print"):
+        with mock.patch.object(A, "run", return_value=([], {})) as run, mock.patch("builtins.print"), \
+                mock.patch.object(U, "claude_cli_path", lambda: "/bin/claude"):
             cli.main(["anchor-replay", "--clones", "/c1", "--votes", "2"])
         self.assertEqual(run.call_args.args[-1], 2)
         for bad in ("0", "-1", "two"):
@@ -5985,6 +5988,7 @@ class TestModelReplay(unittest.TestCase):
     def test_model_replay_cli_validates_exclude_and_passes_fresh(self):
         from crucible import cli, modelreplay as M
         import argparse, contextlib, io
+        from unittest import mock
         self.assertEqual(cli._sha_prefix("ABCDEF0"), "abcdef0")
         for bad in ("a1", "abc123", "zzzzzzz", "a" * 41):
             with self.assertRaises(argparse.ArgumentTypeError):
@@ -5997,7 +6001,7 @@ class TestModelReplay(unittest.TestCase):
         real = M.run
         M.run = fake_run
         try:
-            with contextlib.redirect_stdout(io.StringIO()) as out:
+            with contextlib.redirect_stdout(io.StringIO()) as out, mock.patch.object(U, "claude_cli_path", lambda: "/bin/claude"):
                 cli.main(["model-replay", "--clones", "/x", "--fresh", "--exclude", "E72B878703", "--models", "opus"])
         finally:
             M.run = real
