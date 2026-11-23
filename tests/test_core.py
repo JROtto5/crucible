@@ -8859,6 +8859,15 @@ class TestDoctor(unittest.TestCase):
         with mock.patch.dict(os.environ, dict(bare, CRUCIBLE_VERIFY_CHEAP="none"), clear=True):
             self.assertEqual(len(doctor.default_models()), 2)
 
+    def test_live_probe_does_not_fall_back(self):
+        from unittest import mock
+        from crucible import doctor
+        once = mock.Mock(side_effect=U.Failed("You've hit your usage limit"))
+        with mock.patch.object(U, "_claude_once", once), mock.patch.object(U, "claude", side_effect=AssertionError):
+            rows = doctor.live([U.MODELS["fable"]])
+        self.assertEqual(rows[0][0], "fail")
+        self.assertEqual(once.call_args.args[1], U.MODELS["fable"])
+
     def test_help_is_read_once_and_not_after_a_failed_version(self):
         from crucible import doctor
         cmds = []

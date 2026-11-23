@@ -118,8 +118,8 @@ def _auth(run, env):
 def live(models, call=None):
     """One tiny structured call per model. -> [(status, what, detail)]. call(prompt, model, schema, cwd) is
     util.claude's signature (tests stub it)."""
-    call = call or (lambda p, m, s, cwd: util.claude(p, m, s, cwd, tools=None, effort="low", timeout=180,
-                                                     kind="doctor"))
+    # _claude_once, not claude(): a Fable probe refused for a limit must show as a failure, not quietly answer as Opus
+    call = call or (lambda p, m, s, cwd: util._claude_once(p, m, s, cwd, None, None, "low", 180, "doctor"))
     schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]}
     rows = []
     for m in models:
