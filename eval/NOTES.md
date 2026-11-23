@@ -1583,11 +1583,11 @@ sites). Before, any item at the line hid the site, and here it would have hidden
 |---|---|---|---|---|
 | any named identifier, own file adds it, ≤3 other files | 115 / 148 / 135 | 3, 2 | 2 | 274 of 398 |
 | + ≤3 names per item | 78 / 93 / 88 | 3, 2 | 1 | 173 of 259 |
-| **shipped: + call/string line only, judged on the name** | **36 / 58 / 50 (11 / 14 / 13 PRs)** | **3 (#28, #29, #35), 2 (#28, #29)** | **1 (R5 node-postgres #7, at pg-pool/index.js:218)** | **82 of 144** |
+| + call/string line only, judged on the name (round 2) | 36 / 58 / 50 (11 / 14 / 13 PRs) | 3, 2 | 1 (R5 node-postgres #7, at pg-pool/index.js:218) | 82 of 144 |
+| **shipped: + the own file defines it (declaration or `case`), method definitions aren't calls (round 3)** | **18 / 33 / 18 (5 / 11 / 7 PRs)** | **3 (#28, #29, #35), 2 (#28, #29)** | **0** | **40 of 69** |
 R6's 2 missed highs are reached twice each (from the store item and the tabs/restore items). R5 had no kept item
-naming these actions. The run-5 golden-false high is the precision risk: if the verifier holds that site and the judge
-matches it to #7 rather than the true medium #3 at the same line, node-postgres's high P falls, as figlet's did in R6.
-Expected gain, if the sites hold and the judge matches them: apilix 2-3 of 11 more high items, about +1.3 to +1.9
+naming these actions. The round-2 variant's one golden-false high (`traceCallback`, which the item's file only called)
+is gone with the definition rule, as are timer/hook names (`clearTimeout`, `useEffect`) an item quotes. Expected gain, if the sites hold and the judge matches them: apilix 2-3 of 11 more high items, about +1.3 to +1.9
 points of macro high recall over 14 PRs. For run 7 to measure.
 
 **Eval** (`crucible eval --nits --no-write --jobs 3`, all cases, in crucible-rb:r6f with the source mounted, f4e004b;
@@ -1602,4 +1602,8 @@ Self-review round 1 (f4e004b, $0.24): NOT_GREEN, 2 lows: the declaration check r
 `type`/`const`/`let`/`var` (a multi-line action object, `const r = await f()`): fixed, judged on the name, falsifiers
 both ways; the adapter comment was cut. The AI-attribution readiness item is expected on this repo (owner's rule).
 Round 2 (cd66e05, $0.55): NOT_GREEN, 1 medium + 1 low: no eval recorded and this NOTES entry missing; both answered
-here. Tests 508 -> 511, ruff clean.
+here. Round 3 ($1.03): NOT_GREEN, 1 medium + 2 lows: a builtin or hook name (`clearTimeout`, `useEffect`) the item's
+file only calls passed the gate (now the own file must define it: the table's last row, same highs, no golden-false
+high); a keyword-less method definition (`public void f(int x) {`, `func (s *S) f(`) counted as a call (now
+`_defines`); an over-wide garbled comment line (re-wrapped). The eval above ran before round 3; round 3 only removes
+sites. Tests 508 -> 511, ruff clean.

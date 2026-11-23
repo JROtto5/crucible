@@ -7228,6 +7228,9 @@ class TestNitTier(unittest.TestCase):
                      (dict(f, problem="the pending save is cancelled"), text),           # names nothing
                      (dict(f, problem="the `workspace` is replaced"), text),            # a plain word, not a name
                      (dict(f, file="src/other.tsx"), text),                             # own file doesn't add the name
+                     (dict(f, problem="the `clearTimeout` in the `useEffect` cleanup cancels it"),   # only called there
+                      dict(text, **{"src/store.tsx": [(668, "  useEffect(() => { return () => clearTimeout(t); })")],
+                                    "src/a.tsx": [(3, "  useEffect(() => clearTimeout(h));")]})),
                      (f, many),                                                         # in 5 other files: too common
                      (dict(f, also_at=[f"a.py:{i}" for i in range(V.MAX_SITES)]), text)):  # no room
             self.assertIs(V.name_sites(g, t), g)
@@ -7237,10 +7240,14 @@ class TestNitTier(unittest.TestCase):
         for line in ("    dispatch({ type: 'SWITCH_WORKSPACE', payload })", "      type: 'SWITCH_WORKSPACE',",
                      "  const r = await SWITCH_WORKSPACE(1);", "return run(\"SWITCH_WORKSPACE\")"):
             self.assertTrue(V._calls("SWITCH_WORKSPACE", line), line)
+        for line in ("  if (SWITCH_WORKSPACE(x)) {", "  if SWITCH_WORKSPACE(x) {"):     # a call that opens a block
+            self.assertTrue(V._calls("SWITCH_WORKSPACE", line), line)
         for line in ("  | { type: 'SWITCH_WORKSPACE'; payload }", "    case 'SWITCH_WORKSPACE': {",
                      "export async function SWITCH_WORKSPACE(x) {", "    public function SWITCH_WORKSPACE(): void",
                      "const SWITCH_WORKSPACE = (x) => 1", "import { SWITCH_WORKSPACE } from './a';",
-                     "  return SWITCH_WORKSPACE;"):                                   # named, but not called
+                     "  return SWITCH_WORKSPACE;",                                    # named, but not called
+                     "  public void SWITCH_WORKSPACE(int x) {", "  async SWITCH_WORKSPACE(x: number) {",  # methods
+                     "func (s *Store) SWITCH_WORKSPACE(x int) {", "  private SWITCH_WORKSPACE(): Promise<void> {"):
             self.assertFalse(V._calls("SWITCH_WORKSPACE", line), line)
 
     def test_name_sites_end_to_end_only_with_nits_and_only_when_held(self):
