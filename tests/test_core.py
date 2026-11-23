@@ -8812,7 +8812,7 @@ class TestDoctor(unittest.TestCase):
         rows = self._rows(dict(self.GOOD, **{"claude --help": (0, self.HELP), "claude auth status": (1, "unknown command")}))
         self.assertEqual(rows["Claude login"][0], "warn")
 
-    def test_cli_exit_code_and_live(self):
+    def test_cli_exit_code(self):
         from unittest import mock
         from crucible import cli, doctor
         with mock.patch.object(doctor, "check", lambda: [("ok", "python", "3.12")]), mock.patch("builtins.print"):
@@ -8821,6 +8821,28 @@ class TestDoctor(unittest.TestCase):
                 self.assertRaises(SystemExit) as e:
             cli.main(["doctor"])
         self.assertEqual(e.exception.code, 1)
+
+    def test_cli_live(self):
+        from unittest import mock
+        from crucible import cli, doctor
+        seen, out = [], []
+        for check, live, exits in (([("ok", "a", "")], [("ok", "m", "")], False),       # all good
+                                   ([("ok", "a", "")], [("fail", "m", "no access")], True),
+                                   ([("fail", "a", "")], [("ok", "m", "")], True)):      # live is skipped then
+            with mock.patch.object(doctor, "check", lambda c=check: c), \
+                    mock.patch.object(doctor, "live", lambda models, r=live: seen.append(models) or r), \
+                    mock.patch("builtins.print", lambda *a, **k: out.append(" ".join(map(str, a)))):
+                if exits:
+                    with self.assertRaises(SystemExit):
+                        cli.main(["doctor", "--live"])
+                else:
+                    cli.main(["doctor", "--live"])
+        self.assertEqual(len(seen), 2)
+        self.assertIn("--live skipped", out[-1])
+
+    def test_live_rows_and_models(self):
+        from unittest import mock
+        from crucible import doctor
         calls = []
 
         def call(p, m, s, cwd):
@@ -8833,7 +8855,23 @@ class TestDoctor(unittest.TestCase):
         self.assertEqual(calls, ["good", "bad"])
         bare = {k: v for k, v in os.environ.items() if not k.startswith("CRUCIBLE_")}
         with mock.patch.dict(os.environ, bare, clear=True):
-            self.assertEqual(doctor.default_models(), ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"])
+            self.assertEqual(doctor.default_models(), [*V.pick_models(set()), V.cheap_model()])
+        with mock.patch.dict(os.environ, dict(bare, CRUCIBLE_VERIFY_CHEAP="none"), clear=True):
+            self.assertEqual(len(doctor.default_models()), 2)
+
+    def test_help_is_read_once_and_not_after_a_failed_version(self):
+        from crucible import doctor
+        cmds = []
+        good = dict(self.GOOD, **{"claude --help": (0, self.HELP)})
+
+        def run(cmd, env=None, timeout=30):
+            cmds.append(" ".join(cmd))
+            return good.get(" ".join(cmd), (127, ""))
+        doctor.check(run=run, which=lambda p: "/bin/" + p, env={}, home=tempfile.mkdtemp())
+        self.assertEqual(cmds.count("claude --help"), 1)
+        cmds.clear(); good["claude --version"] = (1, "boom")
+        doctor.check(run=run, which=lambda p: "/bin/" + p, env={}, home=tempfile.mkdtemp())
+        self.assertNotIn("claude --help", cmds)
 
 
 if __name__ == "__main__":

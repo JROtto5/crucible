@@ -639,11 +639,16 @@ def unknown_authors(authors):
     return sorted(a for a in authors if a not in MODELS.values() and not a.startswith("claude-"))
 
 
-def choose_models(repo, base, author=None):
-    authors = parse_authors(author) | author_models(repo, base)
+def pick_models(authors):
+    """-> (reviewer, verifier) for a change written by these models: the reviewer differs from the authors."""
     review = os.environ.get("CRUCIBLE_REVIEW_MODEL") or next((m for m in PREFERENCE if m not in authors), PREFERENCE[0])
     verify = os.environ.get("CRUCIBLE_VERIFY_MODEL") or next((m for m in PREFERENCE if m != review), PREFERENCE[0])
-    return review, verify, sorted(authors)
+    return review, verify
+
+
+def choose_models(repo, base, author=None):
+    authors = parse_authors(author) | author_models(repo, base)
+    return (*pick_models(authors), sorted(authors))
 
 
 def thin_repo(repo, base, sha, authors, draft_found, lens=False):

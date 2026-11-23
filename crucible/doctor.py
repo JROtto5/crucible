@@ -11,7 +11,7 @@ MARK = {OK: "✅", WARN: "⚠️ ", FAIL: "❌"}
 # flags util.claude passes on every call: a CLI without one of them fails every review
 CLI_FLAGS = ("--json-schema", "--setting-sources", "--strict-mcp-config", "--no-session-persistence", "--effort",
              "--max-budget-usd", "--permission-mode")
-FABLE_MIN = (2, 1, 290)
+FABLE_MIN = (2, 1, 290)              # util.py's fallback note: Fable needs this CLI or newer
 GIT_MIN = (2, 28)                    # `crucible demo` (init -b, --object-format)
 INSTALL = "https://docs.claude.com/en/docs/claude-code/setup"
 
@@ -68,7 +68,8 @@ def check(run=_run, which=shutil.which, env=None, home=None):
         rc, out = run(["claude", "--version"], env=cenv)
         v = _version(out)
         vs = ".".join(map(str, v)) if v else "version unknown"
-        missing = [f for f in CLI_FLAGS if f not in run(["claude", "--help"], env=cenv)[1]]
+        helptext = run(["claude", "--help"], env=cenv)[1] if rc == 0 else ""
+        missing = [f for f in CLI_FLAGS if f not in helptext]
         if rc != 0:
             rows.append((FAIL, "Claude Code CLI", f"`claude --version` failed ({rc}): {out.strip()[:200]}"))
         elif missing:
@@ -131,11 +132,10 @@ def live(models, call=None):
 
 
 def default_models():
-    """The models a review with no known author uses: reviewer, strong verifier, cheap verifier."""
-    review = os.environ.get("CRUCIBLE_REVIEW_MODEL") or util.PREFERENCE[0]
-    verify = os.environ.get("CRUCIBLE_VERIFY_MODEL") or next(m for m in util.PREFERENCE if m != review)
-    cheap = os.environ.get("CRUCIBLE_VERIFY_CHEAP", util.MODELS["haiku"])
-    return list(dict.fromkeys(m for m in (review, verify, cheap) if m and m != "none"))
+    """The models a review with no known author uses: reviewer, strong verifier, cheap verifier (review.py's own
+    choice, so --live probes what a review would call)."""
+    from . import review
+    return list(dict.fromkeys(m for m in (*review.pick_models(set()), review.cheap_model()) if m))
 
 
 def report(rows):

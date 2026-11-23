@@ -144,7 +144,9 @@ def cmd_doctor(a):
     rows = doctor.check()
     print(doctor.report(rows))
     failed = any(s == doctor.FAIL for s, _, _ in rows)
-    if a.live and not failed:
+    if a.live and failed:
+        print("(--live skipped: fix the problems above first)")
+    elif a.live:
         live = doctor.live(doctor.default_models())
         print("\n" + doctor.report(live))
         failed = any(s == doctor.FAIL for s, _, _ in live)
