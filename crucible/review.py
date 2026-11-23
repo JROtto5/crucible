@@ -946,10 +946,74 @@ def manifest_sites(f, first):
     return dict(f, also_at=sites + [site], manifest_site=site)
 
 
+# Name sites (--nits, $0): ReviewBench runs 4 and 6 both missed three high issues in apilix, one per call site of a
+# workspace switch (`dispatch({ type: 'SWITCH_WORKSPACE', ... })` in two components, `'CREATE_WORKSPACE'` in one): the
+# switch doesn't flush the store's debounced save. Both runs kept that flaw once, at the store's save effect, and its
+# text named the actions, whose reducer cases the change adds in that same file, but listed no call site. So an item
+# that names an identifier (CONST_CASE, or a backticked camelCase/snake_case name) which the change adds in the item's
+# own file gets, in each other changed code file (up to NAME_MAX_FILES) whose added lines use it, the first added line
+# that calls it or passes it as a string, checked by the verifier like any other site. Measured on runs 4-6's stored
+# reviews before it was kept (eval/NOTES 2026-11-23): an item naming more than NAME_MAX_NAMES identifiers is about an
+# area, not one action, and a line that declares, imports or types the name isn't a call site. Unlike expression
+# sites, nothing near a call site covers it: run 6's other item there named the same action for another flaw.
+NAME_RX = re.compile(r"`([A-Za-z_][A-Za-z0-9_]{5,60})`|(?<![\w`.])([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)(?![\w`])")
+NAME_SHAPE = re.compile(r"[a-z][A-Z]|_")                          # camelCase or snake/CONST_CASE: not a plain word
+NAME_MAX_FILES = 3                                                # used in more other files: too common for one flaw
+NAME_MAX_NAMES = 3
+NAME_SKIP = re.compile(r"\.(md|markdown|rst|txt|adoc)$|(^|/)(CHANGELOG|README)[^/]*$", re.I)
+NAME_DECL = re.compile(r"^\s*(?:\|\s*)?(?:(?:export|public|private|protected|internal|static|async|pub|override|"
+                       r"abstract|final|default)\s+)*(?:def|function|func|fn|class|struct|enum|type|interface|import|"
+                       r"from|use|const|let|var|val|case|#\s*define|module)\b|^\s*\|")
+
+
+def _names(f):
+    """The identifiers f names in its title or problem (see NAME_RX), 6+ chars, camelCase or with an underscore."""
+    said = f"{f.get('title') or ''} {f.get('problem') or ''}"
+    return {a or b for a, b in NAME_RX.findall(said) if len(a or b) >= 6 and NAME_SHAPE.search(a or b)}
+
+
+def _calls(name, line):
+    """line calls name (name(, .name() or passes it as a string ('name', "name"), and doesn't declare, import or type it."""
+    n = re.escape(name)
+    return not NAME_DECL.search(line) and bool(re.search(rf"['\"]{n}['\"]|(?<!\w){n}\s*\(", line))
+
+
+def name_sites(f, text):
+    """f with also_at extended by call sites of an identifier f names (_names, at most NAME_MAX_NAMES of them) that the
+    change also adds somewhere in f's own file: in each other changed code file (not a doc, not a lockfile) whose added
+    lines use it, the first added line that calls it (_calls). An identifier used in more than NAME_MAX_FILES other
+    files is too common to mark one flaw's sites. Files f already names are skipped. Recorded in name_sites for
+    counting. Unchanged f (same object) when none is found."""
+    own = f.get("file")
+    names = _names(f)
+    if not names or len(names) > NAME_MAX_NAMES:
+        return f
+    own_added = "\n".join(t for _, t in text.get(own, ()))
+    named = {own} | {m["path"].strip() for s in f.get("also_at") or []
+                     if isinstance(s, str) and (m := SITE_RX.match(s))}
+    found = []
+    for nm in sorted(names):
+        rx = re.compile(rf"(?<!\w){re.escape(nm)}(?!\w)")
+        if not rx.search(own_added):
+            continue
+        using = [p for p in sorted(text) if p not in named and not NAME_SKIP.search(p)
+                 and p.rpartition("/")[2] not in LOCK_MANIFEST and any(rx.search(t) for _, t in text[p])]
+        if len(using) > NAME_MAX_FILES:
+            continue
+        for p in using:
+            n = next((n for n, t in text[p] if rx.search(t) and _calls(nm, t)), None)
+            if n is not None and f"{p}:{n}" not in found:
+                found.append(f"{p}:{n}")
+    found = found[:max(0, MAX_SITES - len(f.get("also_at") or []))]
+    if not found:
+        return f
+    return dict(f, also_at=list(f.get("also_at") or []) + found, name_sites=found)
+
+
 def sweep_sites(items, files, others):
-    """The $0 site sweeps over items, in order: expression sites, then manifest sites."""
-    first = first_changed_lines(files)
-    return [manifest_sites(f, first) for f in sweep_expr_sites(items, added_text(files), others)]
+    """The $0 site sweeps over items, in order: expression sites, name sites, then manifest sites."""
+    first, text = first_changed_lines(files), added_text(files)
+    return [manifest_sites(name_sites(f, text), first) for f in sweep_expr_sites(items, text, others)]
 
 
 def site_lines(repo, sha, changed, items):

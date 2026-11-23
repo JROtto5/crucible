@@ -7204,6 +7204,49 @@ class TestNitTier(unittest.TestCase):
         _, calls = self._run([nit], repo_files=files, nits=None)
         self.assertTrue(all("also claimed" not in c["prompt"] for c in calls))
 
+    def test_name_sites(self):
+        """ReviewBench runs 4 and 6 (apilix): the flaw kept at the store's save effect, which names the action whose
+        reducer case the change adds there; the high issues sit at the components that dispatch it."""
+        text = {"src/store.tsx": [(444, "    case 'SWITCH_WORKSPACE': {"), (668, "    return () => clearTimeout(t);")],
+                "src/Switcher.tsx": [(40, "import { useApp } from '../store';"),
+                                     (47, "    dispatch({ type: 'SWITCH_WORKSPACE', payload: { workspace, data } });")],
+                "src/Manager.tsx": [(68, "    dispatch({ type: 'SWITCH_WORKSPACE', payload });")],
+                "src/types.ts": [(442, "  | { type: 'SWITCH_WORKSPACE'; payload: Payload }")],       # declares it
+                "WORKSPACES.md": [(9, "`SWITCH_WORKSPACE('x')` swaps the data")]}                     # a doc
+        f = {"file": "src/store.tsx", "line": 668, "title": "Edits just before a switch are lost",
+             "problem": "the cleanup cancels the pending save when SWITCH_WORKSPACE replaces the data"}
+        out = V.name_sites(f, text)
+        self.assertEqual((out["also_at"], out["name_sites"]), (["src/Manager.tsx:68", "src/Switcher.tsx:47"],) * 2)
+        self.assertNotIn("also_at", f)
+        self.assertEqual(V.name_sites(dict(f, problem="calls `syncNow` then `syncNow(1)`"),
+                                      dict(text, **{"src/store.tsx": [(5, "function syncNow() {")],
+                                                    "src/a.ts": [(3, "  await syncNow(1);")]}))["also_at"], ["src/a.ts:3"])
+        self.assertEqual(V.name_sites(dict(f, also_at=["src/Manager.tsx:70"]), text)["also_at"],
+                         ["src/Manager.tsx:70", "src/Switcher.tsx:47"])          # a file it already names: skipped
+        many = dict(text, **{f"src/c{i}.tsx": [(1, "dispatch({ type: 'SWITCH_WORKSPACE' })")] for i in range(2)})
+        for g, t in ((dict(f, problem="SWITCH_WORKSPACE, CREATE_WORKSPACE, DUPLICATE_WORKSPACE, HYDRATE_WORKSPACE"), text),
+                     (dict(f, problem="the pending save is cancelled"), text),           # names nothing
+                     (dict(f, problem="the `workspace` is replaced"), text),            # a plain word, not a name
+                     (dict(f, file="src/other.tsx"), text),                             # own file doesn't add the name
+                     (f, many),                                                         # in 5 other files: too common
+                     (dict(f, also_at=[f"a.py:{i}" for i in range(V.MAX_SITES)]), text)):  # no room
+            self.assertIs(V.name_sites(g, t), g)
+
+    def test_name_sites_end_to_end_only_with_nits_and_only_when_held(self):
+        files = ({"store.js": "a = 1\n", "ui.js": "b = 1\n"},
+                 {"store.js": "a = 1\nfunction FLUSH_SAVE() {}\n" + "".join(f"y{i} = {i}\n" for i in range(30)),
+                  "ui.js": "b = 1\nc = 2\nrun('FLUSH_SAVE')\n"})
+        nit = dict(self._f("pending save lost", 2, file="store.js"), problem="nothing calls FLUSH_SAVE before a switch")
+        r, calls = self._run([nit], repo_files=files, sites_hold=["ui.js:3"])
+        v = next(c for c in calls if c["kind"] == "verify_nits")
+        self.assertIn("The same flaw is also claimed at: ui.js:3.", v["prompt"])
+        self.assertEqual((r["nits"][0]["also_at"], r["nits"][0]["name_sites"]), (["ui.js:3"], ["ui.js:3"]))
+        r, _ = self._run([nit], repo_files=files, sites_hold=[])
+        self.assertNotIn("also_at", r["nits"][0])                    # swept, not held: not reported
+        self.assertEqual(r["nits"][0]["name_sites"], ["ui.js:3"])    # but countable
+        _, calls = self._run([nit], repo_files=files, nits=None)
+        self.assertTrue(all("also claimed" not in c["prompt"] for c in calls))
+
     def test_no_also_at_leaves_verifier_prompts_and_schemas_as_before(self):
         r, calls = self._run([self._f("a nit", 2)])
         v = next(c for c in calls if c["kind"] == "verify_nits")
@@ -7801,11 +7844,17 @@ class TestReviewBenchAdapter(unittest.TestCase):
         m = self._mod()
         f = dict(self._f("medium", 8, "filter narrowed"), file=".github/w1.yml",
                  also_at=[".github/w2.yml:8", ".github/w3.yml:9", "src/a.py:3", "bad"])
-        rev = {"findings": [f], "nits": [self._f("low", 3, "own nit")]}
+        rev = {"findings": [f], "nits": [self._f("low", 3, "Filter  Narrowed")]}
         out = m.to_findings(rev)
         self.assertEqual([(o["file"], o["start_line"]) for o in out],
                          [(".github/w1.yml", 8), (".github/w2.yml", 8), (".github/w3.yml", 9), ("src/a.py", 3)])
         self.assertTrue(out[1]["message"].startswith("[medium] filter narrowed (same flaw as .github/w1.yml:8): p"))
+        # another flaw at a site is a second row (run 6: "tabs dropped on switch" where "pending save cancelled" held);
+        # an item there that lists this one's place among its sites reports the same flaw
+        rev = {"findings": [f], "nits": [self._f("low", 3, "own nit")]}
+        self.assertEqual([(o["file"], o["start_line"]) for o in m.to_findings(rev)][-2:], [("src/a.py", 3), ("src/a.py", 3)])
+        rev = {"findings": [f], "nits": [dict(self._f("low", 3, "own nit"), also_at=[".github/w1.yml:8"])]}
+        self.assertEqual(len(m.to_findings(rev)), 4)
 
     def test_a_limit_failure_fails_the_pr(self):
         """Run 3 scored PR 13 (every pass refused) as a finished review with 0 recall. A failure reason naming an account

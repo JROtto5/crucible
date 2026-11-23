@@ -49,13 +49,22 @@ def find_review(home, head):
     return json.load(open(paths[0])) if paths else None
 
 
+def same_flaw(f, g, path, line):
+    """g (a kept item, or one whose site row was already written) reports f's flaw: it is f, it has f's title, or it
+    lists f's own place among its sites."""
+    t = lambda x: " ".join((x.get("title") or "").lower().split())
+    return g is f or t(g) == t(f) or f"{path}:{line}" in (g.get("also_at") or [])
+
+
 def to_findings(review, agent="crucible", cap=MAX_FINDINGS):
     """Line-anchored findings, most severe first (a stable sort: review.json's own order within a severity). Verified
     nits (the --nits tier) follow the findings of the same severity, so a cap drops nits before findings."""
     rows = [(f, 0) for f in review.get("findings") or []] + [(f, 1) for f in review.get("nits") or []]
     rows.sort(key=lambda r: (SEV.index(r[0]["severity"]) if r[0].get("severity") in SEV else len(SEV), r[1]))
     out = []
-    own = {(str(f.get("file") or "").removeprefix("./"), f.get("line")) for f, _ in rows}
+    own = {}                                    # (path, line) -> what the kept items there say (see same_flaw)
+    for f, _ in rows:
+        own.setdefault((str(f.get("file") or "").removeprefix("./"), f.get("line")), []).append(f)
     for f, _ in rows:
         path, line = f.get("file"), f.get("line")
         if not path or path == "PR_DRAFT.md" or not isinstance(line, int) or line < 1:
@@ -67,12 +76,13 @@ def to_findings(review, agent="crucible", cap=MAX_FINDINGS):
         end = f.get("end_line") if isinstance(f.get("end_line"), int) and f.get("end_line") >= line else line
         out.append({"file": path, "start_line": line, "end_line": end,
                     "message": f"[{f.get('severity', 'medium')}] {msg}"[:4000], "producer": agent})
-        # the verified other sites of the same flaw (crucible's also_at), each at its own line, unless another kept
-        # item already sits there
+        # the verified other sites of the same flaw (crucible's also_at), each at its own line, unless a kept item
+        # there already reports this flaw. Another flaw on the same line is a second comment: run 6 had "a switch drops
+        # unsaved tabs" at the call site where "a switch cancels the pending save" also held, and they are two issues.
         for site in f.get("also_at") or []:
             p, _, n = site.rpartition(":")
-            if p and n.isdigit() and int(n) >= 1 and (p, int(n)) not in own:
-                own.add((p, int(n)))
+            if p and n.isdigit() and int(n) >= 1 and not any(same_flaw(f, g, path, line) for g in own.get((p, int(n)), ())):
+                own.setdefault((p, int(n)), []).append(f)
                 out.append({"file": p, "start_line": int(n), "end_line": int(n), "producer": agent,
                             "message": f"[{f.get('severity', 'medium')}] {f.get('title', '').strip()} (same flaw as "
                                        f"{path}:{line}): {(f.get('problem') or '').strip()}"[:4000]})
