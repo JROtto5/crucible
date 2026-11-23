@@ -9,6 +9,7 @@ The most useful reports are real ones:
 - **False positive:** a finding that was wrong. Open a "Wrong finding" issue with the finding block from `report.md` (title, file:line, verification evidence) and why it is wrong: the line that disproves it, or a command and its output.
 - **Missed issue:** something a maintainer or CI caught that crucible didn't. Open a "Missed issue" issue with a link to the upstream review comment or failing run, if it's public.
 - **Crash or wrong behaviour of a command:** open a "Bug" issue with the command, `crucible --version`, and the end of the output.
+- **Can't install or log in:** open a "Can't get it running" issue with the output of `crucible doctor`.
 
 Don't paste private code or tokens. A short synthetic repro is fine, and a public PR link is better.
 
@@ -27,7 +28,7 @@ The unit tests need only git and Python 3.10+. They stub every model call, cost 
 
 1. **A test that fails without the change.** For a bug, reproduce it first. For a false-positive fix, add the real input that was misjudged as a regression case.
 2. **Falsifiers for any new gate or heuristic.** List the inputs it must still flag and the inputs it must still let through, next to the code. Before you rely on it, check the first few real inputs it would reject by hand.
-3. **`crucible eval` when prompts, verification or tiering change.** It runs the full review on 40 labelled fixture changes and calls the model (about $5–6 for the 24 cases of 2026-11-12, more now; `--cases NAME…` runs a few). Recall and false-blocking numbers must not get worse, on the build split or the held-out one. A case made from a real catch goes in as `"split": "holdout"`; don't tune a prompt against a held-out case, add a build case of the same shape instead. Everything else is covered by the unit tests.
+3. **`crucible eval` when prompts, verification or tiering change.** It runs the full review on 40 labelled fixture changes and calls the model (several dollars for a full run; `--cases NAME…` runs a few). Recall and false-blocking numbers must not get worse, on the build split or the held-out one. A case made from a real catch goes in as `"split": "holdout"`; don't tune a prompt against a held-out case, add a build case of the same shape instead. Everything else is covered by the unit tests.
 4. **One line in `CHANGELOG.md`**, dated, saying what changed for a user and why.
 5. **A self-review.** Run `crucible review . --base <the commit before yours>` and answer every finding (`crucible answer CR-… fixed|refuted|deferred "…"`) until it is GREEN.
 
