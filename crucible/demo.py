@@ -90,7 +90,9 @@ def make(path):
     if os.path.exists(d) and os.listdir(d):
         raise FileExistsError(f"{d} exists and is not empty")
     os.makedirs(d, exist_ok=True)
-    _git(d, "init", "-q", "-b", "main", "--object-format=sha1")      # whatever init.defaultObjectFormat says; git 2.28+
+    # sha1 whatever init.defaultObjectFormat says, and no init.templateDir (its info/attributes or hooks would come
+    # along); git 2.28+
+    _git(d, "init", "-q", "-b", "main", "--object-format=sha1", "--template=")
     _commit(d, BASE, "shelf: list paging", "2026-01-05T10:00:00+00:00")
     _commit(d, TESTS, "shelf: test page()", "2026-01-05T10:05:00+00:00")
     _git(d, "checkout", "-q", "-b", BRANCH)

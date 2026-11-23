@@ -8649,17 +8649,24 @@ class TestDemo(unittest.TestCase):
         from unittest import mock
         from crucible import demo
         clean = sh(demo.make(os.path.join(tempfile.mkdtemp(), "a")), "git", "rev-parse", "HEAD")
-        hooks = tempfile.mkdtemp()
+        hooks, template, attrs = tempfile.mkdtemp(), tempfile.mkdtemp(), os.path.join(tempfile.mkdtemp(), "attributes")
+        os.makedirs(os.path.join(template, "info"))
+        for a in (attrs, os.path.join(template, "info", "attributes")):     # a clean filter rewrites every blob
+            with open(a, "w") as f:
+                f.write("* filter=shout\n")
         for h, body in (("prepare-commit-msg", 'echo "Ticket: X-1" >> "$1"'), ("post-checkout", "exit 1")):
             with open(os.path.join(hooks, h), "w") as f:
                 f.write(f"#!/bin/sh\n{body}\n")
             os.chmod(os.path.join(hooks, h), 0o755)
         env = {"GIT_AUTHOR_NAME": "someone", "GIT_COMMITTER_EMAIL": "x@y.z", "GIT_AUTHOR_DATE": "2020-01-01T00:00:00Z",
-               "GIT_DIR": os.path.join(tempfile.mkdtemp(), "elsewhere"), "GIT_CONFIG_COUNT": "4",
+               "GIT_DIR": os.path.join(tempfile.mkdtemp(), "elsewhere"), "GIT_CONFIG_COUNT": "7",
                "GIT_CONFIG_KEY_0": "init.defaultObjectFormat", "GIT_CONFIG_VALUE_0": "sha256",
                "GIT_CONFIG_KEY_1": "i18n.commitEncoding", "GIT_CONFIG_VALUE_1": "ISO-8859-1",
                "GIT_CONFIG_KEY_2": "core.hooksPath", "GIT_CONFIG_VALUE_2": hooks,
-               "GIT_CONFIG_KEY_3": "core.autocrlf", "GIT_CONFIG_VALUE_3": "true"}
+               "GIT_CONFIG_KEY_3": "core.autocrlf", "GIT_CONFIG_VALUE_3": "true",
+               "GIT_CONFIG_KEY_4": "init.templateDir", "GIT_CONFIG_VALUE_4": template,
+               "GIT_CONFIG_KEY_5": "core.attributesFile", "GIT_CONFIG_VALUE_5": attrs,
+               "GIT_CONFIG_KEY_6": "filter.shout.clean", "GIT_CONFIG_VALUE_6": "tr a-z A-Z"}
         with mock.patch.dict(os.environ, env):
             d = demo.make(os.path.join(tempfile.mkdtemp(), "b"))
         self.assertEqual(sh(d, "git", "rev-parse", "HEAD"), clean)
