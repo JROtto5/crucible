@@ -1449,6 +1449,27 @@ def split_prev(findings, ranges, hunks, prev_sha, changed=(), known=None):
     return carried, touched
 
 
+def later_touched(dropped, ranges, files_changed=()):
+    """A re-review's record of the previous round's verifier drops: per model finding it dropped, whether the change
+    since that round touched its cited line (within the carry's ±3 lines, diff.region_touched), or its file when no
+    line is cited. A drop whose line the author later changed may be a real issue the verifier lost ("dropped, fixed
+    later"); one never touched is probably a right drop. Touched is not fixed: an unrelated edit nearby counts too, so
+    this is an upper bound on verifier misses, never a count of them. Dropped by rule (never judged) and scanner or
+    style items are left out. Before this, a touched drop vanished from the record (split_prev only keeps the carried
+    ones), so the two could not be told apart (BLAZE 11-23 ask 2: 950 of 1,958 drops were unaccounted for)."""
+    out, files_changed = [], set(files_changed)
+    for f in dropped:
+        vf = f.get("verification") or {}
+        if f.get("source") != "review" or vf.get("method") == "rule":
+            continue
+        line, rs = f.get("line"), ranges.get(f.get("file"), [])
+        hit = diff_mod.region_touched(rs, line) if isinstance(line, int) and line > 0 else (
+            bool(rs) or f.get("file") in files_changed)
+        out.append({"id": f.get("id"), "file": f.get("file"), "line": line, "title": f.get("title"),
+                    "severity": f.get("proposed_severity", f.get("severity")), "later_touched": bool(hit)})
+    return out
+
+
 def new_code(f):
     """The finding re-verified because its code (or anchor) changed: failed attempts on the old code don't count."""
     if not verify_failed(f):
@@ -1803,13 +1824,14 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             known = [p for p in git(repo, "ls-files", "-z").split("\0") if p]
             carried, reverify = split_prev(prev_rev.get("findings", []), ranges, hunks, prev_sha, changed, known)
             carried_dropped, _ = split_prev(prev_rev.get("dropped", []), ranges, hunks, prev_sha)
+            prior_dropped = later_touched(prev_rev.get("dropped", []), ranges, changed)
             digested = catalog.digest_files(dfiles, lambda p: git_blob(repo, prev_sha, p), lambda p: git_blob(repo, sha, p))
             chunks, uncovered = diff_mod.chunk(dfiles)
             amended = not is_ancestor(repo, prev_sha, sha)     # an amend or squash of the reviewed commit
             log(f"  incremental: since {prev_sha[:10]}{' (amended)' if amended else ''} · {len(dfiles)} changed file(s) to review · "
                 f"{len(carried)} finding(s) carried · {len(reverify)} to re-verify (use --full for a full review)")
             record["incremental"] = {"from": prev_sha, "files": [f["path"] for f in dfiles], "carried": len(carried),
-                                     "reverified": len(reverify), "amended": amended}
+                                     "reverified": len(reverify), "amended": amended, "prior_dropped": prior_dropped}
         else:
             digested = catalog.digest_files(files, lambda p: git_blob(repo, base, p), lambda p: git_blob(repo, sha, p))
             chunks, uncovered = diff_mod.chunk(files)
