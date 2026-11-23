@@ -128,7 +128,7 @@ def live(models, call=None):
             _, cost = call('Reply with {"ok": true}.', m, schema, tempfile.gettempdir())
             rows.append((OK, f"model {m}", f"answered (${cost or 0:.4f})"))
         except util.Failed as e:
-            to = util.fable_fallback() if m == util.MODELS["fable"] and util.is_limit(e) else None
+            to = util.fallback_for(m, e)
             rows.append((WARN, f"model {m}", f"refused ({str(e)[:200]}); reviews will move its calls to {to}") if to
                         else (FAIL, f"model {m}", str(e)[:300]))
     return rows

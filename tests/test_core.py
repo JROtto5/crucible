@@ -8869,13 +8869,15 @@ class TestDoctor(unittest.TestCase):
         self.assertEqual([c.args[1] for c in once.call_args_list], [fable])          # asked once, never as Opus
         self.assertEqual(rows[0][0], "warn")                                         # reviews still run, on Opus
         self.assertIn("move its calls to claude-opus-5-5", rows[0][2])
-        with mock.patch.object(U, "_claude_once", once), mock.patch.dict(os.environ, {"CRUCIBLE_FABLE_FALLBACK": "off"}):
-            self.assertEqual(doctor.live([fable])[0][0], "fail")
+        for off in ("off", "fable"):                                               # no fallback, or onto itself
+            with mock.patch.object(U, "_claude_once", once), mock.patch.dict(os.environ, {"CRUCIBLE_FABLE_FALLBACK": off}):
+                self.assertEqual(doctor.live([fable])[0][0], "fail")
         kw = dict(zip(("prompt", "model", "schema", "cwd", "budget", "tools", "effort", "timeout", "kind"),
                       once.call_args.args))
         self.assertEqual((kw["tools"], kw["effort"], kw["budget"]), (None, "low", None))
         once.reset_mock()
-        with mock.patch.object(U, "_claude_once", once):                             # claude() itself still falls back
+        with mock.patch.object(U, "_claude_once", once), mock.patch.dict(os.environ, {"CRUCIBLE_FABLE_FALLBACK": "opus"}):
+            # claude() itself still falls back
             with self.assertRaises(U.Failed):
                 U.claude("p", fable, {}, ".", tools=None)
         self.assertEqual([c.args[1] for c in once.call_args_list], [fable, U.MODELS["opus"]])

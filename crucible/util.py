@@ -349,6 +349,13 @@ def claude_cli_path():
     return shutil.which("claude")
 
 
+def fallback_for(model, err):
+    """-> the model claude() retries a refused call on, or None: only a Fable call refused for a limit (or by a CLI
+    too old for it) moves, to fable_fallback()."""
+    to = fable_fallback() if model == MODELS["fable"] else None
+    return to if to and to != model and is_limit(err) and str(err) != BUDGET_EXHAUSTED else None
+
+
 def is_limit(err):
     return bool(LIMIT_RX.search(str(err)) or UNSUPPORTED_RX.search(str(err)))
 
@@ -363,8 +370,8 @@ def claude(prompt, model, schema, cwd, budget=None, tools=TOOLS_READ, effort="hi
     try:
         return _claude_once(prompt, model, schema, cwd, budget, tools, effort, timeout, kind)
     except Failed as e:
-        to = fable_fallback() if model == MODELS["fable"] and fallback else None
-        if not to or to == model or not is_limit(e) or str(e) == BUDGET_EXHAUSTED:
+        to = fallback_for(model, e) if fallback else None
+        if not to:
             raise
         if budget:
             budget.note_fallback(kind, model, to, str(e))
