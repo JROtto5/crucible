@@ -221,7 +221,8 @@ def main(argv=None):
     r.add_argument("--force", action="store_true", help="review this commit again even if it was reviewed with the same "
                    "base and draft (cached results are reused; see --fresh)")
     r.add_argument("--budget", type=float, help="stop making model calls once this many USD are spent")
-    r.add_argument("--author", help="model id that wrote the change (else read from Co-Authored-By trailers)")
+    r.add_argument("--author", help="model(s) that wrote the change, ids or opus/sonnet/fable/haiku, comma-separated "
+                   "(added to what Co-Authored-By trailers say; pass it when the checkout has no PR history)")
     r.add_argument("--draft", help="path to the PR description draft (default PR_DRAFT.md in the repo)")
     r.add_argument("--base-checks", action="store_true", help="re-run failing checks on the base to spot pre-existing failures")
     r.add_argument("--skip-checks", action="store_true", help="don't run the project's lint/test commands (the "
