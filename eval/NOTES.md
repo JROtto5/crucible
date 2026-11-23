@@ -1527,3 +1527,33 @@ fine (5 packages, the extra one pruned); a declared dependency missing from the 
 So golden #0's "npm ci will fail" mechanism is wrong; its real harm is the "Cannot find module" crash its own text
 names. The shipped case guards the class at the ceiling; the sweep is covered by tests (unit, end-to-end held/not held,
 mutation-checked) and this replay.
+
+## 2026-11-23: dropped, then touched later (BLAZE 11-23 ask 2; a821117, read-only replay, $0)
+a821117 stamps each previous-round verifier drop with `later_touched` on a re-review. Older reviews have no stamp, so
+the same rule was replayed over the stored incremental pairs (`incremental.from` → this review, `git diff -U0
+prev..sha` in a local clone that still holds both commits; /tmp/lt/replay.py, not committed): 376 pairs (1 had no
+clone), 802 unique drops (by repo + id; scanner, style and rule drops left out).
+| | drops | line (±3) touched later |
+|---|---|---|
+| all | 802 | 236 (29%) |
+| crucible's own reviews | 475 | 139 (29%) |
+| upstream reviews | 327 | 97 (30%) |
+| proposed critical | 3 | 0 |
+| proposed important | 60 | 24 (40%) |
+| proposed medium | 229 | 72 (31%) |
+| proposed low | 510 | 140 (27%) |
+Touched is an upper bound on "dropped, then fixed by the author", not a count of fixes: a line within 3 of an edit
+counts. BLAZE's falsifier (<5% fixed later on 50 PRs means the filter loses nothing) is not met by the upper bound;
+whether it holds depends on the hand-check below.
+**Hand read, the upstream drops proposed important and touched later (5; the other 19 of the 24 are crucible's own):**
+- three-mesh-bvh `ndcToCameraRay` "public signature changes with no backward-compatible path": **a real miss.** Dropped in
+  both rounds (5768380b, 7291129a), method read, confidence medium, because "there is precedent" (an earlier 0.9.x
+  behaviour change) and "I could not check the maintainer's agreement". gkjohnson's first review asked for exactly the
+  backward-compatible path (the 2-argument form kept, with a deprecation warning). The refutation rests on a sign-off the
+  verifier guessed at and never found. That shape is a candidate for the next verifier change. Per the 11-20 lesson, A/B
+  it on stored claims for at least 2 rounds before changing any wording.
+- Lutris prefix.py:249, an absolute link to an unmounted drive replaced by an empty folder: dropped at high confidence
+  (executed) as an existing limitation that the diff doesn't make worse; the edit nearby was other work. Probably a right drop.
+- Lutris prefix.py:229, the translation-markup test, supavisor `reference` NOTICE: refuted on the claim itself
+  (probe or test output); the later edits were unrelated. Right drops.
+So 1 of 5 is a confirmed dropped-then-fixed. n=5, so no rate is given.
