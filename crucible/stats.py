@@ -128,7 +128,7 @@ def collect(root, include_self=False, project=None, since=None, metered_only=Fal
         return {"unique": 0, "kept": 0, "dropped": 0, "kept_by_severity": collections.Counter(),
                 "fixed": 0, "deferred": 0, "refuted": 0, "unanswered": 0, "reviews": 0, "cost": 0.0,
                 "metered_reviews": 0, "tokens": dict.fromkeys(("total", "review", "verify") + TOKEN_KINDS, 0),
-                "by_kind_reviews": 0, "by_kind": {}}
+                "by_kind_reviews": 0, "by_kind": {}, "prior_dropped": 0, "later_touched": 0}
     overall, per = row(), collections.defaultdict(row)
     for u in uniq.values():
         latest = None
@@ -168,6 +168,15 @@ def collect(root, include_self=False, project=None, since=None, metered_only=Fal
                             a["no_tools"] = a["no_tools"] and k.get("no_tools", False)
                         for n in TOKEN_KINDS:
                             a[n] += k.get(n, 0)
+    stamps = {}                                    # (repo, id) -> touched in any re-review that stamped it
+    for repo, rev in reviews:
+        for p in (rev.get("incremental") or {}).get("prior_dropped") or []:
+            k = (repo, p.get("id") or (p.get("file"), p.get("line"), _norm(p.get("title"))))
+            stamps[k] = stamps.get(k, False) or bool(p.get("later_touched"))
+    for (repo, _), hit in stamps.items():
+        for r in (overall, per[repo]):
+            r["prior_dropped"] += 1
+            r["later_touched"] += hit
     out = {"overall": overall, "projects": dict(sorted(per.items())), "window": window}
     if not metered_only:
         out["metered"] = collect(root, include_self, project, since, metered_only=True)["overall"]
@@ -225,6 +234,7 @@ def report(s):
             out.append(f"Held up covers only answered findings: {o['unanswered']} of {o['kept']} kept are unanswered.")
             if h[0]:
                 out.append(f"Cost per held-up finding: ${o['cost'] / h[0]:.2f} (${o['cost']:.2f} over {h[0]}).")
+    out.append(later_touched_line(o))
     out.append(tokens_line(s))
     if w["since"]:
         out.append(f"Window: reviews finished since {w['since'].replace('T', ' ')}: {w['in_window']} of {w['stored']}.")
@@ -232,6 +242,18 @@ def report(s):
     out.append(_source(w))
     out.append("Counts are unique findings (same id, or same title in one project, count once); model findings only.")
     return "\n".join(out)
+
+
+def later_touched_line(o):
+    """Verifier drops that a later round of the same branch saw again: how many had their cited line (±3) changed by
+    the author after. Touched is an upper bound on "dropped, then fixed", not a count of fixes."""
+    n, k = o.get("prior_dropped", 0), o.get("later_touched", 0)
+    if not n:
+        return ("Dropped then touched: not recorded (no re-review here stamped the previous round's drops; "
+                "reviews before later_touched stamping, and first rounds, have none).")
+    quote = "" if n >= QUOTE_N else f"; n={n} < {QUOTE_N}, too few to quote as a rate"
+    return (f"Dropped then touched: {k} of {n} verifier drops seen by a later round had their cited line (±3) changed "
+            f"after; an upper bound on dropped-then-fixed, not a count of fixes{quote}.")
 
 
 def builds_line(w):

@@ -2768,12 +2768,40 @@ class TestRunReviewIncremental(unittest.TestCase):
                 self.assertNotIn("g returns a constant", kept_titles)        # dropped by the re-check
                 self.assertIn("g returns a constant", {f["title"] for f in r2["dropped"]})
                 self.assertTrue(r2["coverage"]["complete"])
+                self.assertEqual(r2["incremental"]["prior_dropped"], [])     # round 1 dropped nothing
+                # round 3: the author edits g, the line round 2's verifier dropped: stamped later_touched
+                w("src/b.js", "export const b = 1;\nexport function g(x) { return x; }\n")
+                g("commit", "-qam", "g returns its input")
+                d3 = V.run_review(repo, "main", offline=True, skip_checks=True, log=lambda *_: None)
+                r3 = U.read_json(os.path.join(d3, "review.json"))
+                self.assertEqual(r3["status"], "done", r3.get("reason"))
+                self.assertEqual([(p["title"], p["file"], p["later_touched"]) for p in r3["incremental"]["prior_dropped"]],
+                                 [("g returns a constant", "src/b.js", True)])
             finally:
                 V.HOME, U.HOME, V.claude = olds[0], olds[1], olds[2]
                 if olds[3] is None:
                     os.environ.pop("CRUCIBLE_CACHE", None)
                 else:
                     os.environ["CRUCIBLE_CACHE"] = olds[3]
+
+
+class TestLaterTouched(unittest.TestCase):
+    """later_touched: a previous round's verifier drop is stamped with whether the change since touched its line."""
+
+    def test_stamps(self):
+        drop = lambda fid, line, file="a.py", **kw: dict({"id": fid, "source": "review", "file": file, "line": line,
+                                                          "title": fid, "severity": "medium",
+                                                          "verification": {"status": "dropped", "method": "read"}}, **kw)
+        ranges = {"a.py": [(20, 22)]}
+        out = V.later_touched([drop("near", 25), drop("far", 26), drop("inside", 21), drop("other", 21, "b.py"),
+                               drop("ruled", 21, verification={"status": "dropped", "method": "rule"}),
+                               drop("scan", 21, source="scanner"), drop("noline", None),
+                               drop("was-high", 40, proposed_severity="important")], ranges, ["a.py"])
+        self.assertEqual({p["id"]: p["later_touched"] for p in out},
+                         {"near": True, "far": False, "inside": True, "other": False, "noline": True, "was-high": False})
+        self.assertEqual(next(p for p in out if p["id"] == "was-high")["severity"], "important")
+        self.assertEqual(V.later_touched([drop("x", 5)], {}, []), [dict(id="x", file="a.py", line=5, title="x",
+                                                                       severity="medium", later_touched=False)])
 
 
 class TestRunReviewAmended(unittest.TestCase):
@@ -4215,6 +4243,23 @@ class TestStats(unittest.TestCase):
             self.assertIn("o/my__lib ", text)
             self.assertIn("1 of 3 kept are unanswered", text)
             self.assertEqual(json.loads(ST.to_json(s))["overall"]["kept_by_severity"], {"medium": 1, "low": 2})
+
+    def test_dropped_then_touched_counts_each_drop_once(self):
+        from crucible import stats as ST
+        with tempfile.TemporaryDirectory() as root:
+            self._store(root, "o__p", "s1", dropped=[self._f("CR-1", "a"), self._f("CR-2", "b")])
+            self.assertIn("Dropped then touched: not recorded", ST.report(ST.collect(root)))
+            stamp = lambda fid, hit: {"id": fid, "file": "a.js", "line": 1, "title": fid, "later_touched": hit}
+            # round 2 sees both drops untouched (they carry); round 3 sees CR-1 touched: one drop, touched once
+            for sha, pd in (("s2", [stamp("CR-1", False), stamp("CR-2", False)]), ("s3", [stamp("CR-1", True)])):
+                self._store(root, "o__p", sha, dropped=[self._f("CR-2", "b")])
+                rp = os.path.join(root, "o__p", sha, "review.json")
+                U.write_json(rp, dict(U.read_json(rp), incremental={"from": "s1", "prior_dropped": pd}))
+            o = ST.collect(root)["overall"]
+            self.assertEqual((o["prior_dropped"], o["later_touched"]), (2, 1))
+            self.assertIn("Dropped then touched: 1 of 2 verifier drops", ST.report(ST.collect(root)))
+            self.assertIn("too few to quote", ST.report(ST.collect(root)))
+            self.assertEqual(json.loads(ST.to_json(ST.collect(root)))["overall"]["later_touched"], 1)
 
     def test_cli(self):
         with tempfile.TemporaryDirectory() as home:
