@@ -1610,4 +1610,4 @@ high); a keyword-less method definition (`public void f(int x) {`, `func (s *S) 
 sites. Round 4 ($0.31): NOT_GREEN, 2 lows: `with f(x) as g:`, `catch`, and `f(x).then(function () {` read as method
 definitions (control words added, a chained call after the parameters is a call); a module constant, enum member,
 Go iota entry or reducer-map key in the own file didn't count as defining the name (now it does). Falsifiers both
-ways. Tests 508 -> 511, ruff clean.
+ways. Round 5 (2b8d324, $0.64): GREEN, no findings. Tests 508 -> 511, ruff clean. Self-review spend $2.78, eval $15.87.
