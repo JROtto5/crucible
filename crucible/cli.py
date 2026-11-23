@@ -18,7 +18,8 @@
   crucible model-replay --clones DIR [--models opus sonnet] [--rounds N]  reviewer models on stored rounds, scored by answers
   crucible stats   [--project P] [--since T] [--include-self] [--json]  real-PR precision, held up with its 95% interval
 
-crucible never pushes, comments, approves or posts. A human submits."""
+The CLI never pushes, comments, approves or posts. A human submits. (action.yml, the GitHub Action, posts
+the report as a PR comment when a workflow uses it.)"""
 import argparse, datetime as dt, os, re, sys
 from . import __version__
 from . import util

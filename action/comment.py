@@ -37,8 +37,12 @@ def gh(*args, data=None):
     return json.loads(r.stdout or "null")
 
 
-def post(body, repo, pr):
-    """Update this action's earlier comment on the PR (a bot comment carrying MARKER), or create one. -> its URL."""
+def post(body, repo, pr, head=""):
+    """Update this action's earlier comment on the PR (a bot comment carrying MARKER), or create one. -> its URL,
+    or "" when the PR has moved past head: a newer run is reviewing that commit, and an older report finishing
+    last must not replace its comment."""
+    if head and gh(f"repos/{repo}/pulls/{pr}")["head"]["sha"] != head:
+        return ""
     mine = None
     for page in gh(f"repos/{repo}/issues/{pr}/comments?per_page=100", "--paginate", "--slurp"):
         for c in page:
@@ -57,7 +61,8 @@ def main(argv):
                      os.environ.get("VERDICT", ""))
         open(argv[2], "w", encoding="utf-8").write(body)
     elif argv[:1] == ["post"] and len(argv) == 2:
-        print(post(open(argv[1], encoding="utf-8").read(), os.environ["GITHUB_REPOSITORY"], os.environ["PR"]))
+        print(post(open(argv[1], encoding="utf-8").read(), os.environ["GITHUB_REPOSITORY"], os.environ["PR"],
+                   os.environ.get("HEAD_SHA", "")))
     else:
         raise SystemExit(__doc__)
 

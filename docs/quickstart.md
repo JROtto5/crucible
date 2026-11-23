@@ -56,7 +56,7 @@ Answer each remaining finding:
 crucible answer CR-xxxxxxxx fixed|refuted|deferred "why"
 ```
 
-A refuted or deferred answer needs a reason, and it's shown in the report. Once nothing blocking is open and everything is answered, the verdict is **GREEN**. `crucible status` shows the verdict and the readiness checklist at any time. crucible never posts anything: you submit the PR yourself.
+A refuted or deferred answer needs a reason, and it's shown in the report. Once nothing blocking is open and everything is answered, the verdict is **GREEN**. `crucible status` shows the verdict and the readiness checklist at any time. The CLI never posts anything: you submit the PR yourself.
 
 ## The run in numbers
 

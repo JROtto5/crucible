@@ -8717,6 +8717,30 @@ class TestAction(unittest.TestCase):
         self.assertEqual([(f["file"], f["title"]) for f in out["findings"]], [("shelf.py", "[dry run] placeholder finding")])
         self.assertEqual(out["coverage"]["reviewed"], out["coverage"]["files"])
 
+    def test_comment_post_updates_its_own_comment_and_skips_a_stale_run(self):
+        c = self._load("action_comment_post", "comment.py")
+        calls = []
+        pages = [[{"id": 1, "body": "unrelated", "user": {"type": "Bot"}},
+                  {"id": 2, "body": c.MARKER + " quoted by a person", "user": {"type": "User"}}],
+                 [{"id": 3, "body": c.MARKER + " old report", "user": {"type": "Bot"}}]]
+
+        def gh(*args, data=None):
+            calls.append((args[0], args[1:], data))
+            if args[0].endswith("/pulls/7"):
+                return {"head": {"sha": "new"}}
+            if "comments?" in args[0]:
+                return pages
+            return {"html_url": "https://github.com/o/r/pull/7#issuecomment-9"}
+        c.gh = gh
+        self.assertEqual(c.post("B", "o/r", "7", head="new"), "https://github.com/o/r/pull/7#issuecomment-9")
+        self.assertEqual(calls[-1], ("repos/o/r/issues/comments/3", ("-X", "PATCH"), {"body": "B"}))
+        pages[1].clear()                                             # no bot comment with the marker: create one
+        c.post("B", "o/r", "7")
+        self.assertEqual(calls[-1], ("repos/o/r/issues/7/comments", ("-X", "POST"), {"body": "B"}))
+        calls.clear()
+        self.assertEqual(c.post("B", "o/r", "7", head="old"), "")    # a newer push is being reviewed
+        self.assertEqual([a for a, _, _ in calls], ["repos/o/r/pulls/7"])
+
     def test_comment_body(self):
         c = self._load("action_comment", "comment.py")
         report = "# crucible · o/r @ abc\n\n**Verdict: NOT_GREEN**\n\nkey sk-ant-SECRET123 quoted\n(report: /home/runner/x/report.md)\n"

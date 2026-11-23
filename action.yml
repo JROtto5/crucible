@@ -68,14 +68,6 @@ runs:
         VERSION: ${{ inputs.claude-code-version }}
       run: npm install --global --silent "@anthropic-ai/claude-code@$VERSION" && claude --version
 
-    - name: use the dry-run stand-in for the Claude CLI
-      if: inputs.dry-run == 'true'
-      shell: bash
-      run: |
-        mkdir -p "$RUNNER_TEMP/crucible-bin"
-        install -m 755 "$GITHUB_ACTION_PATH/action/claude-dry-run" "$RUNNER_TEMP/crucible-bin/claude"
-        echo "$RUNNER_TEMP/crucible-bin" >> "$GITHUB_PATH"
-
     - name: review
       id: review
       shell: bash
@@ -92,8 +84,17 @@ runs:
         PR_TITLE: ${{ github.event.pull_request.title }}
         PR_BODY: ${{ github.event.pull_request.body }}
       run: |
-        if [ "$DRY_RUN" != true ] && [ -z "$ANTHROPIC_API_KEY$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+        if [ "$DRY_RUN" = true ]; then
+          # this step only: a job-wide PATH entry would leave the stand-in in front of a later real run's CLI
+          mkdir -p "$RUNNER_TEMP/crucible-dry-run-bin"
+          install -m 755 "$GITHUB_ACTION_PATH/action/claude-dry-run" "$RUNNER_TEMP/crucible-dry-run-bin/claude"
+          export PATH="$RUNNER_TEMP/crucible-dry-run-bin:$PATH"
+        elif [ -z "$ANTHROPIC_API_KEY$CLAUDE_CODE_OAUTH_TOKEN" ]; then
           echo "::error::crucible needs anthropic-api-key or claude-code-oauth-token (fork PRs get no secrets), or dry-run: true"
+          exit 1
+        fi
+        if [ "${BASE%/}" != "$BASE" ]; then
+          echo "::error::not a pull_request event: set the action's base input"
           exit 1
         fi
         if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
@@ -128,12 +129,15 @@ runs:
       env:
         GH_TOKEN: ${{ github.token }}
         PR: ${{ github.event.pull_request.number }}
-        SHA: ${{ steps.review.outputs.sha }}
+        SHA: ${{ github.event.pull_request.head.sha || steps.review.outputs.sha }}
         REPORT: ${{ steps.review.outputs.report }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         VERDICT: ${{ steps.review.outputs.verdict }}
         DRY_RUN: ${{ inputs.dry-run }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.claude-code-oauth-token }}
       run: |
         python "$GITHUB_ACTION_PATH/action/comment.py" build "$REPORT" "$RUNNER_TEMP/crucible-comment.md"
-        echo "url=$(python "$GITHUB_ACTION_PATH/action/comment.py" post "$RUNNER_TEMP/crucible-comment.md")" >> "$GITHUB_OUTPUT"
+        url=$(python "$GITHUB_ACTION_PATH/action/comment.py" post "$RUNNER_TEMP/crucible-comment.md")
+        [ -n "$url" ] || echo "::notice::the PR has a newer commit than this review; its comment was left as it was"
+        echo "url=$url" >> "$GITHUB_OUTPUT"

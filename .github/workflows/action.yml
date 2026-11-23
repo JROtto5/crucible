@@ -37,6 +37,9 @@ jobs:
           grep -q 'coverage: 2/2 files' "$REPORT"
 
   this-pr:
+    concurrency:
+      group: action-this-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:

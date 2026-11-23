@@ -2,7 +2,7 @@
 
 [![tests](https://github.com/JROtto5/crucible/actions/workflows/tests.yml/badge.svg)](https://github.com/JROtto5/crucible/actions/workflows/tests.yml)
 
-crucible reviews a pull request on your machine before anyone else sees it. It runs the project's own lint and tests, has a Claude model review the diff (a different model from the one that wrote it, when the commits say which), and then gives each finding to a second model whose only job is to disprove it, by reading the code or running it. What survives is pinned to one commit, and you answer each finding (fixed, refuted or deferred) until the verdict is GREEN. It was built for contributions to other people's open-source projects, so it also holds the PR description to the project's template and house style. It never posts, pushes or approves anything by itself. MIT, Python standard library only.
+crucible reviews a pull request on your machine before anyone else sees it. It runs the project's own lint and tests, has a Claude model review the diff (a different model from the one that wrote it, when the commits say which), and then gives each finding to a second model whose only job is to disprove it, by reading the code or running it. What survives is pinned to one commit, and you answer each finding (fixed, refuted or deferred) until the verdict is GREEN. It was built for contributions to other people's open-source projects, so it also holds the PR description to the project's template and house style. The CLI never posts, pushes or approves anything; the optional [GitHub Action](#run-it-on-pull-requests-github-action) posts its report as a PR comment. MIT, Python standard library only.
 
 ## Try it in 5 minutes
 
@@ -70,6 +70,10 @@ permissions:
   contents: read
   pull-requests: write
 
+concurrency:                          # a new push cancels the review of the old one
+  group: crucible-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   review:
     # fork PRs get no secrets; never switch this to pull_request_target, which would run with your key on their code
@@ -85,7 +89,7 @@ jobs:
           budget: 3
 ```
 
-The PR's title and body are judged as its description. By default the action runs with `--no-exec --offline`: no lint or test commands from the PR, the verifier only reads, and no GitHub lookups. `exec: "true"` turns execution back on for repos where every PR author is trusted. Other inputs: `base`, `path`, `args` (extra `crucible review` flags), `comment`, `claude-code-version` (default 2.1.325) and `dry-run`. Outputs: `verdict` (GREEN, NOT_GREEN or FAILED), `report` and `comment-url`. The action doesn't fail the job on NOT_GREEN; test `steps.<id>.outputs.verdict` if you want it to.
+The PR's title and body are judged as its description. By default the action runs with `--no-exec --offline`: no lint or test commands from the PR, the verifier only reads, and no GitHub lookups. `exec: "true"` turns execution back on for repos where every PR author is trusted. Other inputs: `base`, `path`, `args` (extra `crucible review` flags), `comment`, `claude-code-version` (default 2.1.325) and `dry-run`. Outputs: `verdict` (GREEN, NOT_GREEN or FAILED), `report` and `comment-url`. A report finishing after a newer push leaves the comment alone. Only the dry run is exercised in this repo's CI; a real run needs a key, so it is checked by hand. The action doesn't fail the job on NOT_GREEN; test `steps.<id>.outputs.verdict` if you want it to.
 
 `dry-run: "true"` runs the whole pipeline with a stand-in for the Claude CLI that raises one placeholder finding, so it needs no key and costs nothing. This repo's own CI runs it on every PR ([.github/workflows/action.yml](.github/workflows/action.yml)): once on a fixture made by `crucible demo`, checking the outputs, and once on the PR itself, posting the comment.
 

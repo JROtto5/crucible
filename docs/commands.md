@@ -1,6 +1,6 @@
 # Command reference
 
-Every command runs locally. crucible never pushes, comments, approves or posts: you submit. `crucible <command> --help` prints the same flags. Stored data lives in `~/.crucible` (or `$CRUCIBLE_HOME`).
+Every command runs locally. No command pushes, comments, approves or posts: you submit. (The optional GitHub Action posts the report on a PR; see the README.) `crucible <command> --help` prints the same flags. Stored data lives in `~/.crucible` (or `$CRUCIBLE_HOME`).
 
 New here? Start with [the quickstart](quickstart.md). The description layout (`PR_DRAFT.md`, what counts as your notes) is in the README under "Your PR draft and your notes".
 
