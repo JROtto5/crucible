@@ -961,9 +961,8 @@ NAME_SHAPE = re.compile(r"[a-z][A-Z]|_")                          # camelCase or
 NAME_MAX_FILES = 3                                                # used in more other files: too common for one flaw
 NAME_MAX_NAMES = 3
 NAME_SKIP = re.compile(r"\.(md|markdown|rst|txt|adoc)$|(^|/)(CHANGELOG|README)[^/]*$", re.I)
-NAME_DECL = re.compile(r"^\s*(?:\|\s*)?(?:(?:export|public|private|protected|internal|static|async|pub|override|"
-                       r"abstract|final|default)\s+)*(?:def|function|func|fn|class|struct|enum|type|interface|import|"
-                       r"from|use|const|let|var|val|case|#\s*define|module)\b|^\s*\|")
+NAME_MODS = r"(?:(?:export|public|private|protected|internal|static|async|pub|override|abstract|final|default)\s+)*"
+NAME_DEF = "def|function|func|fn|class|struct|enum|type|interface|const|let|var|val|module|#\\s*define"
 
 
 def _names(f):
@@ -973,9 +972,16 @@ def _names(f):
 
 
 def _calls(name, line):
-    """line calls name (name(, .name() or passes it as a string ('name', "name"), and doesn't declare, import or type it."""
+    """line calls name (name(, .name() or passes it as a string ('name', "name"), and doesn't declare, import or type
+    it. The check is on the name: `const r = await syncNow(1)` and a `type: 'SWITCH_WORKSPACE',` line of a multi-line
+    action object are calls; `function syncNow(`, `import { syncNow }`, `case 'X':` and a union member `| { type: 'X' }`
+    are not."""
     n = re.escape(name)
-    return not NAME_DECL.search(line) and bool(re.search(rf"['\"]{n}['\"]|(?<!\w){n}\s*\(", line))
+    if (re.search(rf"^\s*{NAME_MODS}(?:{NAME_DEF})\s+\*?\s*{n}(?!\w)", line)
+            or re.match(r"\s*(?:import|from|use|require)\b|\s*\|", line)
+            or re.search(rf"^\s*case\s+['\"]?{n}['\"]?\s*:", line)):
+        return False
+    return bool(re.search(rf"['\"]{n}['\"]|(?<!\w){n}\s*\(", line))
 
 
 def name_sites(f, text):

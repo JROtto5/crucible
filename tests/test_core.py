@@ -7232,6 +7232,17 @@ class TestNitTier(unittest.TestCase):
                      (dict(f, also_at=[f"a.py:{i}" for i in range(V.MAX_SITES)]), text)):  # no room
             self.assertIs(V.name_sites(g, t), g)
 
+    def test_name_sites_call_lines(self):
+        """A call site is judged on the name, not the line's first word (self-review round 1)."""
+        for line in ("    dispatch({ type: 'SWITCH_WORKSPACE', payload })", "      type: 'SWITCH_WORKSPACE',",
+                     "  const r = await SWITCH_WORKSPACE(1);", "return run(\"SWITCH_WORKSPACE\")"):
+            self.assertTrue(V._calls("SWITCH_WORKSPACE", line), line)
+        for line in ("  | { type: 'SWITCH_WORKSPACE'; payload }", "    case 'SWITCH_WORKSPACE': {",
+                     "export async function SWITCH_WORKSPACE(x) {", "    public function SWITCH_WORKSPACE(): void",
+                     "const SWITCH_WORKSPACE = (x) => 1", "import { SWITCH_WORKSPACE } from './a';",
+                     "  return SWITCH_WORKSPACE;"):                                   # named, but not called
+            self.assertFalse(V._calls("SWITCH_WORKSPACE", line), line)
+
     def test_name_sites_end_to_end_only_with_nits_and_only_when_held(self):
         files = ({"store.js": "a = 1\n", "ui.js": "b = 1\n"},
                  {"store.js": "a = 1\nfunction FLUSH_SAVE() {}\n" + "".join(f"y{i} = {i}\n" for i in range(30)),

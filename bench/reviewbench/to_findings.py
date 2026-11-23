@@ -62,7 +62,7 @@ def to_findings(review, agent="crucible", cap=MAX_FINDINGS):
     rows = [(f, 0) for f in review.get("findings") or []] + [(f, 1) for f in review.get("nits") or []]
     rows.sort(key=lambda r: (SEV.index(r[0]["severity"]) if r[0].get("severity") in SEV else len(SEV), r[1]))
     out = []
-    own = {}                                    # (path, line) -> what the kept items there say (see same_flaw)
+    own = {}                                    # (path, line) -> the items reported there
     for f, _ in rows:
         own.setdefault((str(f.get("file") or "").removeprefix("./"), f.get("line")), []).append(f)
     for f, _ in rows:
@@ -77,8 +77,7 @@ def to_findings(review, agent="crucible", cap=MAX_FINDINGS):
         out.append({"file": path, "start_line": line, "end_line": end,
                     "message": f"[{f.get('severity', 'medium')}] {msg}"[:4000], "producer": agent})
         # the verified other sites of the same flaw (crucible's also_at), each at its own line, unless a kept item
-        # there already reports this flaw. Another flaw on the same line is a second comment: run 6 had "a switch drops
-        # unsaved tabs" at the call site where "a switch cancels the pending save" also held, and they are two issues.
+        # there already reports this flaw; another flaw on that line is another comment (run 6, apilix)
         for site in f.get("also_at") or []:
             p, _, n = site.rpartition(":")
             if p and n.isdigit() and int(n) >= 1 and not any(same_flaw(f, g, path, line) for g in own.get((p, int(n)), ())):
