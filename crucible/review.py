@@ -953,7 +953,7 @@ def manifest_sites(f, first):
 # that names an identifier (CONST_CASE, or a backticked camelCase/snake_case name) which the change adds in the item's
 # own file gets, in each other changed code file (up to NAME_MAX_FILES) whose added lines use it, the first added line
 # that calls it or passes it as a string, checked by the verifier like any other site. Measured on runs 4-6's stored
-# reviews before it was kept (eval/NOTES 2026-11-23): an item naming more than NAME_MAX_NAMES identifiers is about an
+# reviews before it was kept (eval/NOTES 2026-11-23, "name sites"): an item naming more than NAME_MAX_NAMES identifiers is about an
 # area, not one action, and a line that declares, imports or types the name isn't a call site. Unlike expression
 # sites, nothing near a call site covers it: run 6's other item there named the same action for another flaw.
 NAME_RX = re.compile(r"`([A-Za-z_][A-Za-z0-9_]{5,60})`|(?<![\w`.])([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)(?![\w`])")

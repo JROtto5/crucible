@@ -1557,3 +1557,49 @@ whether it holds depends on the hand-check below.
 - Lutris prefix.py:229, the translation-markup test, supavisor `reference` NOTICE: refuted on the claim itself
   (probe or test output); the later edits were unrelated. Right drops.
 So 1 of 5 is a confirmed dropped-then-fixed. n=5, so no rate is given.
+
+### 2026-11-23 · name sites: an item naming an action cites the call sites that use it (R4/R6 apilix #28/#29/#35), $0 replay + eval
+
+**The miss.** apilix #28, #29, #35 (all high, correctness): `WorkspaceSwitcher.tsx:46-47`,
+`WorkspaceManagerModal.tsx:67-68` and `WorkspaceSwitcher.tsx:60-62` dispatch `SWITCH_WORKSPACE` / `CREATE_WORKSPACE`
+without flushing the store's 300 ms debounced save. R4 and R6 both kept the flaw once, at `store.tsx:668` (the save
+effect's `clearTimeout` cleanup; matched golden #6), and its text named the actions, whose reducer cases the change adds
+in store.tsx, but no call site. R6 also kept an important "switching discards unsaved tabs" finding at
+`WorkspaceSwitcher.tsx:47`, judged novel (another mechanism). The expression sweep can't reach these: the names are
+not backticked expressions and the reducer case is 220 lines from the item.
+
+**Change (`--nits` only; prompts unchanged).** `name_sites`: an item naming an identifier (CONST_CASE, or a backticked
+camelCase/snake_case name, 6+ chars) that the change adds in the item's own file gets, in each other changed code file
+using it (docs and lockfiles skipped), the first added line that calls it (`name(`) or passes it as a string, never a
+line that declares that name, imports it, or is its `case`/union member. Skipped: items naming more than 3
+identifiers (an area, not one action) and names used in more than 3 other files. No "covered by a nearby item" rule,
+unlike expression sites, because of the R6 tabs item. The ReviewBench adapter now writes a site row at a line where
+another kept item sits unless that item reports the same flaw (same title, or it lists this item's place among its
+sites). Before, any item at the line hid the site, and here it would have hidden #28.
+
+**$0 replay** (blaze-3, the shipped function on every kept and dropped item of runs 4-6, each PR's stored
+`diff.patch`; a site "reaches" a golden item at the same file within its span ±3):
+| variant | R4 / R5 / R6 sites on kept items | missed high reached (R4, R6) | golden-false high reached | on no golden item |
+|---|---|---|---|---|
+| any named identifier, own file adds it, ≤3 other files | 115 / 148 / 135 | 3, 2 | 2 | 274 of 398 |
+| + ≤3 names per item | 78 / 93 / 88 | 3, 2 | 1 | 173 of 259 |
+| **shipped: + call/string line only, judged on the name** | **36 / 58 / 50 (11 / 14 / 13 PRs)** | **3 (#28, #29, #35), 2 (#28, #29)** | **1 (R5 node-postgres #7, at pg-pool/index.js:218)** | **82 of 144** |
+R6's 2 missed highs are reached twice each (from the store item and the tabs/restore items). R5 had no kept item
+naming these actions. The run-5 golden-false high is the precision risk: if the verifier holds that site and the judge
+matches it to #7 rather than the true medium #3 at the same line, node-postgres's high P falls, as figlet's did in R6.
+Expected gain, if the sites hold and the judge matches them: apilix 2-3 of 11 more high items, about +1.3 to +1.9
+points of macro high recall over 14 PRs. For run 7 to measure.
+
+**Eval** (`crucible eval --nits --no-write --jobs 3`, all cases, in crucible-rb:r6f with the source mounted, f4e004b;
+the round-1 fix after it only adds call lines; $15.87, 3,627 s, account #16): recall **0.958** (build 21/22, holdout
+2/2; last full runs 11-19 0.913, 11-21 bug cases 0.913), any severity 1.0, false blocking **0 on 9 clean cases**. The
+one miss is js-refcount, rated medium as in every run since 11-04. Nit cases 22/22 planted issues; false blocking 2 on
+nit cases (maintainability-cross and reliability, 1 each: both flipped in earlier runs, 11-19 2-3 of 6, 11-20 1, 11-21
+0); nit-py-sibling-tmp 3/3 with 0. Nits kept 147 (13 on clean cases; 11-21: 22), dropped 13. No case names a CONST_CASE
+action used across files, so the eval checks for regressions, not the sweep.
+
+Self-review round 1 (f4e004b, $0.24): NOT_GREEN, 2 lows: the declaration check rejected any line starting with
+`type`/`const`/`let`/`var` (a multi-line action object, `const r = await f()`): fixed, judged on the name, falsifiers
+both ways; the adapter comment was cut. The AI-attribution readiness item is expected on this repo (owner's rule).
+Round 2 (cd66e05, $0.55): NOT_GREEN, 1 medium + 1 low: no eval recorded and this NOTES entry missing; both answered
+here. Tests 508 -> 511, ruff clean.
