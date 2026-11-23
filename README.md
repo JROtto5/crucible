@@ -84,7 +84,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0              # crucible diffs against the merge-base
-      - uses: JROtto5/crucible@main
+      - uses: JROtto5/crucible@v0.5.0
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}   # or claude-code-oauth-token: (from `claude setup-token`)
           budget: 3

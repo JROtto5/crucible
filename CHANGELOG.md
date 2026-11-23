@@ -2,6 +2,7 @@
 
 One line per change, newest first.
 
+- 2026-11-23: v0.5.0: `crucible doctor`, `crucible demo`, the GitHub Action, the 5-minute quickstart, name sites, thin-repo notes and --author with several models. The README pins the Action at @v0.5.0.
 - 2026-11-23: A "Can't get it running" issue template that asks for `crucible doctor` output; CONTRIBUTING points at it, and the bug template has an optional field for the same output.
 - 2026-11-23: `crucible doctor [--live]` says what a new install is missing and how to fix it: Python, git and a git identity, the Claude Code CLI (missing, too old for the flags crucible passes, or too old for Fable), its login (API key, OAuth token or `claude auth status`), `gh` (optional) and the state dir; exit 1 when something required is missing. `--live` makes one tiny call per model a review uses (about $0.02). Checked in clean python:3.12-slim and node:22-slim containers (no CLI; CLI 2.1.325 logged out; with ANTHROPIC_API_KEY).
 - 2026-11-23: A GitHub Action (`action.yml`) runs `crucible review` on a pull request and posts the report as a PR comment, updated in place on later pushes (the CLI itself still never posts). It runs `--no-exec --offline` by default, takes an API key or a `claude setup-token` token, scrubs both from the comment, and outputs the verdict. `dry-run: "true"` swaps in a stand-in for the Claude CLI (`action/claude-dry-run`: one placeholder finding, no key, no cost), which this repo's CI runs on a `crucible demo` fixture and on every PR from the repo itself.
