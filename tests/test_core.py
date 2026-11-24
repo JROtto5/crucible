@@ -7869,10 +7869,13 @@ class TestNitTier(unittest.TestCase):
         self.assertIn("a.py:1 division by zero in f", bs[0]["prompt"])          # told what was already raised
         self.assertIn("A place already flagged can hold a second, different bug", bs[0]["prompt"])
         self.assertEqual(r["bug_sweep"], {"passes": 1, "of": 1, "failed": 0, "cost_usd": 0.2, "findings": 2})
-        swept = {f["title"]: f for f in r["findings"] if f.get("bug_sweep")}
+        self.assertFalse([f for f in r["findings"] if f.get("bug_sweep")])     # never a finding: the verdict stays
+        swept = {f["title"]: f for f in r["nits"] if f.get("bug_sweep")}
         self.assertEqual(sorted(swept), ["off by one in range end", "schema still requires the removed field"])
         self.assertEqual(swept["schema still requires the removed field"]["file"], "s.py")   # outside the diff: kept
         self.assertTrue(all(f["verification"]["status"] == "verified" for f in swept.values()))
+        self.assertEqual({(f["severity"], f["verified_severity"]) for f in swept.values()}, {("medium", "important")})
+        self.assertTrue(all(f["id"].startswith("NIT-") for f in swept.values()))
         kinds = [c["kind"] for c in calls]
         self.assertLess(kinds.index("bug_sweep"), kinds.index("verify"))
         self.assertAlmostEqual(r["cost_review_usd"], 0.1 + 0.2)             # the review pass + the sweep
@@ -7887,7 +7890,7 @@ class TestNitTier(unittest.TestCase):
         self.assertNotIn("bug_sweep", [c["kind"] for c in calls]); self.assertIn("no --budget", r["bug_sweep"]["skipped"])
         self.assertIn("Bug sweep skipped: no --budget", V.report(r, {}))
         r, calls = self._run([], bug_out=out, env={"CRUCIBLE_BUG_SWEEP": "1"})
-        self.assertIn("off by one", [f["title"] for f in r["findings"]])
+        self.assertIn("off by one", [f["title"] for f in r["nits"]])
         r, _ = self._run([], bug_out=[self._f("division by zero in f", 1, "important")] + out,
                          env={"CRUCIBLE_BUG_SWEEP": "1"})
         self.assertEqual(r["bug_sweep"]["findings"], 1)        # a restated raised finding is merged, not counted
@@ -7928,6 +7931,33 @@ class TestNitTier(unittest.TestCase):
                                   log=lambda *_: None)
             self.assertEqual((len(seen), st["passes"]), (3, 2))                  # pass 2 cached, pass 1 retried
             self.assertEqual(set(seen), {"bug_sweep"})
+
+    def test_bug_sweep_leaves_findings_and_verdict_as_without_it(self):
+        """Eval 11-24 (d733daf): two sweep findings kept as important on clean cases (false blocking 2), and a sweep
+        restatement of py-race's caught bug replaced the first pass's finding in dedupe and was refuted."""
+        on, _ = self._run([], budget=5.0, findings=3, blocking=2,
+                          bug_out=[self._f("division by zero in function f", 1, "critical"),   # a restatement, more severe
+                                   self._f("breaks every existing caller", 20, "critical")])
+        off, _ = self._run([], budget=5.0, findings=3, blocking=2, env={"CRUCIBLE_BUG_SWEEP": "0"})
+        key = lambda r: [(f["title"], f["severity"], f["verification"]["status"]) for f in r["findings"]]
+        self.assertEqual(key(on), key(off))
+        self.assertEqual(V.verdict(on, {})[0], V.verdict(off, {})[0])
+        f = next(f for f in on["findings"] if f["line"] == 1)
+        self.assertEqual(f["title"], "division by zero in f")                 # the first pass's wording stays
+        self.assertEqual([m["title"] for m in f["merged"]], ["division by zero in function f"])
+        self.assertEqual(f["severity"], "important")                          # verifier's grade of the first pass's item
+        self.assertEqual([f["title"] for f in on["nits"] if f.get("bug_sweep")], ["breaks every existing caller"])
+        # a sweep finding the verifier refutes is a dropped nit, not a dropped finding
+        r, _ = self._run([], budget=5.0, bug_out=[self._f("breaks every existing caller", 20, "critical")],
+                         verify_error=None, env={})
+        self.assertFalse([f for f in r["dropped"] if f.get("bug_sweep")])
+
+    def test_dedupe_keeps_the_first_pass_wording(self):
+        a = {"file": "a.py", "line": 3, "title": "race on counter increment", "severity": "important", "source": "review"}
+        b = dict(a, title="race on the counter increment", severity="critical", bug_sweep=True)
+        out = V.dedupe([dict(b), dict(a)])
+        self.assertEqual([(f["title"], f["severity"]) for f in out], [("race on counter increment", "critical")])
+        self.assertNotIn("bug_sweep", out[0])
 
     def test_bug_sweep_leaves_the_raised_findings_verification(self):
         """Self-review round 1: at a small budget the sweep took what verified the first pass's blocking findings."""

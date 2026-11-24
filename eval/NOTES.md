@@ -1809,6 +1809,23 @@ $1.50 budget turns many cases' sweep off (re-run on the final source, below); th
 bug sweep's spend counted toward the nit sweep's 50% rule and could switch it off (the rule now reads the spend before
 the bug sweep; test, mutation-checked); the code comment said 16 places where the replay of the shipped function
 says 17 (fixed); the +2 estimate is in-sample (said so).
+Round 4 (d733daf, the cap): NOT_GREEN, 2 medium + 2 low. The CHANGELOG gave only the eval numbers that held (now all,
+worse ones included); the eval on the final source was missing (it ran, and failed: next paragraph); `text_sites`
+lists places held or not (by design, like `expr_sites`: documented in its docstring); no GREEN round (the cap; the
+changes after it are covered by tests and the eval below).
+
+**Eval on d733daf** (same setup, account #16, $19.19, 5,151 s): recall **0.875** (build 19/22: py-race and
+py-sql-injection missed, js-refcount as always), false blocking **2 on clean cases** (clean-py-absent-vs-empty "explicit
+null overrides go to callers unchecked", clean-py-pkce-enforced "PKCE made mandatory; signatures break existing callers",
+both important), true dropped 6. Fails the bar (≥ 0.913, 0 false blocking). Two causes in the code, not noise: (1)
+the sweep's findings were findings, so a verified sweep claim changed the verdict, against `--nits`'s own rule that the
+findings and verdict stay what they are without it; round 2's reserve made it worse, since at the eval's $1.50 the
+sweep now ran only where 0-1 items were raised, i.e. mostly on clean cases; (2) dedupe kept the most severe duplicate,
+so a sweep restatement of a caught bug (py-race: kept 0, true dropped 2) replaced the first pass's item and the
+verifier refuted the restatement. Fix (after the cap, tested and mutation-checked): verified sweep findings join the
+nits (medium at most, `verified_severity` keeps the verifier's grade; refuted or unsettled ones are dropped nits), and
+dedupe keeps the first pass's item as the representative. The R8-train run on d733daf was stopped after 3 PRs ($12.44)
+and restarted on the fixed build.
 ### 2026-11-25 · field reads on the sealed held-out 50: Step 1 of the pre-registered paired arm ($0)
 
 **Switch.** `CRUCIBLE_NO_FIELD_READS=1` makes `fields_note` return "" (62a75e0, test mutation-checked; `modelreplay`

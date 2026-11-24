@@ -1204,7 +1204,7 @@ def _sentence(text, start, end):
 
 def text_sites(f, tracked, nlines):
     """f with the places its problem or fix names in a sentence saying the flaw is there too, added to also_at (the
-    added ones are also listed in text_sites). A place is "path:line" with the path a tracked file at HEAD, given in
+    added ones are also listed in text_sites, held or not, for counting, like expr_sites; also_at keeps only the held). A place is "path:line" with the path a tracked file at HEAD, given in
     full or by a suffix only one tracked file has, and a line inside it (`nlines(path)`: its line count). Skipped: the
     item's own place and its sites (within TEXT_SITE_NEAR lines), the draft, and anything past MAX_SITES."""
     sites = list(f.get("also_at") or [])
@@ -1242,7 +1242,10 @@ def similar_loose(a, b):
 
 def dedupe(findings):
     out = []
-    for f in sorted(findings, key=lambda f: (f.get("source") != "review", SEV.index(f["severity"]))):
+    # the reviewer's own items first, then the bug sweep's (a restatement never replaces what the first pass wrote:
+    # eval 11-24, a sweep rewording of py-race's caught bug won on severity and the verifier refuted it), then severity
+    for f in sorted(findings, key=lambda f: (f.get("source") != "review", bool(f.get("bug_sweep")),
+                                             SEV.index(f["severity"]))):
         dup = next((g for g in out if similar(f, g)), None)
         if dup:
             dup.setdefault("also", []).append(f["title"])
@@ -2377,6 +2380,13 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                         dropped.append(f)
                     elif v and not v.get("salvaged"):      # a transcription can't drop it, so it settled nothing
                         f["rechecked"] = tiers[0]
+        # the bug sweep's verified findings join the nits, never the findings: --nits leaves the findings and the
+        # verdict as they are without it (eval 11-24: two sweep findings kept as important on clean cases). A sweep
+        # finding the verifier didn't settle is left out, as an unverified nit is; a refuted one is a dropped nit.
+        swept_kept = [f for f in kept if f.get("bug_sweep")]
+        swept_out = [f for f in dropped if f.get("bug_sweep")]
+        kept = [f for f in kept if not f.get("bug_sweep")]
+        dropped = [f for f in dropped if not f.get("bug_sweep")]
         kept.sort(key=lambda f: (SEV.index(f["severity"]), (f.get("verification") or {}).get("method") != "executed"))
         if nits:
             extra = 0.0
@@ -2407,6 +2417,13 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 nit_cands += swept
             record.update(run_nits(nit_cands, cands + carried + reverify, repo, sha, dctx, dlabel, measured, budget,
                                    authors, fresh, log, extra, lens=lens, base=base, added=added))
+            settled = [f for f in swept_kept if f["verification"].get("status") == "verified"]
+            for f in settled:                          # nits are medium or low; the verifier's own grade stays on record
+                f["id"] = "NIT" + f["id"][2:] if f["id"].startswith("CR") else f["id"]
+                if f["severity"] not in ("medium", "low"):
+                    f["verified_severity"], f["severity"] = f["severity"], "medium"
+            record["nits"] = sorted(record["nits"] + settled, key=lambda f: SEV.index(f["severity"]))
+            record["nits_dropped"] = record["nits_dropped"] + swept_out + [f for f in swept_kept if f not in settled]
         unsettled, lead, tail = [f for f in kept if verify_failed(f)], [], []
         if unsettled:                                  # inserted first, so a failed review pass still leads
             why = (unsettled[0]["verification"].get("reason") or "no reason recorded")[:300]
