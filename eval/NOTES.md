@@ -1653,3 +1653,71 @@ Round 5 ($0.25, review57): NOT_GREEN, 2 lows: a write line already in the checko
 `(c: { accessKeyId: string }) =>`) still read with the full pattern and silenced the pair (now any line matching the
 write pattern reads only through a plain read; three checkout falsifiers, mutation-checked); and the CHANGELOG's
 falsifier count was stale and the entry carried the round narration (rewritten; the rounds live here).
+
+### 2026-11-24 · ReviewBench run 7 (crucible c9501a5) on the 25 dev PRs, and the sealed held-out 50
+
+**Setup.** Image `crucible-rb:r7` from a `git archive` of main c9501a5 (R6's 85fc223 plus the nit refutation note
+19396cf, the Pickrate verify order 0fad47f..67cb577, expression sites 29ced3b, lockfile→manifest sites 76488b2, thin
+repo 11737b4, name sites + the adapter's same-flaw rule c9501a5). Same harness as R6: `try-agent.sh`, `--nits`,
+`RB_CONFIG_BUDGET=5`, `RB_CONFIG_KEEP_REVIEW=1`, Claude Code 2.1.319, 1 round, Sonnet 5 judge at ReviewBench f223ce3.
+Dev = the 25 test-set PRs every change since R4 was tuned on. PRs 0-12 on account #16; its 5-hour window ran out in
+PR 13, PR 13 re-ran on #18, whose window ran out in PR 14; PRs 14-24 on #16 after the reset. Tokens went to blaze-3 over
+ssh stdin only and every run script deleted its copy (`~/.rb-secrets` empty after).
+`runs/r7/scoring/results.details.json` sha256 28f0e8499ded….
+
+**Held-out 50 (sealed).** Drawn after R7 started, never tuned on: `random.Random(20261123).sample(pool, 50)` over the
+194 manifest PRs not in the test set, frozen read-only in `corpus/heldout50/` on blaze-3 (heldout50.json sha256
+0935946262ff…, SEAL.json b6dc4d1bf55c…). Manifest indices: 10 14 15 16 18 22 27 30 35 36 47 51 55 59 70 77 80 83 93 94
+98 106 108 111 112 115 116 119 120 132 133 136 140 146 147 152 153 158 159 162 165 166 169 184 187 194 197 203 216 218.
+Rule: only the scorer's totals are read; no per-item golden or miss reading, no tuning. Run on #18 (fallback #16, both
+5-hour windows refilled once); PRs 133 and 136 first failed before review (a repo cache file left root-owned by the
+container; fixed with a container chown, re-run); the judge timed out once on one PR and resumed from its checkpoint.
+`runs/h50/scoring/results.details.json` sha256 cc3aeea144f5….
+
+| | R4 | R5 | R6 | **R7 dev (25)** | **held-out 50** |
+|---|---|---|---|---|---|
+| **high: grounded P / R / F1 (macro, the board's)** | 100.0 / 54.5 / 70.5 | 100.0 / 52.1 / 68.5 | 91.7 / 61.6 / 73.7 | **91.7 / 58.2 / 71.2** | **92.9 / 42.5 / 58.3** |
+| high: found (micro), Wilson 95% | 19/36 | 18/36 | 22/36 [44.9, 75.2] | **24/36 = 66.7 [50.3, 79.8]** | **23/60 = 38.3 [27.1, 51.0]** |
+| high: micro P, Wilson 95% | | | 22/23 | 24/25 = 96.0 [80.5, 99.3] | 20/21 = 95.2 [77.3, 99.2] |
+| high: micro F1 | | | 74.6 | 78.7 | 54.7 |
+| all: grounded P / R / F1 (macro) | 88.3 / 48.1 / 62.3 | 82.6 / 52.7 / 64.3 | 90.7 / 57.5 / 70.4 | 90.4 / 58.9 / 71.3 | 83.3 / 49.7 / 62.3 |
+| all: micro P / R, Wilson 95% | | | 180/196, 202/352 | 176/194 = 90.7 [85.8, 94.1], 200/352 = 56.8 [51.6, 61.9] | 239/297 = 80.5 [75.6, 84.6], 264/579 = 45.6 [41.6, 49.7] |
+| $ per PR (kept runs) | mean 2.12 | mean 2.05 | mean 2.13 | mean 2.14, median 1.58, max 5.12 | mean 1.99, median 1.31, max 5.19 |
+| $ incl. limit-cut attempts | 53.08 | 56.09 | 54.48 | 60.78 | 100.23 |
+
+**Rank on the site's High table** (grounded F1, `/api/leaderboard/metrics?severities=High&preference=balanced`,
+fetched 11-23, unchanged since 11-19: #4 Copilot Max 75.7, #5 Laude RevEngine 73.3, #6 Copilot Balanced 72.7, #7 Codex
+Max 70.2 ... #22 diffox 59.1, #23 Cubic 35.8): **R7 dev 71.2 ≈ #7. Held-out 58.3 ≈ #23 of 25** (between diffox 59.1
+and Cubic 35.8). The board's agents are scored on all 219 PRs x 3 rounds; ours is 1 round on a sample, so the held-out
+rank is an estimate with a wide interval (micro high R [27.1, 51.0]), but it is the like-for-like one. **Not top 5;
+not a trigger for the submission question.**
+
+Reading:
+- **Dev is optimistic.** Held-out high recall is 16 macro points below dev at the same precision (~93). Every change
+  since R4 was chosen on misses in the 25, so "≈ #5" (R6) and "≈ #4" (R5, all-severity) were dev-set figures. From
+  now on the held-out number decides; dev is for diagnosis only.
+- **R7 vs R6 on dev:** more high items found (24 vs 22 micro) but macro recall fell 61.6 -> 58.2: gained apilix #28,
+  #29, #35 (the sibling call sites), tp_152 #0 and emdash #4; lost node-postgres #23 (that PR's only high item, so its
+  high R went 1 -> 0), agents-config #1 and jadx #2. Macro weights each of the 14 PRs equally, so three items on 11-item
+  apilix are worth less than one on a 1-item PR. One-round swings of 1-3 items per PR are as large as the gains.
+- **Name sites did not carry the apilix gains.** In R7 the reviewer itself listed `WorkspaceManagerModal.tsx:66` and
+  `WorkspaceSwitcher.tsx:21` in also_at (matched #29 and #28), and the "tabs discarded" item listed
+  `WorkspaceSwitcher.tsx:62` (matched #35). name_sites fired on 4 PRs (node-postgres, apilix, emdash, nebula) and,
+  because it skips files the item already names, added nothing at the switch call sites. Its effect is unmeasured.
+- **Precision** stays at 92-96 on high in both sets; figlet's golden-false high match is again R7's one high FP.
+- **Cost** is within the $3 cap on both sets ($2.14 dev, $1.99 held-out). R7 PR 1 kept 0 nits (R6: 24): blocking
+  findings now verify against the whole $5 (11-20 Pickrate fix), and on that PR it spent the nit reserve.
+
+**First R8 target (dev diagnosis, $0): right line, other claim.** R6 rows sat on 25 distinct golden-high items and the
+judge credited 22; in R7, rows on the line of 4 uncredited high items (`runs/r7`, nearmiss.py):
+| item | golden (short) | what crucible said at that line |
+|---|---|---|
+| translator-ingests #9 (gtopdb.py:411-450) | Neutral/None actions of an allosteric modulator hit the `break` | the same `break` finding (critical, :413), credited to #0 only: a judge split, one row per golden item would carry it |
+| TechDebtMCP #0 (handlers.ts:438-454) | user `path` reaches fs calls with no isAbsolute/resolve check | special files pass the size guard (:448), stat/read TOCTOU (:449): other flaws at the same line |
+| jadx #1 (Plugin.kt:645-647) | nullable captured `var` in a non-inline lambda (won't compile) | concurrent edits dropped by the snapshot (:646): another flaw |
+| agents-config #1 (GEMINI.md.template:6-11) | Claude-only `@file` syntax copied to the Gemini template | README install path stale (:8); the Codex twin was found at its own template, the Gemini site not cited |
+R6 had the same shape on translator #9, TechDebtMCP #0, jadx #1 and apilix #28. Two classes: (a) one finding that
+covers two golden claims is credited to one (translator), and (b) the reviewer stops at one flaw per line. Both are
+claim precision, not detection; measure any fix on the held-out set, never on these items.
+
+Spend: R7 $60.78 (dev, incl. 2 cut attempts), held-out $100.23, judges on the same accounts.
