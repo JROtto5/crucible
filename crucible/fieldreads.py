@@ -26,14 +26,18 @@ SKIP_RECV = {"this", "self", "cls", "super", "Math", "JSON", "console", "window"
              "expect", "t", "it", "vi", "jest", "mock", "pytest", "location", "navigator", "history", "crypto", "http",
              "url", "globalThis"}
 STRING_RX = re.compile(r"""(['"`])(?:\\.|(?!\1).)*\1""")
+# a receiver: a bare name, or one link after `this.` / `self.` (`this.config.keyId`); deeper chains
+# (`a.b.c.keyId`) are left out, since the replay has no case of them and each link widens what can match
+RECV = r"(?:(?<=\bthis\.)|(?<=\bself\.)|(?<![\w.$]))"
 # `recv.field` or `recv?.field`, not a call, not the target of an assignment
-READ_RX = re.compile(r"(?<![\w.$])([a-z_][A-Za-z0-9_]*)\??\.([A-Za-z_][A-Za-z0-9_]{3,})\b"
-                     r"(?!\s*\()(?!\s*(?:=(?!=)|\+=|-=|\|\|=|\?\?=|&&=))")
+# (inside a lookahead, so matches overlap: `this.config` must not consume `config.keyId`)
+READ_RX = re.compile(r"(?=" + RECV + r"([a-z_][A-Za-z0-9_]*)\??\.([A-Za-z_][A-Za-z0-9_]{3,})\b"
+                     r"(?!\s*\()(?!\s*(?:=(?!=)|\+=|-=|\|\|=|\?\?=|&&=)))")
 # a name the change writes: a quoted string or a key (`name:`)
 WRITE_RX = re.compile(r"""(['"`])([A-Za-z_][A-Za-z0-9_]{3,})\1|(?<![\w.$])([A-Za-z_][A-Za-z0-9_]{3,})\s*\??\s*:(?!:)""")
 # `recv["field"]` or `recv.get("field"`, a dict read (Python configs, JSON bodies)
-KEY_READ_RX = re.compile(r"""(?<![\w.$])([a-z_][A-Za-z0-9_]*)(?:\[\s*(['"])([A-Za-z_][A-Za-z0-9_]{3,})\2\s*\]"""
-                         r"""(?!\s*(?:=(?!=)|\+=|-=))|\.get\(\s*(['"])([A-Za-z_][A-Za-z0-9_]{3,})\4)""")
+KEY_READ_RX = re.compile(r"(?=" + RECV + r"""([a-z_][A-Za-z0-9_]*)(?:\[\s*(['"])([A-Za-z_][A-Za-z0-9_]{3,})\2\s*\]"""
+                         r"""(?!\s*(?:=(?!=)|\+=|-=))|\.get\(\s*(['"])([A-Za-z_][A-Za-z0-9_]{3,})\4))""")
 IMPORT_RX = re.compile(r"^\s*(?:from\s+\S+\s+)?import\b|\brequire\s*\(")
 
 
@@ -54,13 +58,18 @@ def similar(read, written):
 
 def _writes_rx(n):
     n = re.escape(n)
+    # a key, a quoted string, an assignment or keyword, or a definition that computes it: a property or getter
+    # (`def launcher_service(self)` under @property, umu c227efa9), a Go/Rust method, a class method `name() {`
     return re.compile(rf"""(['"`]){n}\1|(?<![\w.$]){n}\s*\??\s*:(?!:)|\.{n}\s*=(?!=)|\[\s*['"]{n}['"]\s*\]\s*=(?!=)|"""
-                      rf"""(?<![\w.$]){n}\s*=(?!=)""")
+                      rf"""(?<![\w.$]){n}\s*=(?!=)|\b(?:def|get|fn|func)\s+(?:\([^)]*\)\s*)?{n}\s*[(<]|"""
+                      rf"""^\s*(?:(?:public|private|protected|static|async|override|readonly)\s+)*{n}\s*\([^)]*\)\s*(?::[^{{]*)?\{{""")
 
 
 def _reads_rx(n):
     n = re.escape(n)
-    return re.compile(rf"""\.{n}\b(?!\s*=(?!=))|\[\s*['"]{n}['"]\s*\](?!\s*=(?!=))|\.get\(\s*['"]{n}['"]""")
+    # a member, subscript or .get() read, getattr(), or a destructure (`const { accessKeyId } = cfg`)
+    return re.compile(rf"""\.{n}\b(?!\s*=(?!=))|\[\s*['"]{n}['"]\s*\](?!\s*=(?!=))|\.get\(\s*['"]{n}['"]|"""
+                      rf"""\bgetattr\([^,]+,\s*['"]{n}['"]|\{{[^{{}}]*(?<![\w$.]){n}(?![\w$])[^{{}}]*\}}\s*=(?!=)""")
 
 
 def _code(p):

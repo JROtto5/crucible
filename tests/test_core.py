@@ -8923,18 +8923,37 @@ class TestFieldReads(unittest.TestCase):
         self.assertEqual(fieldreads.note([]), "")
 
     def test_each_falsifier_silences_the_pair(self):
+        # (change files, checkout files): the last three sit in the checkout, so the git grep is what silences them
         cases = {
-            "the reader uses the writer's name": {"src/s3.ts": self.ADAPTER.replace("config.keyId", "config.accessKeyId")},
-            "the checkout writes the read name": {"src/defaults.ts": "export const D = { keyId: '' };\n"},
-            "something reads the written name": {"src/show.ts": "export const s = (c) => c.accessKeyId;\n"},
-            "same words, another case (a serializer's job)": {
-                "src/Form.tsx": self.FORM.replace("accessKeyId", "key_id")},
-            "the read is in a test": {"tests/s3.test.ts": self.ADAPTER, "src/s3.ts": None},
+            "the reader uses the writer's name": (
+                {"src/s3.ts": self.ADAPTER.replace("config.keyId", "config.accessKeyId")}, {}),
+            "same words, another case (a serializer's job)": (
+                {"src/Form.tsx": self.FORM.replace("accessKeyId", "key_id")}, {}),
+            "the read is in a test": ({"tests/s3.test.ts": self.ADAPTER, "src/s3.ts": None}, {}),
+            "the change writes the read name": ({"src/defaults.ts": "export const D = { keyId: '' };\n"}, {}),
+            "the checkout writes the read name": ({}, {"src/defaults.ts": "export const D = { keyId: '' };\n"}),
+            "the checkout reads the written name": ({}, {"src/show.ts": "export const s = (c) => c.accessKeyId;\n"}),
+            "the checkout defines it as a property": ({}, {"src/cfg.py": "class C:\n    @property\n"
+                                                                       "    def keyId(self):\n        return 1\n"}),
+            "the checkout defines it as a getter": ({}, {"src/cfg.ts": "class C {\n  get keyId() {\n"
+                                                                    "    return 1;\n  }\n}\n"}),
+            "the checkout defines it as a method": ({}, {"src/cfg.ts": "class C {\n  keyId(): string {\n"
+                                                                    "    return '';\n  }\n}\n"}),
+            "the checkout destructures it": ({}, {"src/show.ts": "export const s = (c) => {\n"
+                                                                 "  const { accessKeyId, b } = c;\n};\n"}),
         }
-        for why, extra in cases.items():
+        for why, (extra, base) in cases.items():
             new = {"src/Form.tsx": self.FORM, "src/s3.ts": self.ADAPTER, **extra}
-            _, _, rows = self._rows({k: v for k, v in new.items() if v is not None})
+            _, _, rows = self._rows({k: v for k, v in new.items() if v is not None}, base=base or None)
             self.assertEqual(rows, [], why)
+
+    def test_a_read_one_link_after_this_or_self(self):
+        cls = ("export class S3 {\n  presign() {\n    return sign({ keyId: this.config.keyId });\n  }\n}\n")
+        _, _, rows = self._rows({"src/Form.tsx": self.FORM, "src/s3.ts": cls})
+        self.assertEqual([r[2] for r in rows], ["config.keyId"])
+        deep = cls.replace("this.config.keyId", "this.store.config.keyId")
+        _, _, rows = self._rows({"src/Form.tsx": self.FORM, "src/s3.ts": deep})
+        self.assertEqual(rows, [])                       # deeper chains are left out on purpose
 
     def test_a_rename_on_the_read_line_and_an_imported_receiver_are_not_pairs(self):
         # 1,047-commit replay: `gameImageUrl: gameData.game_image` maps one name to another on purpose, and
