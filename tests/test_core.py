@@ -8992,6 +8992,19 @@ class TestFieldReads(unittest.TestCase):
                                  "app/client.py": 'def make(cfg):\n    return Client(cfg["api_key"])\n'},
                                 base={"app/load.py": 'def load(c, k):\n    c["api_key"] = k\n'})
         self.assertEqual(rows, [])                       # the checkout writes api_key
+        # self-review 3: a declaration of the written name (a dataclass field, an interface member) is not its reader
+        for path, decl, read in (
+                ("app/model.py", "@dataclass\nclass S3:\n    access_key_id: str\n",
+                 ("app/client.py", "def make(cfg):\n    return sign(cfg.key_id)\n")),
+                ("src/types.ts", "export interface S3 {\n  accessKeyId: string,\n  region\n}\n",
+                 ("src/s3.ts", self.ADAPTER)),
+                ("src/form.ts", "export const save = (k) => saveConfig({ accessKeyId: k });\n",
+                 ("src/s3.ts", self.ADAPTER))):
+            _, _, rows = self._rows({path: decl, read[0]: read[1]})
+            self.assertEqual(len(rows), 1, path)
+        _, _, rows = self._rows({"src/Form.tsx": self.FORM, "src/s3.ts": self.ADAPTER},
+                                base={"src/types.ts": "export interface S3 {\n  accessKeyId: string,\n}\n"})
+        self.assertEqual(len(rows), 1)                    # nor is one already in the checkout
 
     def test_similar_names(self):
         from crucible import fieldreads

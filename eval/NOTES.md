@@ -1643,3 +1643,6 @@ and method definitions now count as writes: R6 1 (#26), commits 0. Every guard m
 Round 2 ($0.60, review54): NOT_GREEN, 2 lows: parameter and wrapped destructures weren't reads; `self.` and `getattr`
 untested. Fixed (a shorthand object passed on also silences a pair: the safe side for a note), mutation-checked; R6 1,
 commits 0.
+Round 3 ($0.16, review55): NOT_GREEN, 1 medium: a declaration (`access_key_id: str`, `accessKeyId: string,`) read as a
+wrapped destructure and silenced its own pair. Fixed (bare line = `name` or `name,` only; a write site is never its
+own reader, in the change or the grep), four falsifiers, mutation-checked. R6 1, commits 0, eval cases 0 of 41.

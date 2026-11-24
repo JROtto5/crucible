@@ -68,11 +68,12 @@ def _writes_rx(n):
 def _reads_rx(n):
     n = re.escape(n)
     # a member, subscript or .get() read, getattr(), or a destructure: `const { accessKeyId } = cfg`, a parameter
-    # (`({ accessKeyId }: Cfg) =>`), or a line holding only the name inside a wrapped one (`  accessKeyId,`). A
+    # (`({ accessKeyId }: Cfg) =>`), or a line holding only the name inside a wrapped one (`  accessKeyId,`); not
+    # `  accessKeyId: string,`, a declaration (an interface member, a dataclass field) that writes it. A
     # shorthand object passed on (`f({ accessKeyId })`) matches too: that silences the pair, the safe side for a note.
     return re.compile(rf"""\.{n}\b(?!\s*=(?!=))|\[\s*['"]{n}['"]\s*\](?!\s*=(?!=))|\.get\(\s*['"]{n}['"]|"""
                       rf"""\bgetattr\([^,]+,\s*['"]{n}['"]|\{{[^{{}}]*(?<![\w$.]){n}(?![\w$])[^{{}}]*\}}\s*(?:=(?!=)|:|\)|=>)|"""
-                      rf"""^\s*{n}\s*(?::\s*[\w$]+\s*)?,?\s*$""")
+                      rf"""^\s*{n}\s*,?\s*$""")
 
 
 def _code(p):
@@ -95,8 +96,10 @@ def mismatches(repo, files, read_text, paths=None):
     def is_orphan(w):
         if w not in orphan:
             rx = _reads_rx(w)
-            orphan[w] = not any(rx.search(t) for _, _, t in added) and not any(
-                rx.search(t) for _, _, t in _grep(repo, [w], CODE_SPECS) if not COMMENT_RX.match(t))
+            own = set(written[w])                  # a line that writes the name is not its reader
+            orphan[w] = not any(rx.search(t) for p2, n2, t in added if (p2, n2) not in own) and not any(
+                rx.search(t) for p2, n2, t in _grep(repo, [w], CODE_SPECS)
+                if (p2, n2) not in own and not COMMENT_RX.match(t))
         return orphan[w]
 
     for p, n, t in added:
