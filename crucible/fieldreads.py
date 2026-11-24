@@ -67,9 +67,12 @@ def _writes_rx(n):
 
 def _reads_rx(n):
     n = re.escape(n)
-    # a member, subscript or .get() read, getattr(), or a destructure (`const { accessKeyId } = cfg`)
+    # a member, subscript or .get() read, getattr(), or a destructure: `const { accessKeyId } = cfg`, a parameter
+    # (`({ accessKeyId }: Cfg) =>`), or a line holding only the name inside a wrapped one (`  accessKeyId,`). A
+    # shorthand object passed on (`f({ accessKeyId })`) matches too: that silences the pair, the safe side for a note.
     return re.compile(rf"""\.{n}\b(?!\s*=(?!=))|\[\s*['"]{n}['"]\s*\](?!\s*=(?!=))|\.get\(\s*['"]{n}['"]|"""
-                      rf"""\bgetattr\([^,]+,\s*['"]{n}['"]|\{{[^{{}}]*(?<![\w$.]){n}(?![\w$])[^{{}}]*\}}\s*=(?!=)""")
+                      rf"""\bgetattr\([^,]+,\s*['"]{n}['"]|\{{[^{{}}]*(?<![\w$.]){n}(?![\w$])[^{{}}]*\}}\s*(?:=(?!=)|:|\)|=>)|"""
+                      rf"""^\s*{n}\s*(?::\s*[\w$]+\s*)?,?\s*$""")
 
 
 def _code(p):

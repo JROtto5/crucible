@@ -8939,6 +8939,12 @@ class TestFieldReads(unittest.TestCase):
                                                                     "    return 1;\n  }\n}\n"}),
             "the checkout defines it as a method": ({}, {"src/cfg.ts": "class C {\n  keyId(): string {\n"
                                                                     "    return '';\n  }\n}\n"}),
+            "the checkout reads it with getattr": ({}, {"src/show.py": "def s(c):\n"
+                                                                    "    return getattr(c, 'accessKeyId')\n"}),
+            "the checkout destructures it in a parameter": ({}, {"src/show.ts": "export const s = ({ accessKeyId }: C) "
+                                                                             "=> accessKeyId;\n"}),
+            "the checkout destructures it over lines": ({}, {"src/show.ts": "export function s(c) {\n  const {\n"
+                                                                         "    accessKeyId,\n    region,\n  } = c;\n}\n"}),
             "the checkout destructures it": ({}, {"src/show.ts": "export const s = (c) => {\n"
                                                                  "  const { accessKeyId, b } = c;\n};\n"}),
         }
@@ -8954,6 +8960,13 @@ class TestFieldReads(unittest.TestCase):
         deep = cls.replace("this.config.keyId", "this.store.config.keyId")
         _, _, rows = self._rows({"src/Form.tsx": self.FORM, "src/s3.ts": deep})
         self.assertEqual(rows, [])                       # deeper chains are left out on purpose
+        py = ("class Client:\n    def make(self):\n        return S3(self.cfg[\"api_key\"])\n")
+        settings = 'def save(key):\n    return {"openai_api_key": key}\n'
+        _, _, rows = self._rows({"app/settings.py": settings, "app/client.py": py})
+        self.assertEqual([r[2] for r in rows], ["cfg.api_key"])
+        _, _, rows = self._rows({"app/settings.py": settings,
+                                 "app/client.py": py.replace("self.cfg", "self.app.cfg")})
+        self.assertEqual(rows, [])
 
     def test_a_rename_on_the_read_line_and_an_imported_receiver_are_not_pairs(self):
         # 1,047-commit replay: `gameImageUrl: gameData.game_image` maps one name to another on purpose, and
