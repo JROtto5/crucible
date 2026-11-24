@@ -490,6 +490,118 @@ def nit_sweep(sweep_chunks, raised, repo, model, budget, project, sha, base, rul
     return out_nits, {"passes": ran, "of": len(sweep_chunks), "failed": failed, "cost_usd": round(budget.own, 4)}
 
 
+# The bug sweep (--nits): a second look for blocking bugs, from the TRAIN-60 split's high-severity misses (eval/NOTES
+# 2026-11-25). The nit sweep above asks for smaller problems and almost never carried a high item (1 of 49 credited
+# in runs 7 and TRAIN), while 16 of 17 TRAIN high items came from findings. Of 13 missed high items, 4 (4 repos) sat on
+# a line where a kept item reported another flaw, and 5 (4 repos) had no item in their file, most of them in code the
+# diff only reaches: a schema or page that reads what the change altered, a path the change moved, a golden fixture
+# the new output must match, a sibling platform file. The prompt names those two shapes. Its findings go through the
+# per-finding verifier like the first pass's; nothing about the verdict changes without --nits.
+BUG_SWEEP_MAX = 5                    # findings per sweep pass
+BUG_SWEEP_SCHEMA = {"type": "object", "properties": {"findings": {
+    **FINDINGS_NITS_SCHEMA["properties"]["findings"], "maxItems": BUG_SWEEP_MAX}}, "required": ["findings"]}
+
+
+def bug_sweep_mode():
+    v = os.environ.get("CRUCIBLE_BUG_SWEEP", "auto").strip().lower()
+    return "off" if v in ("0", "false", "no", "off") else "on" if v in ("1", "true", "yes", "on") else "auto"
+
+
+def bug_sweep_cap_usd():
+    """USD the bug sweep of one review may spend on its calls (CRUCIBLE_BUG_SWEEP_USD, default 0.60)."""
+    try:
+        return max(0.0, float(os.environ.get("CRUCIBLE_BUG_SWEEP_USD", "0.60")))
+    except ValueError:
+        return 0.60
+
+
+def bug_sweep_skip_reason(limit, spent, remaining):
+    """None when the bug sweep may run; else why not. Same rules as the nit sweep (sweep_skip_reason): `remaining` is
+    what's left for review calls after the nit reserve (None: no limit)."""
+    mode = bug_sweep_mode()
+    if mode == "off":
+        return "off (CRUCIBLE_BUG_SWEEP=0)"
+    if bug_sweep_cap_usd() < SWEEP_MIN_USD:
+        return f"its cap (CRUCIBLE_BUG_SWEEP_USD) is under ${SWEEP_MIN_USD:.2f}"
+    if limit is None:
+        return None if mode == "on" else "no --budget (CRUCIBLE_BUG_SWEEP=1 runs it anyway)"
+    if spent > SWEEP_SPENT_SHARE * limit:
+        return f"the review passes already spent ${spent:.2f}, over {SWEEP_SPENT_SHARE:.0%} of its ${limit:.2f} budget"
+    if remaining is not None and remaining < SWEEP_MIN_USD:
+        return f"${remaining:.2f} left after the nit reserve, under ${SWEEP_MIN_USD:.2f}"
+    return None
+
+
+def bug_sweep_prompt(project, sha, base, ch, raised, rules, all_files, docs=""):
+    """The bug-only second look at one pass: the same diff, every item already raised in its files, and the two places
+    a first look stops too early. Asks only for what isn't on the list."""
+    listed = "\n".join(f"- {f['file']}:{f['line']} {f['title']}" for f in raised[:SWEEP_RAISED_MAX]) or "(nothing)"
+    if len(raised) > SWEEP_RAISED_MAX:
+        listed += f"\n- ... and {len(raised) - SWEEP_RAISED_MAX} more"
+    return textwrap.dedent(f"""\
+        You are a strict senior maintainer of {project.replace('__', '/')} taking a SECOND look at an outside
+        contributor's change, for bugs that should block it. The checkout is at the change's HEAD ({sha[:10]}); the
+        base is {base[:10]}. A first review of this diff already raised the items listed below. Find the real bugs
+        it did NOT raise (at most {BUG_SWEEP_MAX}). Read the code before you claim anything; an empty list is a good
+        answer.
+
+        Already raised (don't repeat these, or restate them in other words):
+        {listed}
+
+        Where a first look stops too early:
+        - A place already flagged can hold a second, different bug. For each place listed above, re-read the whole
+          enclosing function and ask what else fails there: a value the code needs that no caller or path supplies
+          (an id, key, field or option left unset), an error path that quietly skips the work or reports success,
+          a call that breaks its callee's contract (read the callee, its comments and how other code calls it), a
+          value of an enum, status or setting the new branch doesn't handle.
+        - What the change reaches outside the diff. Search for the readers of each value, name, type, format, URL,
+          parameter, path or file the change alters, adds or moves: a schema, validator, page, query or config
+          that still expects the old form; a string that still names a moved or renamed file; a test, snapshot or
+          golden file that compares generated output that now differs; a sibling file for another platform,
+          backend or variant that has to change the same way; a caller of a method that now throws, returns
+          something else or needs a new dependency registered.
+        Report each as a finding at the line a fix would change; when that line is in a file the diff doesn't show,
+        cite that file and line. Give the concrete path to the failure and a "wrong_if". When one bug repeats at
+        several sites, write it once and list the other sites in "also_at".
+
+        {SEVERITY_DEFS}
+
+        Project rules:
+        {rules}
+
+        All files in the change: {', '.join(all_files)}
+        This pass covers: {', '.join(ch['files'])}
+        Diff for this pass:
+        {ch['text']}
+        """) + (f"\n{docs}" if docs else "")
+
+
+def bug_sweep(sweep_chunks, raised, repo, model, budget, project, sha, base, rules, all_files, notes, fresh=False,
+              log=print):
+    """-> (finding candidates, {passes, of, failed, cost_usd}); the caller adds `findings`, the new ones sent to
+    verification. One call per pass, in order (riskiest first), until `budget` (the sweep's own SubBudget) runs out."""
+    out_f, ran, failed = [], 0, 0
+    for ch, docs in zip(sweep_chunks, notes):
+        files = set(ch["files"])
+        prompt = bug_sweep_prompt(project, sha, base, ch, [f for f in raised if f["file"] in files], rules, all_files,
+                                  docs)
+        key = "b-" + hashlib.sha256((model + "\0" + prompt).encode()).hexdigest()[:32]
+        out = None if fresh else cache_hit(key, budget, "bug_sweep")
+        if out is None:
+            if budget.exhausted():
+                break
+            try:
+                out, _ = claude(prompt, model, BUG_SWEEP_SCHEMA, repo, budget, kind="bug_sweep")
+                cache_put(key, out)
+            except Failed as e:
+                failed += 1
+                log(f"  bug sweep pass failed: {str(e)[:160]}")
+                continue
+        ran += 1
+        out_f += [dict(f, source="review", bug_sweep=True) for f in (out.get("findings") or [])[:BUG_SWEEP_MAX]]
+    return out_f, {"passes": ran, "of": len(sweep_chunks), "failed": failed, "cost_usd": round(budget.own, 4)}
+
+
 # Two refutations that settle a style nit but not a bug. ReviewBench run 6 (eval/NOTES 2026-11-20): two of its 14
 # missed high-severity issues were raised as nits and dropped on them, both at high confidence. TechDebtMCP: "new
 # fs.stat call gets the user path without isAbsolute/resolve" quoted the CLAUDE.md rule, and its own falsification
@@ -1067,6 +1179,49 @@ def sites_note(f):
         return ""
     return (f"The same flaw is also claimed at: {', '.join(f['also_at'])}. Check each of those sites the same way; "
             f"list in sites_hold, exactly as written here, only the sites where it holds.")
+
+
+# Text-named sites (--nits, $0): a finding whose own text says the flaw is at another place too ("the same gap exists in
+# `_update_item_impl` (items.py:541)", "src/lib/schemas.ts:153 still has `ownerName`") but leaves also_at empty. On
+# the TRAIN-60 split's stored output (eval/NOTES 2026-11-25) 2 of 13 missed high items (2 repos) were named that way,
+# one of them in a file the diff doesn't touch, where the fix goes. Only a sentence with a "same/also/still" word
+# counts: the bare references around it are mostly the code a finding compares with ("_search_items_impl (items.py:126)
+# is decorated"). Measured on findings: 16 places, 3 on 2 missed high items, 10 on no golden item; every place still
+# goes to the verifier (sites_note) and is reported only if it holds there, so a wrong one costs verifier tokens.
+TEXT_REF_RX = re.compile(r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.[A-Za-z]\w{0,9}):(\d+)(?:-\d+)?")
+TEXT_SITE_CUE = re.compile(r"\b(same|also|still|too|again|as well|likewise|repeats?|identical)\b", re.I)
+TEXT_SITE_NEAR = 3                   # a place this close to the item's own or a listed site is that site
+
+
+def _sentence(text, start, end):
+    a = max(text.rfind(". ", 0, start), text.rfind("\n", 0, start)) + 1
+    b = min([x for x in (text.find(". ", end), text.find("\n", end)) if x >= 0] or [len(text)])
+    return text[a:b]
+
+
+def text_sites(f, tracked, nlines):
+    """f with the places its problem or fix names in a sentence saying the flaw is there too, added to also_at (the
+    added ones are also listed in text_sites). A place is "path:line" with the path a tracked file at HEAD, given in
+    full or by a suffix only one tracked file has, and a line inside it (`nlines(path)`: its line count). Skipped: the
+    item's own place and its sites (within TEXT_SITE_NEAR lines), the draft, and anything past MAX_SITES."""
+    sites = list(f.get("also_at") or [])
+    have = [(f.get("file"), f.get("line"))] + [(s.rpartition(":")[0], int(s.rpartition(":")[2])) for s in sites]
+    added = []
+    text = f"{f.get('problem') or ''}\n{f.get('fix') or ''}"
+    for m in TEXT_REF_RX.finditer(text):
+        if len(sites) >= MAX_SITES:
+            break
+        if not TEXT_SITE_CUE.search(_sentence(text, m.start(), m.end())):
+            continue
+        p, n = re.sub(r"^(?:\./)+", "", m[1]), int(m[2])
+        hits = [p] if p in tracked else [x for x in tracked if x.endswith("/" + p)]
+        if len(hits) != 1 or n < 1 or hits[0].endswith("PR_DRAFT.md"):
+            continue
+        p = hits[0]
+        if any(q == p and isinstance(k, int) and abs(k - n) <= TEXT_SITE_NEAR for q, k in have) or n > nlines(p):
+            continue
+        have.append((p, n)); sites.append(f"{p}:{n}"); added.append(f"{p}:{n}")
+    return dict(f, also_at=sites, text_sites=added) if added else f
 
 
 def similar(a, b):
@@ -2080,6 +2235,20 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 if f["file"] == dlabel and draft_path:
                     f["line"] = readiness.draft_file_line(draft_full, f["line"])
                 nit_cands.append(f)
+        if nits:                                       # the bug sweep: a review call, so before tok_split
+            skip = ("small tier" if record.get("small_tier") else "no pass was reviewed" if not sweep_chunks else
+                    bug_sweep_skip_reason(budget.limit, budget.spent, pass_budget.remaining()))
+            if skip:
+                record["bug_sweep"] = {"skipped": skip}
+            else:
+                sub = SubBudget(pass_budget, bug_sweep_cap_usd())
+                log(f"  bug sweep: a second look for blocking bugs at {len(sweep_chunks)} pass(es) ({review_model}, "
+                    f"cap ${bug_sweep_cap_usd():.2f})")
+                found, record["bug_sweep"] = bug_sweep(sweep_chunks, cands + nit_cands, repo, review_model, sub, project,
+                                                       sha, base, rules, all_files, sweep_notes, fresh, log)
+                record["bug_sweep"]["findings"] = len(found)
+                review_cost += sub.own
+                cands += found
         tok_split = (tok_before, budget.token_snapshot())
         if nits:
             both = sweep_sites(cands + nit_cands, files, cands + nit_cands)
@@ -2087,6 +2256,14 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         if any(f.get("also_at") for f in cands + nit_cands):
             nl = site_lines(repo, sha, [f["path"] for f in files], cands + nit_cands)
             cands, nit_cands = [clean_sites(f, nl) for f in cands], [clean_sites(f, nl) for f in nit_cands]
+        if nits:                                       # after clean_sites: a text-named place may be outside the diff
+            counts = {}
+
+            def nlines(p):
+                if p not in counts:
+                    counts[p] = len(git_blob(repo, sha, p).splitlines())
+                return counts[p]
+            cands = [text_sites(f, tracked, nlines) if f.get("source") == "review" else f for f in cands]
         nit_cands += [dict(f, source="nit", house=True) for f in house_nits[:HOUSE_NITS_MAX]]   # after the reviewer's
         reviewed = {p for c in chunk_status if c["status"] == "reviewed" for p in c["files"]}
         if prev_sha:                                   # files untouched since the previous complete review stay covered
@@ -2487,4 +2664,10 @@ def report(rev, ans, waivers=None):
                   f"sent to verification, ${sw['cost_usd']}"]
         elif sw:
             L += [f"Nit sweep skipped: {sw['skipped']}"]
+        bs = rev.get("bug_sweep") or {}
+        if "passes" in bs:
+            L += [f"Bug sweep: second look at {bs['passes']} of {bs['of']} pass(es), {bs.get('findings', 0)} new "
+                  f"finding(s) sent to verification, ${bs['cost_usd']}"]
+        elif bs:
+            L += [f"Bug sweep skipped: {bs['skipped']}"]
     return "\n".join(L) + "\n"

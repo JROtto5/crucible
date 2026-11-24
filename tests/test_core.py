@@ -6838,7 +6838,7 @@ class TestNitTier(unittest.TestCase):
 
     def _run(self, nits_out, verdicts=None, nits=True, env=None, fail_batch=False, budget=None, findings=1, verify_cost=0.0,
              review_cost=0.0, verify_error=None, passes=1, repo_files=None, sweep_out=(), sweep_cost=0.0,
-             sites_hold=(), finding_sites=None, blocking=1):
+             sites_hold=(), finding_sites=None, blocking=1, bug_out=(), bug_cost=0.0, finding_problem=None):
         """-> (review.json, calls). `passes` > 1 splits the diff into that many review passes. The fake reviewer returns
         `findings` findings, the first `blocking` of them important and the rest medium, and `nits_out` as nits; the nit
         verifier answers `verdicts` (index -> (keep, confidence)), default keep/high for every nit."""
@@ -6851,8 +6851,13 @@ class TestNitTier(unittest.TestCase):
             calls.append({"kind": kw.get("kind"), "model": model, "schema": schema, "prompt": prompt})
             if budget and budget.exhausted():                 # what the real claude() does
                 raise U.Failed("budget exhausted")
+            if kw.get("kind") == "bug_sweep":
+                if budget is not None:
+                    budget.add(bug_cost)
+                return {"findings": [dict(f) for f in bug_out]}, bug_cost
             if "findings" in schema["properties"]:
                 first = dict(self._f("division by zero in f", 1, "important"),
+                             **({"problem": finding_problem} if finding_problem is not None else {}),
                              **({"also_at": list(finding_sites)} if finding_sites else {}))
                 out = {"summary": "s", "findings": [first] +
                        [self._f(w, 3 + 2 * i, "important" if i < blocking - 1 else "medium") for i, w in
@@ -7804,6 +7809,137 @@ class TestNitTier(unittest.TestCase):
                 V.nit_sweep(chs, [], ".", "m", sw, "o__r", "a" * 40, "b" * 40, "", ["a.py"], ["", ""], fresh=True,
                             log=lambda *_: None)
                 self.assertEqual(len(seen), 5)                    # --fresh bypasses the cache
+
+    def test_bug_sweep_runs_when_budget_remains_and_its_findings_are_verified(self):
+        """TRAIN-60: 9 of 13 missed high items were bugs the first pass never raised (another flaw at a flagged line, or
+        code the diff only reaches). The bug sweep is a second review call; its findings are verified one by one."""
+        files = ({"a.py": "x = 1\n", "s.py": "".join(f"s{i} = {i}\n" for i in range(9))},
+                 {"a.py": "x = 2\n" + "".join(f"y{i} = {i}\n" for i in range(30))})
+        bug = self._f("schema still requires the removed field", 7, "important", file="s.py")
+        r, calls = self._run([], budget=5.0, bug_out=[bug, self._f("off by one in range end", 9, "important")],
+                             bug_cost=0.2, repo_files=files)
+        bs = [c for c in calls if c["kind"] == "bug_sweep"]
+        self.assertEqual(len(bs), 1)
+        self.assertEqual(bs[0]["model"], r["review_model"])
+        self.assertIs(bs[0]["schema"], V.BUG_SWEEP_SCHEMA)
+        self.assertIn("a.py:1 division by zero in f", bs[0]["prompt"])          # told what was already raised
+        self.assertIn("A place already flagged can hold a second, different bug", bs[0]["prompt"])
+        self.assertEqual(r["bug_sweep"], {"passes": 1, "of": 1, "failed": 0, "cost_usd": 0.2, "findings": 2})
+        swept = {f["title"]: f for f in r["findings"] if f.get("bug_sweep")}
+        self.assertEqual(sorted(swept), ["off by one in range end", "schema still requires the removed field"])
+        self.assertEqual(swept["schema still requires the removed field"]["file"], "s.py")   # outside the diff: kept
+        self.assertTrue(all(f["verification"]["status"] == "verified" for f in swept.values()))
+        kinds = [c["kind"] for c in calls]
+        self.assertLess(kinds.index("bug_sweep"), kinds.index("verify"))
+        self.assertAlmostEqual(r["cost_review_usd"], 0.1 + 0.2)             # the review pass + the sweep
+        self.assertIn("Bug sweep: second look at 1 of 1 pass(es), 2 new finding(s)", V.report(r, {}))
+        # the nit sweep that follows is told about the bug sweep's findings too
+        ns = next(c for c in calls if c["kind"] == "nit_sweep")
+        self.assertIn("a.py:9 off by one in range end", ns["prompt"])
+
+    def test_bug_sweep_skips(self):
+        out = [self._f("off by one", 9, "important")]
+        r, calls = self._run([], bug_out=out)                                # auto: no --budget, no sweep
+        self.assertNotIn("bug_sweep", [c["kind"] for c in calls]); self.assertIn("no --budget", r["bug_sweep"]["skipped"])
+        self.assertIn("Bug sweep skipped: no --budget", V.report(r, {}))
+        r, calls = self._run([], bug_out=out, env={"CRUCIBLE_BUG_SWEEP": "1"})
+        self.assertIn("off by one", [f["title"] for f in r["findings"]])
+        r, calls = self._run([], budget=5.0, bug_out=out, env={"CRUCIBLE_BUG_SWEEP": "0"})
+        self.assertNotIn("bug_sweep", [c["kind"] for c in calls]); self.assertIn("off", r["bug_sweep"]["skipped"])
+        r, calls = self._run([], budget=5.0, bug_out=out, env={"CRUCIBLE_BUG_SWEEP_USD": "0.1"})
+        self.assertIn("under $0.30", r["bug_sweep"]["skipped"])
+        r, calls = self._run([], budget=1.0, review_cost=0.6, bug_out=out)   # the passes spent over half already
+        self.assertNotIn("bug_sweep", [c["kind"] for c in calls]); self.assertIn("over 50%", r["bug_sweep"]["skipped"])
+        r, calls = self._run([], budget=0.3, bug_out=out)                    # too little left after the nit reserve
+        self.assertIn("left after the nit reserve", r["bug_sweep"]["skipped"])
+        r, calls = self._run([], nits=None, budget=5.0, bug_out=out)         # without --nits: nothing, not even the key
+        self.assertNotIn("bug_sweep", r); self.assertNotIn("bug_sweep", [c["kind"] for c in calls])
+        self.assertNotIn("Bug sweep", V.report(r, {}))
+
+    def test_bug_sweep_stops_at_its_cap_and_caches(self):
+        # 4 passes, each sweep call $0.25: the $0.60 cap stops it after 3 (the third starts with $0.10 left)
+        r, calls = self._run([], budget=5.0, passes=4, bug_cost=0.25)
+        self.assertEqual(sum(c["kind"] == "bug_sweep" for c in calls), 3)
+        self.assertEqual((r["bug_sweep"]["passes"], r["bug_sweep"]["of"]), (3, 4))
+        from unittest import mock
+        sw = V.SubBudget(U.Budget(5.0), 0.6)
+        chs = [{"files": ["a.py"], "text": "D1"}, {"files": ["a.py"], "text": "D2"}]
+        home = tempfile.mkdtemp(prefix="crucible-home-")
+        seen = []
+
+        def fake(prompt, model, schema, cwd, budget=None, *a, **kw):
+            seen.append(kw.get("kind"))
+            if len(seen) == 1:
+                raise U.Failed("overloaded")
+            return {"findings": [self._f("off by one", 9, "critical")] * 7}, 0.1
+        with mock.patch.dict(os.environ, {"CRUCIBLE_CACHE": os.path.join(home, "c")}), mock.patch.object(V, "claude", fake):
+            got, st = V.bug_sweep(chs, [], ".", "m", sw, "o__r", "a" * 40, "b" * 40, "", ["a.py"], ["", ""],
+                                  log=lambda *_: None)
+            self.assertEqual((st["passes"], st["failed"], len(got)), (1, 1, V.BUG_SWEEP_MAX))   # extra ones cut
+            self.assertTrue(all(f["bug_sweep"] and f["source"] == "review" for f in got))
+            got, st = V.bug_sweep(chs, [], ".", "m", sw, "o__r", "a" * 40, "b" * 40, "", ["a.py"], ["", ""],
+                                  log=lambda *_: None)
+            self.assertEqual((len(seen), st["passes"]), (3, 2))                  # pass 2 cached, pass 1 retried
+            self.assertEqual(set(seen), {"bug_sweep"})
+
+    def test_bug_sweep_prompt_lists_only_its_files(self):
+        ch = {"files": ["a.py"], "text": "DIFF"}
+        raised = [self._f("in a", 3), self._f("in b", 4, file="b.py")]
+        p = V.bug_sweep_prompt("o__r", "a" * 40, "b" * 40, ch, [f for f in raised if f["file"] == "a.py"], "RULES",
+                               ["a.py", "b.py"], "CALLERS NOTE")
+        self.assertIn("a.py:3 in a", p); self.assertNotIn("in b", p)
+        for want in ("DIFF", "CALLERS NOTE", "RULES", "golden file", "still names a moved or renamed file",
+                     "in a file the diff doesn't show", "Severity definitions"):
+            self.assertIn(want, p)
+        self.assertIn("(nothing)", V.bug_sweep_prompt("o__r", "a" * 40, "b" * 40, ch, [], "", ["a.py"]))
+
+    def test_text_sites(self):
+        """TRAIN-60 dougborg #31 and Nixbug #0: the finding named the missed place in its own text, not in also_at.
+        Falsifiers both ways: a place named in a same/also/still sentence is a site; a bare reference is not."""
+        tracked = {"pkg/tools/items.py", "pkg/tools/inventory.py", "src/lib/schemas.ts", "a/util.py", "b/util.py",
+                   ".github/ci.yml"}
+        nl = lambda p: 900
+        f = {"file": "pkg/tools/inventory.py", "line": 43, "problem":
+             "The existing `_search_items_impl` (items.py:126) is decorated. The same gap exists in the variant branch "
+             "of `_update_item_impl` (items.py:541). See inventory.py:44 too.", "fix": "Decorate it, as items.py:805 does."}
+        out = V.text_sites(f, tracked, nl)
+        self.assertEqual(out["also_at"], ["pkg/tools/items.py:541"])        # not :126/:805 (no cue), not :44 (own place)
+        self.assertEqual(out["text_sites"], ["pkg/tools/items.py:541"])
+        self.assertNotIn("also_at", f)                                       # f itself untouched
+        g = {"file": "src/x.ts", "line": 129, "problem": "src/lib/schemas.ts:153 still has `ownerName: cleanString()`."}
+        self.assertEqual(V.text_sites(g, tracked, nl)["also_at"], ["src/lib/schemas.ts:153"])   # outside the diff
+        for problem in ("util.py:5 also does this.",                          # two tracked files end with it
+                        "missing.py:5 also does this.",                       # not tracked
+                        "The same flaw at src/lib/schemas.ts:0.",             # no line 0
+                        "Nothing to see at src/lib/schemas.ts:153 here.",     # no cue word
+                        "Still wrong in PR_DRAFT.md:3."):
+            self.assertNotIn("also_at", V.text_sites({"file": "z.py", "line": 1, "problem": problem}, tracked, nl), problem)
+        self.assertNotIn("also_at", V.text_sites({"file": "z.py", "line": 1, "problem": "same at schemas.ts:999"},
+                                                 tracked, lambda p: 200))     # past the end of the file
+        self.assertEqual(V.text_sites({"file": "z.py", "line": 1, "problem": "same in ./.github/ci.yml:4"}, tracked,
+                                      nl)["also_at"], [".github/ci.yml:4"])
+        listed = {"file": "z.py", "line": 1, "also_at": ["src/lib/schemas.ts:152"], "problem": "same at schemas.ts:153"}
+        self.assertNotIn("text_sites", V.text_sites(listed, tracked, nl))   # already a site (within 3 lines)
+        many = {"file": "z.py", "line": 1, "also_at": [f"q.py:{i}" for i in range(V.MAX_SITES)],
+                "problem": "same at schemas.ts:153"}
+        self.assertNotIn("text_sites", V.text_sites(many, tracked, nl))     # no room left
+        wrong_if = {"file": "z.py", "line": 1, "problem": "p", "wrong_if": "the same holds at schemas.ts:153"}
+        self.assertNotIn("also_at", V.text_sites(wrong_if, tracked, nl))    # only the problem and fix are read
+
+    def test_text_sites_reach_the_verifier_and_stay_only_when_held(self):
+        files = ({"a.py": "x = 1\n", "s.py": "".join(f"s{i} = {i}\n" for i in range(9))},
+                 {"a.py": "x = 2\n" + "".join(f"y{i} = {i}\n" for i in range(30))})
+        prob = "s.py:4 still divides by the count. The helper at s.py:8 is fine."
+        r, calls = self._run([], repo_files=files, finding_problem=prob, sites_hold=["s.py:4"])
+        f = next(x for x in r["findings"] if x["title"] == "division by zero in f")
+        self.assertEqual((f["also_at"], f["text_sites"]), (["s.py:4"], ["s.py:4"]))
+        vp = next(c["prompt"] for c in calls if c["kind"] in ("verify", "verify_cheap"))
+        self.assertIn("The same flaw is also claimed at: s.py:4.", vp)
+        r, _ = self._run([], repo_files=files, finding_problem=prob, sites_hold=[])
+        self.assertNotIn("also_at", next(x for x in r["findings"] if x["title"] == "division by zero in f"))
+        r, calls = self._run([], nits=None, repo_files=files, finding_problem=prob, sites_hold=["s.py:4"])
+        f = next(x for x in r["findings"] if x["title"] == "division by zero in f")
+        self.assertNotIn("also_at", f); self.assertNotIn("text_sites", f)   # without --nits: unchanged
 
     def test_sweep_prompt_lists_only_its_files_and_caps_the_list(self):
         ch = {"files": ["a.py"], "text": "DIFF"}
