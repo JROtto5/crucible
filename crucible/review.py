@@ -2238,8 +2238,9 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                     f["line"] = readiness.draft_file_line(draft_full, f["line"])
                 nit_cands.append(f)
         if nits:                                       # the bug sweep: a review call, so before tok_split
-            # it runs before verification, so it leaves what verifying the findings already raised should cost
-            keep = BUG_SWEEP_VERIFY_EST_USD * sum(f.get("source") == "review" for f in cands + reverify)
+            # it runs before verification, so it leaves what verifying the findings already raised should cost,
+            # and one pass's worth of its own (blocking findings verify against the whole budget, nit reserve included)
+            keep = BUG_SWEEP_VERIFY_EST_USD * (sum(f.get("source") == "review" for f in cands + reverify) + BUG_SWEEP_MAX)
             room = HeldBudget(budget, pass_hold + keep) if budget.limit is not None else budget
             skip = ("small tier" if record.get("small_tier") else "no pass was reviewed" if not sweep_chunks else
                     bug_sweep_skip_reason(budget.limit, budget.spent, room.remaining()))
@@ -2252,7 +2253,6 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 found, record["bug_sweep"] = bug_sweep(sweep_chunks, cands + carried + reverify + nit_cands, repo,
                                                        review_model, sub, project, sha, base, rules, all_files,
                                                        sweep_notes, fresh, log)
-                record["bug_sweep"]["findings"] = len(found)
                 review_cost += sub.own
                 cands += found
         tok_split = (tok_before, budget.token_snapshot())
@@ -2294,6 +2294,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         if ruled:
             log(f"  {len(ruled)} description-length finding(s) left to the length check, not verified")
         to_verify = [f for f in new if f["source"] == "review"] + reverify
+        if "passes" in record.get("bug_sweep", {}):    # what reached verification, after dedupe and the carried filter
+            record["bug_sweep"]["findings"] = sum(1 for f in to_verify if f.get("bug_sweep"))
         for f in to_verify:                            # replays of routing rules need the reviewer's own severity
             f.setdefault("proposed_severity", f["severity"])
         kept, dropped = [f for f in new if f["source"] in ("scanner", "style")] + carried, list(carried_dropped) + ruled

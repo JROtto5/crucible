@@ -7888,6 +7888,9 @@ class TestNitTier(unittest.TestCase):
         self.assertIn("Bug sweep skipped: no --budget", V.report(r, {}))
         r, calls = self._run([], bug_out=out, env={"CRUCIBLE_BUG_SWEEP": "1"})
         self.assertIn("off by one", [f["title"] for f in r["findings"]])
+        r, _ = self._run([], bug_out=[self._f("division by zero in f", 1, "important")] + out,
+                         env={"CRUCIBLE_BUG_SWEEP": "1"})
+        self.assertEqual(r["bug_sweep"]["findings"], 1)        # a restated raised finding is merged, not counted
         r, calls = self._run([], budget=5.0, bug_out=out, env={"CRUCIBLE_BUG_SWEEP": "0"})
         self.assertNotIn("bug_sweep", [c["kind"] for c in calls]); self.assertIn("off", r["bug_sweep"]["skipped"])
         r, calls = self._run([], budget=5.0, bug_out=out, env={"CRUCIBLE_BUG_SWEEP_USD": "0.1"})
@@ -7929,10 +7932,12 @@ class TestNitTier(unittest.TestCase):
     def test_bug_sweep_leaves_the_raised_findings_verification(self):
         """Self-review round 1: at a small budget the sweep took what verified the first pass's blocking findings."""
         r, calls = self._run([], budget=1.5, passes=2, review_cost=0.25, bug_cost=0.3, findings=4, blocking=2)
-        # 2 passes x 4 findings = 8 to verify at $0.10: $0.80 kept back, plus the $0.225 nit hold, leaves $0.0
+        # 2 passes x 4 findings = 8 to verify, + 5 of the sweep's own, at $0.10: $1.30 kept back, + the $0.225 nit hold
         self.assertNotIn("bug_sweep", [c["kind"] for c in calls])
         self.assertIn("the raised findings' verification", r["bug_sweep"]["skipped"])
         self.assertTrue(all(f["verification"]["status"] == "verified" for f in r["findings"] if f["severity"] in U.BLOCKING))
+        r, calls = self._run([], budget=2.0, passes=2, review_cost=0.1, bug_cost=0.3, findings=4, blocking=2)
+        self.assertIn("the raised findings' verification", r["bug_sweep"]["skipped"])   # $1.80 - $0.30 - $1.30 < $0.30
         r, calls = self._run([], budget=5.0, passes=2, review_cost=0.25, bug_cost=0.3, findings=4, blocking=2)
         self.assertEqual(sum(c["kind"] == "bug_sweep" for c in calls), 2)    # a $5 budget leaves room
         self.assertTrue(all(f["verification"]["status"] == "verified" for f in r["findings"] if f["severity"] in U.BLOCKING))

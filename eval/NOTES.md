@@ -1722,6 +1722,87 @@ claim precision, not detection; measure any fix on the held-out set, never on th
 
 Spend: R7 $60.78 (dev, incl. 2 cut attempts), held-out $100.23, judges on the same accounts.
 
+### 2026-11-25 · a TRAIN/FINAL split, TRAIN's high misses by class, and two levers (bug sweep, text-named sites)
+
+**Why.** R7's sealed held-out 50 scored high F1 58.3 (≈ #23 of 25) against 71.2 on the 25 dev PRs that every change
+since R4 was tuned on: precision held (~93), recall on unseen PRs fell 16 points. Dev is now for diagnosis only.
+
+**Split (blaze-3, `corpus/train60/`, `corpus/final84/`).** The pool is the 144 manifest PRs in neither the test set nor
+heldout50. `random.Random(20261124).sample(pool, 60)` is TRAIN; the other 84 are FINAL, frozen read-only (mode 444 in
+a 555 directory) for the submission decision only: no run on FINAL without johnr's go, and nobody reads its golden
+items or per-PR results. TRAIN: 60 PRs from 56 repos, 30 golden high items on 17 PRs. Manifest indices: 2 5 7 8 13 19
+25 29 34 37 46 50 52 54 57 58 61 64 65 68 69 71 76 86 88 90 92 95 97 99 102 103 107 109 110 114 123 128 129 135 141
+142 143 151 157 160 163 171 174 178 180 181 182 192 199 204 209 210 211 215. sha256: train60/SEAL.json 4da389d7fdc0…,
+final84/SEAL.json 056d7b9ca816…, final84.json 3fbf0e8280d4….
+
+**TRAIN baseline (crucible main 8a5d035 = R7 + field reads, image `crucible-rb:r8a`, R7's harness: `--nits`, budget 5,
+1 round, Sonnet 5 judge; account #18; `runs/r8base`, results.details.json sha256 590b1d4d3510…).** The judge errored
+on 3 PRs on its first pass (a classifier timeout, two invalid matcher JSON replies) and finished on a resume.
+| | R7 dev (25) | held-out 50 | **TRAIN 60, base** |
+|---|---|---|---|
+| high: grounded P / R / F1 (macro) | 91.7 / 58.2 / 71.2 | 92.9 / 42.5 / 58.3 | **100.0 / 57.9 / 73.4** |
+| high: micro R, Wilson 95% | 24/36 [50.3, 79.8] | 23/60 [27.1, 51.0] | **17/30 = 56.7 [39.2, 72.6]** |
+| high: micro P, Wilson 95% | 24/25 | 20/21 | 14/14 = 100.0 [78.5, 100.0] |
+| all: grounded P / R / F1 (macro) | 90.4 / 58.9 / 71.3 | 83.3 / 49.7 / 62.3 | 82.4 / 48.2 / 60.8 |
+| all: micro P / R | 176/194, 200/352 | 239/297, 264/579 | 297/365 = 81.4 [77.1, 85.0], 337/719 = 46.9 [43.2, 50.5] |
+| $ per PR | mean 2.14 | mean 1.99 | mean 2.21, median 1.76, max 5.28 (total 132.36) |
+Board (High, fetched 11-24, unchanged since 11-19): #4 Copilot 75.7, #5 Laude RevEngine 73.3, #6 72.7. TRAIN base
+73.4 ≈ #5 by 0.1, on 17 PRs with a high item: the interval is wide, and the held-out 50 (58.3) says this set is easier
+than the next unseen one, or that one round's luck is large. Either way TRAIN is for choosing levers, not for a rank.
+
+**TRAIN's 13 missed high items by class** (`tmp/misses.py`, every item read by hand against the stored review.json;
+10 PRs, 10 repos; one primary class each):
+| class | items | repos | items (what crucible had) |
+|---|---|---|---|
+| right line, another claim | 4 | 4 | nestjs-yalc #0 (guid never supplied: crucible had check-then-insert and raw Error at the lines), dotnet/android #0 (designer unresolved, library silently not rewritten: a comment nit at :66), obot #0 (CreateCredential on an existing credential fails: partial-update nit at :197), ia-dev-environment #28 (golden fixtures not updated: a frontmatter nit at :1) |
+| no finding in the file | 5 | 4 | Maui #3 (Tizen throws synchronously out of a discarded ValueTask), agent-orchestrator #4 and #17 (a moved script still names `packages/agent-orchestrator/bin/ao.js`), entebus #32 (dashboard URL now passes the raw id that consumer pages compare with `COMP-001`), swarmbase #43 (snapshot path never fires update handlers; budget-exhausted PR) |
+| wrong file: the place named in the finding's own text, not cited | 2 | 2 | entebus #0 (kept twice at the callers, both texts say "src/lib/schemas.ts:153 still has ownerName", a file the diff doesn't touch), katana #31 (kept at inventory.py:43, text: "the same gap exists in ... `_update_item_impl` (items.py:541)") |
+| dropped by the budget (file never reviewed) | 2 | 1 | mississippi #16, #20 (24 passes, $5.28; both files in coverage.missing; #16's twin was found in McpSagaToolsGenerator.cs) |
+| dropped by verification | 0 | 0 | |
+| nit tier starved | 0 | 0 | 3 PRs kept 0 nits, none held a missed high item; 16 of 17 found high items came from findings, 1 from a nit, 0 from the nit sweep |
+| language or ecosystem | 0 (primary) | | C# is 4 of 13 (Maui, mississippi x2, dotnet) |
+Across repos the first three classes cover 11 of 13 items in 10 repos. The 9 never-raised items (first two rows) are
+detection: the reviewer read the file and stopped. dedupe merged no distinct claim (checked: the 54 merges in TRAIN
+are restatements). Budget is one repo, so no lever for it.
+
+**Lever 1, text-named sites (`text_sites`, $0).** A finding's problem or fix names a place in a sentence with a
+same/also/still word: that place goes to also_at (a tracked file at HEAD, by full path or a suffix only one file has,
+a real line, not the item's own place or a listed site within 3 lines), also outside the diff, and the verifier checks
+it like any site. Replay of the shipped function on stored kept findings (a place "reaches" a golden item at the same
+file within its span ±3):
+| variant | TRAIN places (on missed high / other missed tp / covered / golden-fp / none) | R7 dev places |
+|---|---|---|
+| any path:line in problem+fix, findings and nits | 175 (3 / 8 / 10 / 9 / 145) | not run |
+| + only in a same/also/still sentence | 42 (3 / 2 / 5 / 2 / 30) | not run |
+| **shipped: + findings only** | **17 on 13 PRs (3 on 2 items: entebus #0 x2, katana #31 / 1 / 2 / 0 / 11)** | 10 (0 / 2 / 0 / 2 / 6) |
+Expected if the verifier holds them and the judge matches: +2 of TRAIN's 30 high items. The 2 golden-false places on
+dev (figlet, PROTRIDER) are the precision risk; R8 measures it.
+
+**Lever 2, the bug sweep (no $0 replay possible: it is a new model call).** After the review passes, while they spent
+at most half the budget and the room after the nit reserve and an estimate of verifying the raised findings ($0.10
+each, plus 5 for the sweep's own) is $0.30 or more, one more review call per pass (riskiest first, own $0.60 cap)
+lists every raised item and asks for up to 5 blocking bugs it missed, in the two places the first look stopped: a
+second, different bug at a flagged line, and code the diff only reaches (a schema, page or config reading what the
+change altered, a string naming a moved file, a golden fixture, a sibling platform file, a caller of a method that now
+throws). Its findings are verified one by one. The nit sweep exists already, but it asks for smaller problems and
+carried 0 of TRAIN's and 1 of R7's credited high items. Tagged `bug_sweep` in review.json, so R8 can count what it
+carried.
+
+**Eval** (`crucible eval --nits --no-write --jobs 3`, all 41 cases, crucible-rb:r6f with the 3d7037d source mounted,
+account #16, $19.94, 4,667 s): recall **0.958** (build 21/22, holdout 2/2; 11-23: 0.958), any severity 1.0, false
+blocking **0 on 9 clean cases**. Nit cases 22/22 planted issues, false blocking 3 (maintainability-cross 2,
+reliability 1: the two cases that flip between runs, 11-19 2-3, 11-23 2). True findings dropped 5 (11-23: 1), all on
+bug cases whose planted bug another kept finding caught: the sweep restating a caught bug with a mechanism the
+verifier refuted. Nits kept 145 (27 on clean cases; 11-23: 13). Round 2 below only makes the sweep run less (it also
+leaves 5 of its own findings' verification), so the false-blocking count can't rise from it; the eval wasn't repeated.
+
+Self-review round 1 (5a2a2b8): NOT_GREEN, 2 medium + 2 low. The sweep took the budget that verified the first pass's
+blocking findings at a small budget (probe at $1.50: all four unverified): it now leaves $0.10 per raised finding;
+no eval recorded (above); the knobs were missing from the `--nits` help and the bench README (added); carried and
+re-verified findings weren't in the sweep's raised list on an incremental round (added, with an incremental test).
+Round 2 (3d7037d): NOT_GREEN, 1 medium + 2 low. This NOTES section didn't exist yet (written); the sweep's own blocking
+findings could verify into the nit reserve (it now also leaves 5 of its own); the report counted sweep findings before
+dedupe (now those that reach verification). Each fix has a test that fails without it (mutation-checked).
 ### 2026-11-25 · field reads on the sealed held-out 50: Step 1 of the pre-registered paired arm ($0)
 
 **Switch.** `CRUCIBLE_NO_FIELD_READS=1` makes `fields_note` return "" (62a75e0, test mutation-checked; `modelreplay`
