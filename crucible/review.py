@@ -491,7 +491,7 @@ def nit_sweep(sweep_chunks, raised, repo, model, budget, project, sha, base, rul
 
 
 # The bug sweep (--nits): a second look for blocking bugs, from the TRAIN-60 split's high-severity misses (eval/NOTES
-# 2026-11-25). The nit sweep above asks for smaller problems and almost never carried a high item (1 of 49 credited
+# 2026-11-24). The nit sweep above asks for smaller problems and almost never carried a high item (1 of 49 credited
 # in runs 7 and TRAIN), while 16 of 17 TRAIN high items came from findings. Of 13 missed high items, 4 (4 repos) sat on
 # a line where a kept item reported another flaw, and 5 (4 repos) had no item in their file, most of them in code the
 # diff only reaches: a schema or page that reads what the change altered, a path the change moved, a golden fixture
@@ -1185,11 +1185,12 @@ def sites_note(f):
 
 # Text-named sites (--nits, $0): a finding whose own text says the flaw is at another place too ("the same gap exists in
 # `_update_item_impl` (items.py:541)", "src/lib/schemas.ts:153 still has `ownerName`") but leaves also_at empty. On
-# the TRAIN-60 split's stored output (eval/NOTES 2026-11-25) 2 of 13 missed high items (2 repos) were named that way,
+# the TRAIN-60 split's stored output (eval/NOTES 2026-11-24) 2 of 13 missed high items (2 repos) were named that way,
 # one of them in a file the diff doesn't touch, where the fix goes. Only a sentence with a "same/also/still" word
 # counts: the bare references around it are mostly the code a finding compares with ("_search_items_impl (items.py:126)
-# is decorated"). Measured on findings: 16 places, 3 on 2 missed high items, 10 on no golden item; every place still
+# is decorated"). Replayed on findings: 17 places on 13 PRs, 3 on the 2 missed high items, 11 on no golden item; every place still
 # goes to the verifier (sites_note) and is reported only if it holds there, so a wrong one costs verifier tokens.
+# In-sample: the 2 items chose the rule; the held-out set measures it.
 TEXT_REF_RX = re.compile(r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.[A-Za-z]\w{0,9}):(\d+)(?:-\d+)?")
 TEXT_SITE_CUE = re.compile(r"\b(same|also|still|too|again|as well|likewise|repeats?|identical)\b", re.I)
 TEXT_SITE_NEAR = 3                   # a place this close to the item's own or a listed site is that site
@@ -2381,8 +2382,10 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             extra = 0.0
             hold = nits_reserve_usd(budget.limit, len(nit_pool(nit_cands, cands + carried + reverify, dlabel, measured)))
             left = None if budget.limit is None else max(0.0, budget.remaining() - hold - NIT_BATCH_EST_USD)
+            # its 50% rule reads the spend before the bug sweep, so the one can't switch the other off
+            first = budget.spent - (record.get("bug_sweep") or {}).get("cost_usd", 0.0)
             skip = ("small tier" if record.get("small_tier") else
-                    sweep_skip_reason(budget.limit, budget.spent, left) if sweep_chunks else "no pass was reviewed")
+                    sweep_skip_reason(budget.limit, first, left) if sweep_chunks else "no pass was reviewed")
             if skip:
                 record["nit_sweep"] = {"skipped": skip}
             else:

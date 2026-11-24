@@ -1722,7 +1722,7 @@ claim precision, not detection; measure any fix on the held-out set, never on th
 
 Spend: R7 $60.78 (dev, incl. 2 cut attempts), held-out $100.23, judges on the same accounts.
 
-### 2026-11-25 · a TRAIN/FINAL split, TRAIN's high misses by class, and two levers (bug sweep, text-named sites)
+### 2026-11-24 · a TRAIN/FINAL split, TRAIN's high misses by class, and two levers (bug sweep, text-named sites)
 
 **Why.** R7's sealed held-out 50 scored high F1 58.3 (≈ #23 of 25) against 71.2 on the 25 dev PRs that every change
 since R4 was tuned on: precision held (~93), recall on unseen PRs fell 16 points. Dev is now for diagnosis only.
@@ -1775,7 +1775,8 @@ file within its span ±3):
 | any path:line in problem+fix, findings and nits | 175 (3 / 8 / 10 / 9 / 145) | not run |
 | + only in a same/also/still sentence | 42 (3 / 2 / 5 / 2 / 30) | not run |
 | **shipped: + findings only** | **17 on 13 PRs (3 on 2 items: entebus #0 x2, katana #31 / 1 / 2 / 0 / 11)** | 10 (0 / 2 / 0 / 2 / 6) |
-Expected if the verifier holds them and the judge matches: +2 of TRAIN's 30 high items. The 2 golden-false places on
+Expected if the verifier holds them and the judge matches: +2 of TRAIN's 30 high items, in-sample (those 2 items
+chose the rule); the held-out run measures it. The 2 golden-false places on
 dev (figlet, PROTRIDER) are the precision risk; R8 measures it.
 
 **Lever 2, the bug sweep (no $0 replay possible: it is a new model call).** After the review passes, while they spent
@@ -1803,6 +1804,11 @@ re-verified findings weren't in the sweep's raised list on an incremental round 
 Round 2 (3d7037d): NOT_GREEN, 1 medium + 2 low. This NOTES section didn't exist yet (written); the sweep's own blocking
 findings could verify into the nit reserve (it now also leaves 5 of its own); the report counted sweep findings before
 dedupe (now those that reach verification). Each fix has a test that fails without it (mutation-checked).
+Round 3 (59ae81d): NOT_GREEN, 1 medium + 5 low. The eval ran on 3d7037d, before round 2's reserve, which at the eval's
+$1.50 budget turns many cases' sweep off (re-run on the final source, below); this section was dated 11-25 (fixed); the
+bug sweep's spend counted toward the nit sweep's 50% rule and could switch it off (the rule now reads the spend before
+the bug sweep; test, mutation-checked); the code comment said 16 places where the replay of the shipped function
+says 17 (fixed); the +2 estimate is in-sample (said so).
 ### 2026-11-25 · field reads on the sealed held-out 50: Step 1 of the pre-registered paired arm ($0)
 
 **Switch.** `CRUCIBLE_NO_FIELD_READS=1` makes `fields_note` return "" (62a75e0, test mutation-checked; `modelreplay`

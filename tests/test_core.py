@@ -7942,6 +7942,14 @@ class TestNitTier(unittest.TestCase):
         self.assertEqual(sum(c["kind"] == "bug_sweep" for c in calls), 2)    # a $5 budget leaves room
         self.assertTrue(all(f["verification"]["status"] == "verified" for f in r["findings"] if f["severity"] in U.BLOCKING))
 
+    def test_bug_sweep_spend_does_not_switch_the_nit_sweep_off(self):
+        """Self-review round 3: passes at $2.20 of $5, then a $0.35 bug sweep; the nit sweep's 50% rule reads $2.20."""
+        r, calls = self._run([], budget=5.0, review_cost=2.2, bug_cost=0.35)
+        kinds = [c["kind"] for c in calls]
+        self.assertIn("bug_sweep", kinds); self.assertIn("nit_sweep", kinds)
+        r, calls = self._run([], budget=5.0, review_cost=2.6, bug_cost=0.35)   # the passes alone spent over half
+        self.assertNotIn("nit_sweep", [c["kind"] for c in calls]); self.assertIn("over 50%", r["nit_sweep"]["skipped"])
+
     def test_bug_sweep_prompt_lists_only_its_files(self):
         ch = {"files": ["a.py"], "text": "DIFF"}
         raised = [self._f("in a", 3), self._f("in b", 4, file="b.py")]
