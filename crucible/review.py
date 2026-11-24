@@ -1,6 +1,6 @@
 """The review pipeline: checks → scanners → chunked review → per-finding verification → verdict."""
 import concurrent.futures as cf, datetime as dt, fcntl, hashlib, os, re, subprocess, textwrap, threading
-from . import callsites, catalog, checks as checks_mod, diff as diff_mod, docrefs, readiness, routing, style as style_mod
+from . import callsites, catalog, checks as checks_mod, diff as diff_mod, docrefs, fieldreads, readiness, routing, style as style_mod
 from .util import (BLOCKING, BUDGET_EXHAUSTED, HOME, MODELS, PREFERENCE, SEV, TOOLS_READ, TOOLS_RUN, Budget, Failed, NoStructuredOutput,
                    claude, crucible_build, default_base,
                    exclude_locally, git, is_dirty, norm_words, project_dir, project_key, read_json, review_dir,
@@ -1464,6 +1464,20 @@ def callers_note(repo, base, sha, files, ch):
         return ""
 
 
+def fields_note(repo, sha, files, ch):
+    """The --nits prompt's list of fields this pass's files read that nothing writes, each beside a similar name the
+    change writes and nothing reads (crucible.fieldreads); "" when there are none or the search fails. files: the
+    whole change, so a writer in a file another pass reviews still counts."""
+    try:
+        rows = fieldreads.mismatches(repo, files, lambda p: git_blob(repo, sha, p), set(ch["files"]))
+        if not rows:
+            return ""
+        text = {(f["path"], n): t for f in files for h in f["hunks"] for k, t, _, n in h["lines"] if k == "+"}
+        return fieldreads.note(rows, text)
+    except Exception:
+        return ""
+
+
 def is_ancestor(repo, a, b):
     return subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", a, b], capture_output=True).returncode == 0
 
@@ -2001,7 +2015,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             since = since_note(prev_sha, record["incremental"]["amended"], ch, full_texts, base) if prev_sha else ""
             docs = docs_note(repo, sha, dfiles if prev_sha else files, ch, files) if nits else ""
             if nits:
-                docs = "\n".join(x for x in (callers_note(repo, base, sha, files, ch), docs) if x)
+                docs = "\n".join(x for x in (callers_note(repo, base, sha, files, ch), fields_note(repo, sha, files, ch),
+                                              docs) if x)
             prompt = review_prompt(project, sha, base, ch, rules, mem, facts, clog, all_files, house,
                                    draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured, since, nits, docs)
             # keyed on the prompt with check output reduced to outcomes: a template change invalidates the cache, but
