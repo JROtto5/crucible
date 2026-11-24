@@ -9008,7 +9008,12 @@ class TestFieldReads(unittest.TestCase):
             self.assertEqual(len(rows), 1, path)
         _, _, rows = self._rows({"src/Form.tsx": self.FORM, "src/s3.ts": self.ADAPTER},
                                 base={"src/types.ts": "export interface S3 {\n  accessKeyId: string,\n}\n"})
-        self.assertEqual(len(rows), 1)                    # nor is one already in the checkout
+        for decl in ("export interface S3 {\n  accessKeyId: string,\n}\n",
+                     "export const save = (k) => saveConfig({ accessKeyId: k });\n",
+                     "export const f = (c: { accessKeyId: string }) => c;\n"):
+            _, _, rows = self._rows({"src/Form.tsx": self.FORM, "src/s3.ts": self.ADAPTER},
+                                    base={"src/types.ts": decl})
+            self.assertEqual(len(rows), 1, decl)          # nor is one already in the checkout
 
     def test_similar_names(self):
         from crucible import fieldreads

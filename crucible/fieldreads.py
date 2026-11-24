@@ -97,11 +97,10 @@ def mismatches(repo, files, read_text, paths=None):
 
     def is_orphan(w):
         if w not in orphan:
-            rx, plain = _reads_rx(w), _reads_rx(w, plain=True)
-            own = set(written[w])                  # a line that writes the name reads it only in a plain read
-            lines = [(p2, n2, t) for p2, n2, t in added] + [
-                (p2, n2, t) for p2, n2, t in _grep(repo, [w], CODE_SPECS) if not COMMENT_RX.match(t)]
-            orphan[w] = not any((plain if (p2, n2) in own else rx).search(t) for p2, n2, t in lines)
+            rx, plain, wrx = _reads_rx(w), _reads_rx(w, plain=True), _writes_rx(w)
+            # a line that writes the name, in the change or already in the checkout, reads it only in a plain read
+            lines = [t for _, _, t in added] + [t for _, _, t in _grep(repo, [w], CODE_SPECS) if not COMMENT_RX.match(t)]
+            orphan[w] = not any((plain if wrx.search(t) else rx).search(t) for t in lines)
         return orphan[w]
 
     for p, n, t in added:

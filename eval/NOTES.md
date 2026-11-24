@@ -1649,3 +1649,7 @@ own reader, in the change or the grep), four falsifiers, mutation-checked. R6 1,
 Round 4 ($0.19, review56): NOT_GREEN, 1 low: whole write lines left the reader search, so a same-line read
 (`{ accessKeyId: c.accessKeyId }`, a rename destructure) went unseen. A write line now counts through a plain read;
 two falsifiers, mutation-checked against both earlier behaviours. R6 1, commits 0.
+Round 5 ($0.25, review57): NOT_GREEN, 2 lows: a write line already in the checkout (`saveConfig({ accessKeyId: k })`,
+`(c: { accessKeyId: string }) =>`) still read with the full pattern and silenced the pair (now any line matching the
+write pattern reads only through a plain read; three checkout falsifiers, mutation-checked); and the CHANGELOG's
+falsifier count was stale and the entry carried the round narration (rewritten; the rounds live here).
