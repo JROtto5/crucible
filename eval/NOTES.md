@@ -1826,6 +1826,12 @@ verifier refuted the restatement. Fix (after the cap, tested and mutation-checke
 nits (medium at most, `verified_severity` keeps the verifier's grade; refuted or unsettled ones are dropped nits), and
 dedupe keeps the first pass's item as the representative. The R8-train run on d733daf was stopped after 3 PRs ($12.44)
 and restarted on the fixed build.
+
+**Eval on fb540f5, the shipped build** (same setup, account #18, $19.01, 4,428 s): recall **0.917** (build 20/22,
+holdout 2/2; js-refcount at medium as since 11-04, py-race found and kept at medium: its known severity flip, 11-11 and
+11-12, not the sweep, which no longer touches findings), any severity **1.0**, false blocking **0 on 9 clean cases**.
+Nit cases 22/22 planted issues, false blocking 3 (earlier-commit, maintainability-cross, reliability: 1 each; 11-23: 2).
+True dropped 2. Nits kept 146 (22 on clean cases). Passes the bar (recall ≥ 0.913, 0 false blocking on clean cases).
 ### 2026-11-25 · field reads on the sealed held-out 50: Step 1 of the pre-registered paired arm ($0)
 
 **Switch.** `CRUCIBLE_NO_FIELD_READS=1` makes `fields_note` return "" (62a75e0, test mutation-checked; `modelreplay`
