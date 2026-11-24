@@ -2785,6 +2785,50 @@ class TestRunReviewIncremental(unittest.TestCase):
                     os.environ["CRUCIBLE_CACHE"] = olds[3]
 
 
+class TestBugSweepIncremental(unittest.TestCase):
+    """Self-review round 1: on an incremental round the bug sweep is told about the re-verified findings too, as the
+    nit sweep is, so it doesn't pay to raise them again."""
+
+    def test_reverified_finding_is_listed(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            repo, home = os.path.join(d, "r"), os.path.join(d, "home")
+            os.makedirs(repo)
+            env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t",
+                       GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+            g = lambda *a: subprocess.run(["git", "-C", repo, *a], check=True, capture_output=True, env=env)
+            w = lambda p, t: open(os.path.join(repo, p), "w").write(t)
+            g("init", "-q", "-b", "main"); w("a.js", "export const a = 1;\n"); g("add", "-A"); g("commit", "-qm", "base")
+            g("checkout", "-qb", "x"); w("a.js", "export const a = 1;\nexport function f(xs) { return xs[xs.length]; }\n")
+            g("commit", "-qam", "add f")
+            sweeps, rnd = [], [1]
+
+            def fake(prompt, model, schema, cwd, budget=None, *a, **kw):
+                if kw.get("kind") == "bug_sweep":
+                    sweeps.append(prompt)
+                    return {"findings": []}, 0.0
+                if kw.get("kind") == "nit_sweep":
+                    return {"nits": []}, 0.0
+                if "findings" in schema["properties"]:
+                    found = [{"severity": "important", "file": "a.js", "line": 2, "title": "f reads past the end",
+                              "problem": "xs[xs.length]", "caused_by_this_change": True, "reachable_in_real_use": True,
+                              "wrong_if": "index < length", "fix": "length - 1"}] if rnd[0] == 1 else []
+                    return {"summary": "s", "findings": found, "nits": []}, 0.01
+                return {"keep": True, "severity": "important", "method": "read", "actions": "read", "evidence": "seen",
+                        "confidence": "high"}, 0.001
+            with mock.patch.object(V, "HOME", home), mock.patch.object(U, "HOME", home), mock.patch.object(V, "claude", fake), \
+                    mock.patch.dict(os.environ, {"CRUCIBLE_CACHE": os.path.join(home, "c"), "CRUCIBLE_BUG_SWEEP": "1"}):
+                V.run_review(repo, "main", offline=True, skip_checks=True, log=lambda *_: None, nits=True)
+                rnd[0] = 2
+                w("a.js", "export const a = 1;\nexport function f(xs) { return xs[xs.length] ?? null; }\n")
+                g("commit", "-qam", "touch f")
+                d2 = V.run_review(repo, "main", offline=True, skip_checks=True, log=lambda *_: None, nits=True)
+                r2 = U.read_json(os.path.join(d2, "review.json"))
+            self.assertEqual(r2["incremental"]["reverified"], 1)
+            self.assertEqual(len(sweeps), 2)
+            self.assertIn("a.js:2 f reads past the end", sweeps[1])          # listed although round 2 didn't raise it
+
+
 class TestLaterTouched(unittest.TestCase):
     """later_touched: a previous round's verifier drop is stamped with whether the change since touched its line."""
 
@@ -7881,6 +7925,17 @@ class TestNitTier(unittest.TestCase):
                                   log=lambda *_: None)
             self.assertEqual((len(seen), st["passes"]), (3, 2))                  # pass 2 cached, pass 1 retried
             self.assertEqual(set(seen), {"bug_sweep"})
+
+    def test_bug_sweep_leaves_the_raised_findings_verification(self):
+        """Self-review round 1: at a small budget the sweep took what verified the first pass's blocking findings."""
+        r, calls = self._run([], budget=1.5, passes=2, review_cost=0.25, bug_cost=0.3, findings=4, blocking=2)
+        # 2 passes x 4 findings = 8 to verify at $0.10: $0.80 kept back, plus the $0.225 nit hold, leaves $0.0
+        self.assertNotIn("bug_sweep", [c["kind"] for c in calls])
+        self.assertIn("the raised findings' verification", r["bug_sweep"]["skipped"])
+        self.assertTrue(all(f["verification"]["status"] == "verified" for f in r["findings"] if f["severity"] in U.BLOCKING))
+        r, calls = self._run([], budget=5.0, passes=2, review_cost=0.25, bug_cost=0.3, findings=4, blocking=2)
+        self.assertEqual(sum(c["kind"] == "bug_sweep" for c in calls), 2)    # a $5 budget leaves room
+        self.assertTrue(all(f["verification"]["status"] == "verified" for f in r["findings"] if f["severity"] in U.BLOCKING))
 
     def test_bug_sweep_prompt_lists_only_its_files(self):
         ch = {"files": ["a.py"], "text": "DIFF"}

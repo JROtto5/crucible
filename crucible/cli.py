@@ -272,7 +272,9 @@ def main(argv=None):
                    "never change the verdict; CRUCIBLE_NITS=1; their verification is capped by CRUCIBLE_NITS_MAX_USD, "
                    "default $0.75). With a --budget, a review that spent at most half of it also gets a nit-only "
                    "second look at each pass (CRUCIBLE_NITS_SWEEP=0 turns it off, =1 runs it without a budget; "
-                   "capped by CRUCIBLE_NITS_SWEEP_USD, default $0.75)")
+                   "capped by CRUCIBLE_NITS_SWEEP_USD, default $0.75), and, before verification, a second look for "
+                   "blocking bugs the passes missed, whose findings are verified like the others (CRUCIBLE_BUG_SWEEP=0 "
+                   "turns it off, =1 runs it without a budget; capped by CRUCIBLE_BUG_SWEEP_USD, default $0.60)")
     r.add_argument("--lens", action="store_true", help="run as one lens inside another reviewer: code findings only "
                    "(no PR-description, readiness or house-style items), each with a stable id, file:line and wrong_if, "
                    "written to lens.json (its path is printed; exit 3 if the review failed). Implies --offline and the "

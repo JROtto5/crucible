@@ -11,7 +11,8 @@ findings file out.
   `PR_DRAFT.md`. It also passes `--nits`: the verified non-blocking tier (batched mid-model verification, capped
   at `CRUCIBLE_NITS_MAX_USD`, default $0.75 per PR). With the budget set, a PR whose review spent at most half of it
   also gets the nit sweep, a nit-only second look at each pass (`CRUCIBLE_NITS_SWEEP_USD`, default $0.75;
-  `CRUCIBLE_NITS_SWEEP=0` turns it off for an A/B).
+  `CRUCIBLE_NITS_SWEEP=0` turns it off for an A/B), and the bug sweep before verification, a second look for blocking
+  bugs the passes missed (`CRUCIBLE_BUG_SWEEP_USD`, default $0.60; `CRUCIBLE_BUG_SWEEP=0` turns it off).
 - `to_findings.py`: maps the kept, verified findings and nits in `review.json` to the contract, most severe first, uncapped
   (`RB_CONFIG_MAX_FINDINGS=N` caps it; the first run capped at 60). PR-text findings and findings
   without a line are left out.

@@ -498,6 +498,7 @@ def nit_sweep(sweep_chunks, raised, repo, model, budget, project, sha, base, rul
 # the new output must match, a sibling platform file. The prompt names those two shapes. Its findings go through the
 # per-finding verifier like the first pass's; nothing about the verdict changes without --nits.
 BUG_SWEEP_MAX = 5                    # findings per sweep pass
+BUG_SWEEP_VERIFY_EST_USD = 0.10      # left per finding already raised: TRAIN-60 verified ~6.4 per PR for $0.66
 BUG_SWEEP_SCHEMA = {"type": "object", "properties": {"findings": {
     **FINDINGS_NITS_SCHEMA["properties"]["findings"], "maxItems": BUG_SWEEP_MAX}}, "required": ["findings"]}
 
@@ -516,8 +517,8 @@ def bug_sweep_cap_usd():
 
 
 def bug_sweep_skip_reason(limit, spent, remaining):
-    """None when the bug sweep may run; else why not. Same rules as the nit sweep (sweep_skip_reason): `remaining` is
-    what's left for review calls after the nit reserve (None: no limit)."""
+    """None when the bug sweep may run; else why not. The nit sweep's rules (sweep_skip_reason), except that `remaining`
+    is what's left after the nit reserve and an estimate of verifying the findings already raised (None: no limit)."""
     mode = bug_sweep_mode()
     if mode == "off":
         return "off (CRUCIBLE_BUG_SWEEP=0)"
@@ -528,7 +529,8 @@ def bug_sweep_skip_reason(limit, spent, remaining):
     if spent > SWEEP_SPENT_SHARE * limit:
         return f"the review passes already spent ${spent:.2f}, over {SWEEP_SPENT_SHARE:.0%} of its ${limit:.2f} budget"
     if remaining is not None and remaining < SWEEP_MIN_USD:
-        return f"${remaining:.2f} left after the nit reserve, under ${SWEEP_MIN_USD:.2f}"
+        return (f"${remaining:.2f} left after the nit reserve and the raised findings' verification, under "
+                f"${SWEEP_MIN_USD:.2f}")
     return None
 
 
@@ -2236,16 +2238,20 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                     f["line"] = readiness.draft_file_line(draft_full, f["line"])
                 nit_cands.append(f)
         if nits:                                       # the bug sweep: a review call, so before tok_split
+            # it runs before verification, so it leaves what verifying the findings already raised should cost
+            keep = BUG_SWEEP_VERIFY_EST_USD * sum(f.get("source") == "review" for f in cands + reverify)
+            room = HeldBudget(budget, pass_hold + keep) if budget.limit is not None else budget
             skip = ("small tier" if record.get("small_tier") else "no pass was reviewed" if not sweep_chunks else
-                    bug_sweep_skip_reason(budget.limit, budget.spent, pass_budget.remaining()))
+                    bug_sweep_skip_reason(budget.limit, budget.spent, room.remaining()))
             if skip:
                 record["bug_sweep"] = {"skipped": skip}
             else:
-                sub = SubBudget(pass_budget, bug_sweep_cap_usd())
+                sub = SubBudget(room, bug_sweep_cap_usd())
                 log(f"  bug sweep: a second look for blocking bugs at {len(sweep_chunks)} pass(es) ({review_model}, "
                     f"cap ${bug_sweep_cap_usd():.2f})")
-                found, record["bug_sweep"] = bug_sweep(sweep_chunks, cands + nit_cands, repo, review_model, sub, project,
-                                                       sha, base, rules, all_files, sweep_notes, fresh, log)
+                found, record["bug_sweep"] = bug_sweep(sweep_chunks, cands + carried + reverify + nit_cands, repo,
+                                                       review_model, sub, project, sha, base, rules, all_files,
+                                                       sweep_notes, fresh, log)
                 record["bug_sweep"]["findings"] = len(found)
                 review_cost += sub.own
                 cands += found
