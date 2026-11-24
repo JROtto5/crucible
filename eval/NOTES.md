@@ -1611,3 +1611,45 @@ sites. Round 4 ($0.31): NOT_GREEN, 2 lows: `with f(x) as g:`, `catch`, and `f(x)
 definitions (control words added, a chained call after the parameters is a call); a module constant, enum member,
 Go iota entry or reducer-map key in the own file didn't count as defining the name (now it does). Falsifiers both
 ways. Round 5 (2b8d324, $0.64): GREEN, no findings. Tests 508 -> 511, ruff clean. Self-review spend $2.78, eval $15.87.
+
+### 2026-11-24 · field reads nothing writes (R6 apilix #26, a never-raised high), $0 replay
+
+**The miss.** apilix #26 (high, correctness, "diff-plus-related-files"): `WorkspaceManagerModal.tsx:227-228` stores the
+S3 credentials under `accessKeyId` / `secretAccessKey`; `s3Adapter.ts` (also added by the PR) reads `config.keyId` /
+`config.secret`, so every presign gets undefined credentials. R6 kept 6 S3 items (missing IPC handler, plaintext
+credentials) and no item on the names. Same shape as BLAZE 2's class (a), a cross-file declared result.
+
+**Change (`--nits` prompt only, byte-identical when nothing fires).** `fieldreads.mismatches`: a read on an added line
+(`recv.field`, `recv["field"]`, `recv.get("field")`) whose name nothing in the change (outside the read's line) or the
+checkout writes, beside a name the change writes that shares its first or last 2+ words and that nothing reads.
+
+**Replay** (R6's 25 stored `diff.patch`; repos at head for 16, diff-only for 9; plus the last 150 non-merge commits of
+7 local clones, 1,047 commits, each grepped at HEAD):
+| variant | R6 fires (on golden high) | 1,047 commits fires |
+|---|---|---|
+| any read with a written name containing it (4+ chars), no orphan rule | 90 (1) | not run |
+| + word-boundary match, written name read nowhere, strings stripped | 28 (1) | not run |
+| + same words in another case don't count, import lines skipped | 1 (1) | 5 (all `newName: obj.oldName` on one line, or an imported module) |
+| **shipped: + a write on the read's own line doesn't count, import-bound receivers skipped, dict reads added** | **1 (1: s3Adapter.ts:35 -> WorkspaceManagerModal.tsx:227)** | **0** |
+Expected gain if the reviewer raises it and the judge matches: apilix 1 of 11 high, about +0.6 points of macro high
+recall over 14 PRs; for run 7. The secret/secretAccessKey half isn't listed (`secret: true` is written as a key in the
+form), so one pair carries it. No eval case was added: the BLAZE class-(a) cases (11-18) are already found at
+fixture size, and a two-file fixture would test the reviewer, not the note.
+Self-review round 1 ($0.73, review53): NOT_GREEN, 1 medium + 2 lows. The eval: the note fires on 0 of the 41 eval cases
+(base..change diff of each, $0), so every eval prompt is byte-identical; no run. Falsifiers moved into the checkout so
+the git grep is what silences them; a `this.`/`self.` chain and destructured/`getattr` reads added. The chain rule
+fired once on the 1,047 commits (umu c227efa9: `self.runtime.launcher_service`, a `@property`), so property, getter
+and method definitions now count as writes: R6 1 (#26), commits 0. Every guard mutation-checked.
+Round 2 ($0.60, review54): NOT_GREEN, 2 lows: parameter and wrapped destructures weren't reads; `self.` and `getattr`
+untested. Fixed (a shorthand object passed on also silences a pair: the safe side for a note), mutation-checked; R6 1,
+commits 0.
+Round 3 ($0.16, review55): NOT_GREEN, 1 medium: a declaration (`access_key_id: str`, `accessKeyId: string,`) read as a
+wrapped destructure and silenced its own pair. Fixed (bare line = `name` or `name,` only; a write site is never its
+own reader, in the change or the grep), four falsifiers, mutation-checked. R6 1, commits 0, eval cases 0 of 41.
+Round 4 ($0.19, review56): NOT_GREEN, 1 low: whole write lines left the reader search, so a same-line read
+(`{ accessKeyId: c.accessKeyId }`, a rename destructure) went unseen. A write line now counts through a plain read;
+two falsifiers, mutation-checked against both earlier behaviours. R6 1, commits 0.
+Round 5 ($0.25, review57): NOT_GREEN, 2 lows: a write line already in the checkout (`saveConfig({ accessKeyId: k })`,
+`(c: { accessKeyId: string }) =>`) still read with the full pattern and silenced the pair (now any line matching the
+write pattern reads only through a plain read; three checkout falsifiers, mutation-checked); and the CHANGELOG's
+falsifier count was stale and the entry carried the round narration (rewritten; the rounds live here).

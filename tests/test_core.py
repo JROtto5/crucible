@@ -8897,5 +8897,138 @@ class TestDoctor(unittest.TestCase):
         self.assertNotIn("claude --help", cmds)
 
 
+class TestFieldReads(unittest.TestCase):
+    """fieldreads: a field the change reads that nothing writes, beside a similar name the change writes and nothing
+    reads (R6 apilix #26: the form stores `accessKeyId`, the adapter reads `config.keyId`)."""
+    FORM = ("export const FIELDS = [\n  { key: 'bucket', label: 'Bucket' },\n"
+            "  { key: 'accessKeyId', label: 'Access Key ID', secret: true },\n];\n")
+    ADAPTER = ("export function presign(config: Record<string, string>) {\n  return sign({\n"
+               "    bucket: config.bucket,\n    keyId: config.keyId,\n  });\n}\n")
+
+    def _rows(self, new, base=None, paths=None):
+        from crucible import fieldreads
+        d = make_repo(base or {"README.md": "x\n"}, new)
+        files = D.parse(sh(d, "git", "diff", "main..fix") + "\n")
+        return d, files, fieldreads.mismatches(d, files, lambda p: V.git_blob(d, "fix", p), paths)
+
+    def test_the_apilix_pair_is_listed_with_both_ends(self):
+        from crucible import fieldreads
+        d, files, rows = self._rows({"src/Form.tsx": self.FORM, "src/s3.ts": self.ADAPTER})
+        self.assertEqual(rows, [("src/s3.ts", 4, "config.keyId", [("accessKeyId", "src/Form.tsx", 3)])])
+        note = V.fields_note(d, "fix", files, {"files": ["src/s3.ts"]})
+        self.assertIn("read config.keyId at src/s3.ts:4: keyId: config.keyId,", note)
+        self.assertIn("written accessKeyId at src/Form.tsx:3:", note)
+        self.assertIn("a finding at the read, naming the write as also_at", note)
+        self.assertEqual(V.fields_note(d, "fix", files, {"files": ["src/Form.tsx"]}), "")  # another pass's read
+        self.assertEqual(fieldreads.note([]), "")
+
+    def test_each_falsifier_silences_the_pair(self):
+        # (change files, checkout files): the last three sit in the checkout, so the git grep is what silences them
+        cases = {
+            "the reader uses the writer's name": (
+                {"src/s3.ts": self.ADAPTER.replace("config.keyId", "config.accessKeyId")}, {}),
+            "same words, another case (a serializer's job)": (
+                {"src/Form.tsx": self.FORM.replace("accessKeyId", "key_id")}, {}),
+            "the read is in a test": ({"tests/s3.test.ts": self.ADAPTER, "src/s3.ts": None}, {}),
+            "the change writes the read name": ({"src/defaults.ts": "export const D = { keyId: '' };\n"}, {}),
+            "the checkout writes the read name": ({}, {"src/defaults.ts": "export const D = { keyId: '' };\n"}),
+            "the checkout reads the written name": ({}, {"src/show.ts": "export const s = (c) => c.accessKeyId;\n"}),
+            "the checkout defines it as a property": ({}, {"src/cfg.py": "class C:\n    @property\n"
+                                                                       "    def keyId(self):\n        return 1\n"}),
+            "the checkout defines it as a getter": ({}, {"src/cfg.ts": "class C {\n  get keyId() {\n"
+                                                                    "    return 1;\n  }\n}\n"}),
+            "the checkout defines it as a method": ({}, {"src/cfg.ts": "class C {\n  keyId(): string {\n"
+                                                                    "    return '';\n  }\n}\n"}),
+            "the checkout reads it with getattr": ({}, {"src/show.py": "def s(c):\n"
+                                                                    "    return getattr(c, 'accessKeyId')\n"}),
+            "the checkout destructures it in a parameter": ({}, {"src/show.ts": "export const s = ({ accessKeyId }: C) "
+                                                                             "=> accessKeyId;\n"}),
+            "the checkout destructures it over lines": ({}, {"src/show.ts": "export function s(c) {\n  const {\n"
+                                                                         "    accessKeyId,\n    region,\n  } = c;\n}\n"}),
+            "the change writes it and reads it on one line": (
+                {"src/copy.ts": "export const copy = (c) => saveConfig({ accessKeyId: c.accessKeyId });\n"}, {}),
+            "the change renames it in a destructure": (
+                {"src/copy.ts": "export function f(c) {\n  const { accessKeyId: id } = c;\n  return id;\n}\n"}, {}),
+            "the checkout destructures it": ({}, {"src/show.ts": "export const s = (c) => {\n"
+                                                                 "  const { accessKeyId, b } = c;\n};\n"}),
+        }
+        for why, (extra, base) in cases.items():
+            new = {"src/Form.tsx": self.FORM, "src/s3.ts": self.ADAPTER, **extra}
+            _, _, rows = self._rows({k: v for k, v in new.items() if v is not None}, base=base or None)
+            self.assertEqual(rows, [], why)
+
+    def test_a_read_one_link_after_this_or_self(self):
+        cls = ("export class S3 {\n  presign() {\n    return sign({ keyId: this.config.keyId });\n  }\n}\n")
+        _, _, rows = self._rows({"src/Form.tsx": self.FORM, "src/s3.ts": cls})
+        self.assertEqual([r[2] for r in rows], ["config.keyId"])
+        deep = cls.replace("this.config.keyId", "this.store.config.keyId")
+        _, _, rows = self._rows({"src/Form.tsx": self.FORM, "src/s3.ts": deep})
+        self.assertEqual(rows, [])                       # deeper chains are left out on purpose
+        py = ("class Client:\n    def make(self):\n        return S3(self.cfg[\"api_key\"])\n")
+        settings = 'def save(key):\n    return {"openai_api_key": key}\n'
+        _, _, rows = self._rows({"app/settings.py": settings, "app/client.py": py})
+        self.assertEqual([r[2] for r in rows], ["cfg.api_key"])
+        _, _, rows = self._rows({"app/settings.py": settings,
+                                 "app/client.py": py.replace("self.cfg", "self.app.cfg")})
+        self.assertEqual(rows, [])
+
+    def test_a_rename_on_the_read_line_and_an_imported_receiver_are_not_pairs(self):
+        # 1,047-commit replay: `gameImageUrl: gameData.game_image` maps one name to another on purpose, and
+        # `ts.ModuleResolutionKind` reads a module the file imports
+        _, _, rows = self._rows({"src/map.ts": "export const g = (gameData) => ({\n  gameImageUrl: gameData.imageUrl,\n"
+                                               "});\n"})
+        self.assertEqual(rows, [])
+        _, _, rows = self._rows({"build.mjs": "import * as ts from 'typescript';\nconst o = {\n"
+                                              "  resolutionKind: ts.ModuleResolutionKind,\n};\n",
+                                 "cfg.mjs": "export const c = { defaultModuleResolutionKind: 1 };\n"})
+        self.assertEqual(rows, [])
+        _, _, rows = self._rows({"build.mjs": "const o = {\n  resolutionKind: opts.ModuleResolutionKind,\n};\n",
+                                 "cfg.mjs": "export const c = { defaultModuleResolutionKind: 1 };\n"})
+        self.assertEqual(len(rows), 1)                    # the same read off a plain object is a pair
+
+    def test_python_dict_reads(self):
+        settings = 'def save(key):\n    return {"openai_api_key": key, "model": "m"}\n'
+        for read in ('    return Client(cfg["api_key"])\n', '    return Client(cfg.get("api_key"))\n'):
+            _, _, rows = self._rows({"app/settings.py": settings, "app/client.py": "def make(cfg):\n" + read})
+            self.assertEqual(rows, [("app/client.py", 2, "cfg.api_key", [("openai_api_key", "app/settings.py", 2)])],
+                             read)
+        _, _, rows = self._rows({"app/settings.py": settings,
+                                 "app/client.py": 'def make(cfg):\n    return Client(cfg["api_key"])\n'},
+                                base={"app/load.py": 'def load(c, k):\n    c["api_key"] = k\n'})
+        self.assertEqual(rows, [])                       # the checkout writes api_key
+        # self-review 3: a declaration of the written name (a dataclass field, an interface member) is not its reader
+        for path, decl, read in (
+                ("app/model.py", "@dataclass\nclass S3:\n    access_key_id: str\n",
+                 ("app/client.py", "def make(cfg):\n    return sign(cfg.key_id)\n")),
+                ("src/types.ts", "export interface S3 {\n  accessKeyId: string,\n  region\n}\n",
+                 ("src/s3.ts", self.ADAPTER)),
+                ("src/form.ts", "export const save = (k) => saveConfig({ accessKeyId: k });\n",
+                 ("src/s3.ts", self.ADAPTER))):
+            _, _, rows = self._rows({path: decl, read[0]: read[1]})
+            self.assertEqual(len(rows), 1, path)
+        _, _, rows = self._rows({"src/Form.tsx": self.FORM, "src/s3.ts": self.ADAPTER},
+                                base={"src/types.ts": "export interface S3 {\n  accessKeyId: string,\n}\n"})
+        for decl in ("export interface S3 {\n  accessKeyId: string,\n}\n",
+                     "export const save = (k) => saveConfig({ accessKeyId: k });\n",
+                     "export const f = (c: { accessKeyId: string }) => c;\n"):
+            _, _, rows = self._rows({"src/Form.tsx": self.FORM, "src/s3.ts": self.ADAPTER},
+                                    base={"src/types.ts": decl})
+            self.assertEqual(len(rows), 1, decl)          # nor is one already in the checkout
+
+    def test_similar_names(self):
+        from crucible import fieldreads
+        for a, b, want in (("keyId", "accessKeyId", True), ("api_key", "openai_api_key", True),
+                           ("userName", "user_name_display", True), ("userId", "user_id", False),
+                           ("code", "returncode", False), ("keyId", "keyIdentity", False),
+                           ("status", "statusText", False), ("keyId", "keyId", False)):
+            self.assertEqual(fieldreads.similar(a, b), want, (a, b))
+
+    def test_fields_note_never_stops_a_review(self):
+        from unittest import mock
+        _, files, _ = self._rows({"src/Form.tsx": self.FORM, "src/s3.ts": self.ADAPTER})
+        with mock.patch.object(V.fieldreads, "mismatches", side_effect=OSError("git grep failed")):
+            self.assertEqual(V.fields_note("/nonexistent", "fix", files, {"files": ["src/s3.ts"]}), "")
+
+
 if __name__ == "__main__":
     unittest.main()
