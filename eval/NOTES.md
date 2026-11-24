@@ -1640,6 +1640,6 @@ Self-review round 1 ($0.73, review53): NOT_GREEN, 1 medium + 2 lows. The eval: t
 the git grep is what silences them; a `this.`/`self.` chain and destructured/`getattr` reads added. The chain rule
 fired once on the 1,047 commits (umu c227efa9: `self.runtime.launcher_service`, a `@property`), so property, getter
 and method definitions now count as writes: R6 1 (#26), commits 0. Every guard mutation-checked.
-Round 2 ($0.5968, review54): NOT_GREEN, 2 lows: parameter and wrapped destructures weren't reads; `self.` and `getattr`
+Round 2 ($0.60, review54): NOT_GREEN, 2 lows: parameter and wrapped destructures weren't reads; `self.` and `getattr`
 untested. Fixed (a shorthand object passed on also silences a pair: the safe side for a note), mutation-checked; R6 1,
 commits 0.
