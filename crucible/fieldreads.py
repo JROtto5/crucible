@@ -65,15 +65,17 @@ def _writes_rx(n):
                       rf"""^\s*(?:(?:public|private|protected|static|async|override|readonly)\s+)*{n}\s*\([^)]*\)\s*(?::[^{{]*)?\{{""")
 
 
-def _reads_rx(n):
+def _reads_rx(n, plain=False):
+    """A line reading the name: a member, subscript or .get() read, getattr(), or an assigned destructure
+    (`const { accessKeyId } = cfg`, `const { accessKeyId: id } = c`). Unless `plain`, also a parameter destructure
+    (`({ accessKeyId }: Cfg) =>`) or a line holding only the name inside a wrapped one (`  accessKeyId,`), never
+    `  accessKeyId: string,` (a declaration writes it). A shorthand object passed on (`f({ accessKeyId })`) matches
+    those too: that silences the pair, the safe side for a note. plain=True is for a line that also writes the name
+    (`saveConfig({ accessKeyId: k })`), where only a read the write can't mimic counts."""
     n = re.escape(n)
-    # a member, subscript or .get() read, getattr(), or a destructure: `const { accessKeyId } = cfg`, a parameter
-    # (`({ accessKeyId }: Cfg) =>`), or a line holding only the name inside a wrapped one (`  accessKeyId,`); not
-    # `  accessKeyId: string,`, a declaration (an interface member, a dataclass field) that writes it. A
-    # shorthand object passed on (`f({ accessKeyId })`) matches too: that silences the pair, the safe side for a note.
-    return re.compile(rf"""\.{n}\b(?!\s*=(?!=))|\[\s*['"]{n}['"]\s*\](?!\s*=(?!=))|\.get\(\s*['"]{n}['"]|"""
-                      rf"""\bgetattr\([^,]+,\s*['"]{n}['"]|\{{[^{{}}]*(?<![\w$.]){n}(?![\w$])[^{{}}]*\}}\s*(?:=(?!=)|:|\)|=>)|"""
-                      rf"""^\s*{n}\s*,?\s*$""")
+    rx = (rf"""\.{n}\b(?!\s*=(?!=))|\[\s*['"]{n}['"]\s*\](?!\s*=(?!=))|\.get\(\s*['"]{n}['"]|"""
+          rf"""\bgetattr\([^,]+,\s*['"]{n}['"]|\{{[^{{}}]*(?<![\w$.]){n}(?![\w$])[^{{}}]*\}}\s*""")
+    return re.compile(rx + (r"=(?!=)" if plain else rf"""(?:=(?!=)|:|\)|=>)|^\s*{n}\s*,?\s*$"""))
 
 
 def _code(p):
@@ -95,11 +97,11 @@ def mismatches(repo, files, read_text, paths=None):
 
     def is_orphan(w):
         if w not in orphan:
-            rx = _reads_rx(w)
-            own = set(written[w])                  # a line that writes the name is not its reader
-            orphan[w] = not any(rx.search(t) for p2, n2, t in added if (p2, n2) not in own) and not any(
-                rx.search(t) for p2, n2, t in _grep(repo, [w], CODE_SPECS)
-                if (p2, n2) not in own and not COMMENT_RX.match(t))
+            rx, plain = _reads_rx(w), _reads_rx(w, plain=True)
+            own = set(written[w])                  # a line that writes the name reads it only in a plain read
+            lines = [(p2, n2, t) for p2, n2, t in added] + [
+                (p2, n2, t) for p2, n2, t in _grep(repo, [w], CODE_SPECS) if not COMMENT_RX.match(t)]
+            orphan[w] = not any((plain if (p2, n2) in own else rx).search(t) for p2, n2, t in lines)
         return orphan[w]
 
     for p, n, t in added:

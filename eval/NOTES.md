@@ -1646,3 +1646,6 @@ commits 0.
 Round 3 ($0.16, review55): NOT_GREEN, 1 medium: a declaration (`access_key_id: str`, `accessKeyId: string,`) read as a
 wrapped destructure and silenced its own pair. Fixed (bare line = `name` or `name,` only; a write site is never its
 own reader, in the change or the grep), four falsifiers, mutation-checked. R6 1, commits 0, eval cases 0 of 41.
+Round 4 ($0.19, review56): NOT_GREEN, 1 low: whole write lines left the reader search, so a same-line read
+(`{ accessKeyId: c.accessKeyId }`, a rename destructure) went unseen. A write line now counts through a plain read;
+two falsifiers, mutation-checked against both earlier behaviours. R6 1, commits 0.

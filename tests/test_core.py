@@ -8945,6 +8945,10 @@ class TestFieldReads(unittest.TestCase):
                                                                              "=> accessKeyId;\n"}),
             "the checkout destructures it over lines": ({}, {"src/show.ts": "export function s(c) {\n  const {\n"
                                                                          "    accessKeyId,\n    region,\n  } = c;\n}\n"}),
+            "the change writes it and reads it on one line": (
+                {"src/copy.ts": "export const copy = (c) => saveConfig({ accessKeyId: c.accessKeyId });\n"}, {}),
+            "the change renames it in a destructure": (
+                {"src/copy.ts": "export function f(c) {\n  const { accessKeyId: id } = c;\n  return id;\n}\n"}, {}),
             "the checkout destructures it": ({}, {"src/show.ts": "export const s = (c) => {\n"
                                                                  "  const { accessKeyId, b } = c;\n};\n"}),
         }
