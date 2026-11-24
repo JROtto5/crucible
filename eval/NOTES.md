@@ -1832,6 +1832,15 @@ holdout 2/2; js-refcount at medium as since 11-04, py-race found and kept at med
 11-12, not the sweep, which no longer touches findings), any severity **1.0**, false blocking **0 on 9 clean cases**.
 Nit cases 22/22 planted issues, false blocking 3 (earlier-commit, maintainability-cross, reliability: 1 each; 11-23: 2).
 True dropped 2. Nits kept 146 (22 on clean cases). Passes the bar (recall ≥ 0.913, 0 false blocking on clean cases).
+
+**Run liveness on blaze-3: `~/rb-work/rb-alive.sh`, never `pgrep -f`.** `pgrep -f '<pattern>'` sent through ssh also
+matches the remote shell's own command line (that `bash -c` carries the pattern), so a run always looks alive: it
+stalled rb-resume.sh on 11-23 and the R8 resume driver on 11-24 (about 1.5 h with #16's window free). Every
+`rb-*.sh` now starts with `. ~/rb-work/rb-alive.sh && rb_claim "${1-}" || exit 6`: it writes `~/rb-work/pids/<script
+name>-<first arg>.pid` (pid and script name), and refuses to start a second copy of a live run. Ask
+`~/rb-work/rb-alive.sh <key>` (exit 0 alive) or `--list`: kill -0 on the pid, then the pid's argv[0] or argv[1] must be
+that script, so a reused pid or a shell that only mentions the script reads as not alive (8 cases checked, including
+both of those). New drivers use it; don't write a pgrep pattern for a run again.
 ### 2026-11-25 · field reads on the sealed held-out 50: Step 1 of the pre-registered paired arm ($0)
 
 **Switch.** `CRUCIBLE_NO_FIELD_READS=1` makes `fields_note` return "" (62a75e0, test mutation-checked; `modelreplay`
