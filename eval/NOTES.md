@@ -1877,3 +1877,15 @@ expected 0-2. Dev was 1 of 25, eval 0 of 41, public commits 0 of 1,047.
 $1.99 = $8. With n = 1 it can only say whether the reviewer raised a finding at the flagged read and whether the judge
 matched it; no rate is quoted (n < 60, the decision rule). The falsifier (fires on 3+ of 50 with none on a golden
 item) can't trip at 1 fire. The check stays in: $0, fires on ~2% of PRs.
+
+### 2026-11-25 · R8 on the sealed held-out 50: reviewed, judge 48 of 50 (totals pending)
+
+Image `crucible-rb:r8c` (fb540f5; main 11cb247 is the same code plus 62a75e0's `CRUCIBLE_NO_FIELD_READS` off switch,
+default unchanged), R7's harness, `runs/r8h50`. All 50 PRs reviewed: $123.09 (mean $2.46, median $1.86, max $5.17;
+$124.55 with one limit-cut attempt). PRs 133, 136 and 159 first failed before review (git logs in the repo cache left
+root-owned by an earlier PR's container, as in R7's held-out run; chowned through a container, re-run). The judge
+finished 48 of 50 into its checkpoint; 2 PRs failed inside the judge (Artemis #12479: invalid matcher JSON; cli/cli
+#13175: classifier timeout). Both allotted accounts then passed the 85% weekly stop (#16 87%, #18 89%: the 5-minute
+watcher overshoots while a judge is spending), so the run stopped there. To finish: `SET=heldout50
+~/rb-work/rb-run-set.sh r8h50 judge-only` with a fresh token (it resumes from the checkpoint), after `rm
+~/rb-work/STOP`. No total has been read; the sealed rule stands (totals only, no per-PR reading).
