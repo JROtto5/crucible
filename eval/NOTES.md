@@ -1906,3 +1906,50 @@ output goes: the bug sweep's verified results are nits, and both levers mostly f
 unseen PRs stays a first-look detection gap (TRAIN: 9 of 13 misses never raised). Next levers have to change what the
 first pass raises at high severity, and need repeated rounds or more items to measure: one round on 60 high items
 can't resolve ±2.
+
+### 2026-11-25 · two TRAIN rounds unioned (Design 2's near-free test): +3 high items on the 32 PRs scored, high P 93.3 micro
+
+From docs/research/2026-11-oss-reviewers.md T2 / Design 2: is the union of two independent rounds worth a second seat?
+The two stored TRAIN-60 rounds (`runs/r8base` at 8a5d035, `runs/r8train` at fb540f5: nearly the same code, two
+samples) were unioned and re-scored. TRAIN only; nothing on held-out or FINAL was run or read.
+
+**Union and dedupe** (`~/rb-work/tmp/union/union.py` on blaze-3): per PR, r8base's findings first, then each r8train
+finding that is not the same claim at the same place: same file, lines overlapping or within 3, and an identical
+message or titles alike (char ratio ≥ 0.55 or content-word Jaccard ≥ 0.4, after the `[severity]` tag and any "(same
+flaw as …)" note). A strict rule (overlap and ratio ≥ 0.85) merged only 81 of 2,645; 12 sampled merges under the
+shipped rule read as the same claim (one borderline). Findings per PR: base 21.65, R8 22.43, **union 37.12** (2,227
+on 60 PRs, 418 merged as duplicates).
+
+**$0 bound first** (`cov.py`, the stored judge outputs): high golden items covered by either round = **21 of 30**
+(base 17, R8 18).
+
+**Judging.** The full judge (f223ce3, claude-sonnet-5, `--concurrency 3`, account #16) classified 10 of 60 PRs while #16
+went 89% → 92% weekly, so it was stopped and replaced by matching only (`match-only.mts`, written anew after Laude
+RevEngine's `scripts/match.ts`, Apache-2.0): grounded P/R, the high view included, depend only on the matcher
+(`scorer.ts` `filterBySeverity` counts matched candidates only). The scorer's arithmetic in `score-match.py` reproduces
+r8base's stored figures exactly (high 100.0 / 57.9 / 73.4, 17/30). Matching stopped at the 93% rule after **32 of 60
+PRs** (alphabetical, holding 22 of the 30 high items). The token was staged over ssh stdin and deleted after.
+
+Same 32 PRs (singles from their stored full-judge matching, the union from the fresh matching):
+| | r8base | r8train | **union** |
+|---|---|---|---|
+| findings per PR | 23.3 | 23.5 | **38.9** |
+| high: grounded P / R / F1 (macro) | 100.0 / 53.9 / 70.0 | 100.0 / 42.2 / 59.4 | **87.5 / 61.7 / 72.3** |
+| high: micro R, Wilson 95% | 12/22 = 54.5 [34.7, 73.1] | 12/22 = 54.5 [34.7, 73.1] | **15/22 = 68.2 [47.3, 83.6]** |
+| high: micro P | 9/9 | 11/11 | **14/15 = 93.3 [70.2, 98.8]** |
+| all: grounded P / R / F1 (macro) | 81.8 / 44.5 / 57.6 | 80.6 / 45.3 / 58.0 | **80.6 / 57.4 / 67.1** |
+| all: micro P / R | 171/208 = 82.2, 199/442 = 45.0 | 178/218 = 81.7, 199/442 = 45.0 | **233/283 = 82.3, 252/442 = 57.0 [52.4, 61.5]** |
+
+High items gained over either round: mississippi (+1 over both), hm-cupano (base's, R8 lost it), dotnet/android (base's),
+entebus and katana (R8's). The one high-view FP (flatten-js, a low "version bump commits in the PR" nit matched to a
+golden-false high item) is an r8train finding that the stored r8train matching did not match: matcher variance, not new
+content. It is what takes macro high P to 87.5.
+
+Reading:
+- **The decision rule (≥ 2 high items gained, high P ≥ 90): met on micro** (+3 of 22, micro P 93.3). Macro high P
+  (87.5) is just under 90, from one matcher-variance item. All-severity recall gains 12 points at the same precision.
+- What this measures is two samples of crucible as it is, unioned: the ceiling of a "second independent seat" at about
+  2× review cost, not a two-model seat. Caveats: 32 of 60 PRs, 22 high items, and the union was matched in a
+  different matcher pass than the singles (1-2 F1 points of matcher noise, RevEngine's figure).
+- Next is the main session's call: a totals-only union of the stored held-out R7 + R8 runs. The remaining 28 TRAIN PRs
+  can be matched for about 1-2% of an account (resumable: `match-only.mts` keeps finished PRs).
