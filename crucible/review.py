@@ -1,5 +1,5 @@
 """The review pipeline: checks → scanners → chunked review → per-finding verification → verdict."""
-import concurrent.futures as cf, datetime as dt, fcntl, hashlib, os, re, subprocess, textwrap, threading
+import concurrent.futures as cf, datetime as dt, difflib, fcntl, hashlib, os, re, subprocess, textwrap, threading
 from . import callsites, catalog, checks as checks_mod, diff as diff_mod, docrefs, fieldreads, readiness, routing, style as style_mod
 from .util import (BLOCKING, BUDGET_EXHAUSTED, HOME, MODELS, PREFERENCE, SEV, TOOLS_READ, TOOLS_RUN, Budget, Failed, NoStructuredOutput,
                    claude, crucible_build, default_base,
@@ -522,6 +522,8 @@ def bug_sweep_skip_reason(limit, spent, remaining):
     mode = bug_sweep_mode()
     if mode == "off":
         return "off (CRUCIBLE_BUG_SWEEP=0)"
+    if mode == "auto" and seats() > 1:
+        return "off: the second review seat takes its budget (CRUCIBLE_SEATS=2; CRUCIBLE_BUG_SWEEP=1 runs it anyway)"
     if bug_sweep_cap_usd() < SWEEP_MIN_USD:
         return f"its cap (CRUCIBLE_BUG_SWEEP_USD) is under ${SWEEP_MIN_USD:.2f}"
     if limit is None:
@@ -602,6 +604,162 @@ def bug_sweep(sweep_chunks, raised, repo, model, budget, project, sha, base, rul
         ran += 1
         out_f += [dict(f, source="review", bug_sweep=True) for f in (out.get("findings") or [])[:BUG_SWEEP_MAX]]
     return out_f, {"passes": ran, "of": len(sweep_chunks), "failed": failed, "cost_usd": round(budget.own, 4)}
+
+
+# ---------- the second review seat: an independent first look, unioned before verification ----------
+# The cheapest high-recall lever measured so far (eval/NOTES 2026-11-25): two stored rounds of the same PRs, unioned,
+# took high-severity grounded F1 on the sealed held-out 50 from 58.3 (R7) / 55.6 (R8) to 69.6, high micro recall
+# 23 -> 28 of 60, high precision 96.2; on 32 TRAIN PRs +3 of 22 high items. Different samples stop at different places.
+# So CRUCIBLE_SEATS=2 runs every reviewed pass a second time, after the first seat's passes, in a fresh call that is
+# told nothing the first seat raised (a model shown a list to extend mostly re-checks it: RevEngine's follow-up note,
+# docs/research/2026-11-oss-reviewers.md T2). It differs by sample and, by default, by model (CRUCIBLE_SEAT2_MODEL,
+# default Sonnet: cheaper), file order (CRUCIBLE_SEAT2_ORDER: reversed, the default, or same) and brief (the lens
+# prompt: no house-style or description section). It spends at most CRUCIBLE_SEAT2_SHARE (default 0.30) of the
+# budget, riskiest pass first, and leaves the first seat's findings their verification money. Both seats' findings
+# are deduped together (same_claim: the rule the union test used) and verified one by one as usual; no vote.
+# The bug sweep is off with two seats (it pays for the seat; it showed no high gain on held-out). Off by default
+# until a build is measured (eval/NOTES 2026-11-25, the pre-registered plan); with one seat nothing changes.
+SEAT2_SHARE = 0.30
+SEAT_MIN_USD = 0.30                  # less than this for the seat: skip it (a Sonnet pass costs ~$0.20-0.40)
+SEAT_NEAR = 3                        # lines apart (or overlapping) for two seats' items to be one claim
+SEAT_STOP = frozenset("a an the of to in on at for and or is are be by with as it its this that not no from into "
+                      "than".split())
+
+
+def seats():
+    """CRUCIBLE_SEATS: 1 (default) or 2 (any larger number is 2)."""
+    try:
+        return 2 if int(os.environ.get("CRUCIBLE_SEATS", "1")) >= 2 else 1
+    except ValueError:
+        return 1
+
+
+def seat2_model(review_model, authors=()):
+    """The second seat's model: CRUCIBLE_SEAT2_MODEL (a family name or an id; default sonnet), or the first seat's
+    model when the configured one wrote the change (the reviewer never shares a model with the author)."""
+    v = (os.environ.get("CRUCIBLE_SEAT2_MODEL") or "sonnet").strip()
+    m = MODELS.get(v.lower(), v)
+    return review_model if m in authors else m
+
+
+def seat2_order():
+    v = os.environ.get("CRUCIBLE_SEAT2_ORDER", "reversed").strip().lower()
+    return "same" if v in ("same", "forward", "0", "off", "no") else "reversed"
+
+
+def seat2_share():
+    """The share of the review's budget the second seat may spend (CRUCIBLE_SEAT2_SHARE, default 0.30, within 0-1)."""
+    try:
+        return min(1.0, max(0.0, float(os.environ.get("CRUCIBLE_SEAT2_SHARE", str(SEAT2_SHARE)))))
+    except ValueError:
+        return SEAT2_SHARE
+
+
+def seat2_cap_usd(limit):
+    """USD the second seat may spend: its share of the budget, or None (no cap) without a budget."""
+    return None if limit is None else round(seat2_share() * limit, 4)
+
+
+def reversed_chunk(ch, texts):
+    """The pass with its files in reverse order. Only a pass that is exactly its files' texts in order (how diff.chunk
+    builds a pass of whole files) is reordered; a file split over passes, or anything else, is left as it is."""
+    fs = ch["files"]
+    if len(fs) < 2 or any(p not in texts for p in fs) or "".join(texts[p] + "\n" for p in fs) != ch["text"]:
+        return ch
+    return dict(ch, files=fs[::-1], text="".join(texts[p] + "\n" for p in fs[::-1]))
+
+
+def _claim_title(t):
+    """A title as the union test compared it: lowercase, cut at its first ': ', no '(same flaw as ...)', no backticks."""
+    t = (t or "").strip().lower().split(": ", 1)[0]
+    return re.sub(r"\s*\(same flaw as [^)]*\)?", "", t).replace("`", "")
+
+
+def same_claim(a, b):
+    """Two seats' items are one claim (the rule of eval/NOTES 2026-11-25's union, ~/rb-work/tmp/union/union.py): the
+    same file, lines overlapping or within SEAT_NEAR, and the same text or titles alike (character ratio >= 0.55, or
+    Jaccard >= 0.4 over the title's words less stopwords). Under it 418 of 2,645 TRAIN items merged, and 12 sampled
+    merges read as the same claim; a strict rule (ratio >= 0.85) merged 81 and left restatements apart."""
+    if a.get("file") != b.get("file"):
+        return False
+    def span(f):
+        s = f.get("line") if isinstance(f.get("line"), int) else 0
+        e = f.get("end_line") if isinstance(f.get("end_line"), int) and f["end_line"] >= s else s
+        return s, e
+    (s1, e1), (s2, e2) = span(a), span(b)
+    if s1 > e2 + SEAT_NEAR or s2 > e1 + SEAT_NEAR:
+        return False
+    text = lambda f: f"{f.get('title') or ''}: {f.get('problem') or ''}".strip()
+    if text(a) == text(b):
+        return True
+    ta, tb = _claim_title(a.get("title")), _claim_title(b.get("title"))
+    wa, wb = ({w for w in re.findall(r"[\w.]+", t) if w not in SEAT_STOP} for t in (ta, tb))
+    jac = len(wa & wb) / len(wa | wb) if wa | wb else 0.0
+    return jac >= 0.4 or difflib.SequenceMatcher(None, ta, tb).ratio() >= 0.55
+
+
+def seat2_skip_reason(limit, remaining, small=False, reviewed=True):
+    """None when the second seat may run; else why not. `remaining` is what's left after the nit reserve and an
+    estimate of verifying the first seat's findings (None: no limit)."""
+    if small:
+        return "small tier"
+    if not reviewed:
+        return "no pass was reviewed"
+    cap = seat2_cap_usd(limit)
+    if cap is not None and cap < SEAT_MIN_USD:
+        return f"its share (CRUCIBLE_SEAT2_SHARE) of the ${limit:.2f} budget is under ${SEAT_MIN_USD:.2f}"
+    if remaining is not None and remaining < SEAT_MIN_USD:
+        return (f"${remaining:.2f} left after the nit reserve and the first seat's verification, under "
+                f"${SEAT_MIN_USD:.2f}")
+    return None
+
+
+def second_seat(passes, prompt_for, model, budget, repo, fresh=False, log=print):
+    """Run the second seat over `passes` ([(chunk, docs, since)], riskiest first) -> (findings, {passes, of, failed,
+    stopped}). prompt_for(chunk, docs, since) -> (prompt, cache-key prompt). Its passes run like the first seat's
+    passes 2..n (pass_jobs at a time, each call capped by a reserved share of `budget`, the seat's own); a pass that
+    fails is counted and skipped, and the first seat's coverage stands either way."""
+    order = seat2_order()
+    jobs = pass_jobs(budget.remaining())
+    pool = ShareBudget(budget, min(jobs, len(passes)), calls=len(passes)) if jobs > 1 and len(passes) > 1 else None
+
+    def one(a):
+        i, (ch, docs, since) = a
+        prompt, key_prompt = prompt_for(ch, docs, since)
+        key = "s2-" + hashlib.sha256((model + "\0" + key_prompt).encode()).hexdigest()[:32]
+        out = None if fresh else cache_hit(key, budget, "seat2")
+        if out is not None:
+            if pool:
+                pool.skip()
+            return out, None
+        log(f"  second seat pass {i}/{len(passes)} ({model}, {order} file order): {', '.join(ch['files'])[:80]}")
+        call = pool.slot() if pool else budget
+        try:
+            out, _ = claude(prompt, model, FINDINGS_SCHEMA, repo, call, kind="seat2")
+            cache_put(key, out)
+            return out, None
+        except Failed as e:
+            return None, str(e)
+        finally:
+            if call is not budget:
+                call.release()
+    if pool:
+        with cf.ThreadPoolExecutor(max_workers=jobs) as ex:
+            res = list(ex.map(one, enumerate(passes, 1)))
+    else:
+        res = []
+        for a in enumerate(passes, 1):
+            if budget.exhausted():                     # riskiest first: the rest go unreviewed by this seat
+                res += [(None, BUDGET_EXHAUSTED)] * (len(passes) - len(res))
+                break
+            res.append(one(a))
+    found = [dict(f, source="review", seat=2) for out, _ in res if out for f in (out.get("findings") or [])[:10]]
+    stopped = sum(err == BUDGET_EXHAUSTED for _, err in res)
+    failed = [err for _, err in res if err and err != BUDGET_EXHAUSTED]
+    for err in failed[:1]:
+        log(f"  second seat: {len(failed)} pass(es) failed: {err[:160]}")
+    return found, {"passes": sum(out is not None for out, _ in res), "of": len(passes), "failed": len(failed),
+                   "stopped": stopped}
 
 
 # Two refutations that settle a style nit but not a bug. ReviewBench run 6 (eval/NOTES 2026-11-20): two of its 14
@@ -1243,16 +1401,21 @@ def similar_loose(a, b):
 def dedupe(findings):
     out = []
     # the reviewer's own items first, then the bug sweep's (a restatement never replaces what the first pass wrote:
-    # eval 11-24, a sweep rewording of py-race's caught bug won on severity and the verifier refuted it), then severity
-    for f in sorted(findings, key=lambda f: (f.get("source") != "review", bool(f.get("bug_sweep")),
+    # eval 11-24, a sweep rewording of py-race's caught bug won on severity and the verifier refuted it), the first
+    # seat's before the second's (same reason), then severity. Two seats' items also merge under same_claim.
+    for f in sorted(findings, key=lambda f: (f.get("source") != "review", bool(f.get("bug_sweep")), f.get("seat", 1),
                                              SEV.index(f["severity"]))):
-        dup = next((g for g in out if similar(f, g)), None)
+        dup = next((g for g in out if similar(f, g) or
+                    ("seat" in f and "seat" in g and f["seat"] != g["seat"] and same_claim(f, g))), None)
         if dup:
             dup.setdefault("also", []).append(f["title"])
             # where the merged item pointed and how severe it was, before the kept item takes the max: a later
             # count of merged items that sit on a known issue is then a read of review.json, not a reconstruction.
             # `also` (titles only) stays for existing readers of review.json; `merged` is the superset.
-            dup.setdefault("merged", []).append({k: f.get(k) for k in ("title", "file", "line", "severity", "source")})
+            dup.setdefault("merged", []).append({k: f.get(k) for k in ("title", "file", "line", "severity", "source")}
+                                                | ({"seat": f["seat"]} if "seat" in f else {}))
+            if "seat" in f and "seat" in dup:          # which seats raised it: runs count what each seat carried
+                dup["seats"] = sorted(set(dup.get("seats") or [dup["seat"]]) | {f["seat"]})
             if SEV.index(f["severity"]) < SEV.index(dup["severity"]):
                 dup["severity"] = f["severity"]
         else:
@@ -1828,9 +1991,10 @@ def review_inputs(repo, base, draft=None, no_exec=False, nits=False, lens=False,
     only when set, so reviews stored before it existed still match a default run. So is an explicit --author (as the
     sorted model set): it picks the reviewer, so a rerun that adds it, as the thin-checkout note advises, re-reviews."""
     au = {"author": sorted(parse_authors(author))} if parse_authors(author) else {}
+    two = {"seats": 2} if seats() > 1 else {}          # recorded only when on, like no_exec and nits
     if lens:                                           # a lens never reads the draft, so it can't depend on it
         return {"base": base, "draft": None, "draft_sha": None, "lens": True,
-                **({"no_exec": True} if no_exec else {}), **({"nits": True} if nits else {}), **au}
+                **({"no_exec": True} if no_exec else {}), **({"nits": True} if nits else {}), **au, **two}
     try:
         path, text = readiness.find_draft(repo, draft)
     except OSError as e:
@@ -1838,7 +2002,7 @@ def review_inputs(repo, base, draft=None, no_exec=False, nits=False, lens=False,
     # only the submitted part is judged (draft_hash), so editing the author's notes alone keeps the verdict
     return {"base": base, "draft": os.path.abspath(path) if path else None,
             "draft_sha": draft_hash(text) if path else None,
-            **({"no_exec": True} if no_exec else {}), **({"nits": True} if nits else {}), **au}
+            **({"no_exec": True} if no_exec else {}), **({"nits": True} if nits else {}), **au, **two}
 
 
 def keep_draft(d, repo, draft, inputs):
@@ -1913,6 +2077,8 @@ def stale_inputs(prev, inputs):
         return "its verification was read-only (--no-exec)"
     if inputs.get("nits") and not old.get("nits"):     # the reverse is fine: a review with nits has every finding
         return "it was reviewed without --nits"
+    if inputs.get("seats") and not old.get("seats"):   # the reverse is fine, as with nits
+        return "it was reviewed with one seat (CRUCIBLE_SEATS=2 now)"
     if old.get("author") != inputs.get("author"):
         return "the --author models changed since its last review"
     return None
@@ -2023,6 +2189,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
     reviewed on a budget capped at SMALL_BUDGET_USD, with no nit sweep."""
     route = routing.enabled(route)
     nits = nits_enabled(nits)
+    n_seats = seats()
     lens = bool(lens)
     small_tier = small_tier_enabled(small_tier, lens)
     offline = offline or lens                          # a lens judges code only: no issue, claim or overlap lookups
@@ -2230,7 +2397,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             sweep_chunks.append(ch); sweep_notes.append(docs)
             summaries.append(out["summary"])
             for f in out["findings"][:10]:
-                f = cite_draft(dict(f, source="review"), dlabel, repo, tracked)
+                f = cite_draft(dict(f, source="review", **({"seat": 1} if n_seats > 1 else {})), dlabel, repo, tracked)
                 if f["file"] == dlabel and draft_path:
                     f["line"] = readiness.draft_file_line(draft_full, f["line"])
                 cands.append(f)
@@ -2241,6 +2408,40 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 if f["file"] == dlabel and draft_path:
                     f["line"] = readiness.draft_file_line(draft_full, f["line"])
                 nit_cands.append(f)
+        if n_seats > 1:                                # the second seat: review calls too, so before tok_split
+            # like the bug sweep, it leaves the nit reserve and what verifying the first seat's findings should cost
+            keep = BUG_SWEEP_VERIFY_EST_USD * sum(f.get("source") == "review" for f in cands + reverify)
+            room = HeldBudget(budget, pass_hold + keep) if budget.limit is not None else budget
+            skip = seat2_skip_reason(budget.limit, room.remaining(), bool(record.get("small_tier")), bool(sweep_chunks))
+            if skip:
+                record["seats"] = {"n": 2, "skipped": skip}
+            else:
+                m2, cap = seat2_model(review_model, authors), seat2_cap_usd(budget.limit)
+                texts = {f["path"]: f["text"] for f in (dfiles if prev_sha else files)}
+
+                def seat2_prompt(ch, docs, since):
+                    """The lens prompt (no house style, no description), files reversed, findings only, the same
+                    context notes as the first seat's pass; nothing the first seat raised."""
+                    c2 = reversed_chunk(ch, texts) if seat2_order() == "reversed" else ch
+                    build = lambda fx: lens_prompt(review_prompt(project, sha, base, c2, rules, mem, fx, clog, all_files,
+                                                                 since=since)) + (f"\n{docs}" if docs else "")
+                    return build(facts), build(fkey)
+                log(f"  second seat: {len(sweep_chunks)} pass(es), {m2}, {seat2_order()} file order"
+                    + (f", cap ${cap:.2f}" if cap is not None else ""))
+                spent0 = budget.spent
+                found, st = second_seat(
+                    [(ch, docs, since_note(prev_sha, record["incremental"]["amended"], ch, full_texts, base)
+                      if prev_sha else "") for ch, docs in zip(sweep_chunks, sweep_notes)],
+                    seat2_prompt, m2, SubBudget(room, cap) if cap is not None else room, repo, fresh, log)
+                cost = round(budget.spent - spent0, 4)
+                review_cost += cost
+                record["seats"] = {"n": 2, "model": m2, "order": seat2_order(), "cap_usd": cap, **st,
+                                   "cost_usd": cost, "raised": len(found)}
+                for f in found:
+                    f = cite_draft(f, dlabel, repo, tracked)
+                    if f["file"] == dlabel and draft_path:
+                        f["line"] = readiness.draft_file_line(draft_full, f["line"])
+                    cands.append(f)
         if nits:                                       # the bug sweep: a review call, so before tok_split
             # it runs before verification, so it leaves what verifying the findings already raised should cost,
             # and one pass's worth of its own (blocking findings verify against the whole budget, nit reserve included)
@@ -2448,6 +2649,13 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             tail.append(f"No code changed since {prev_sha[:10]}; its findings were carried or re-checked.")
         # crucible's own notes stay as written; only the reviewer's text is re-tallied against the kept findings
         summary = " ".join(x for x in (*lead, reviewer_summary(summaries, kept), *tail) if x)
+        if "passes" in record.get("seats", {}):       # what each seat carried: raised alone, by both, after verification
+            def by_seat(fs):
+                return {"seat1": sum(f.get("seat") == 1 and not f.get("seats") for f in fs),
+                        "seat2": sum(f.get("seat") == 2 and not f.get("seats") for f in fs),
+                        "both": sum(bool(f.get("seats")) for f in fs)}
+            record["seats"].update(new=sum(f.get("seat") == 2 for f in to_verify), kept=by_seat(kept),
+                                   dropped=by_seat(dropped))
         record.update(status="done", summary=summary[:3000], findings=kept, dropped=dropped,
                       cost_usd=round(budget.spent, 4), cost_review_usd=round(review_cost, 4),
                       cost_verify_usd=round(budget.spent - review_cost, 4), finished=dt.datetime.now().isoformat(timespec="seconds"),
@@ -2675,6 +2883,14 @@ def report(rev, ans, waivers=None):
         L += [f"- **{f['title']}** (`{f['file']}:{f['line']}`){transcribed_note(f['verification'])}: {f['verification']['evidence']}"
               for f in rev["dropped"]]
         L += ["", "</details>"]
+    st = rev.get("seats") or {}
+    if "passes" in st:
+        k = st.get("kept") or {}
+        L += ["", f"Second seat ({st['model']}, {st['order']} file order): {st['passes']} of {st['of']} pass(es), "
+                  f"{st['raised']} finding(s) raised, {st.get('new', 0)} new after dedupe; kept: {k.get('seat2', 0)} "
+                  f"only it raised, {k.get('both', 0)} raised by both seats; ${st['cost_usd']}"]
+    elif st:
+        L += ["", f"Second seat skipped: {st['skipped']}"]
     if "nits" in rev:                      # only reviews run with --nits; they never count toward the verdict
         L += ["", "## Nits (non-blocking, verified; not counted in the verdict)", ""]
         L += [f"- {f['severity']} · `{f['file']}:{f['line']}` · **{f['title']}**"

@@ -13,6 +13,9 @@ findings file out.
   also gets the nit sweep, a nit-only second look at each pass (`CRUCIBLE_NITS_SWEEP_USD`, default $0.75;
   `CRUCIBLE_NITS_SWEEP=0` turns it off for an A/B), and the bug sweep before verification, a second look for blocking
   bugs the passes missed (`CRUCIBLE_BUG_SWEEP_USD`, default $0.60; `CRUCIBLE_BUG_SWEEP=0` turns it off).
+  `CRUCIBLE_SEATS=2` (off by default; set in the image for a seat run) adds a second, independent review seat
+  (Sonnet, files reversed, at most 30% of the budget) whose findings are unioned with the first seat's before
+  verification, and turns the bug sweep off (CHANGELOG 2026-11-25).
 - `to_findings.py`: maps the kept, verified findings and nits in `review.json` to the contract, most severe first, uncapped
   (`RB_CONFIG_MAX_FINDINGS=N` caps it; the first run capped at 60). PR-text findings and findings
   without a line are left out.

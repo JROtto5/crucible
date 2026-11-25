@@ -9272,5 +9272,248 @@ class TestFieldReads(unittest.TestCase):
             self.assertEqual(V.fields_note("/nonexistent", "fix", files, {"files": ["src/s3.ts"]}), "")
 
 
+class TestSecondSeat(unittest.TestCase):
+    """CRUCIBLE_SEATS=2: an independent second first look, unioned before verification (eval/NOTES 2026-11-25: R7 ∪ R8
+    on the held-out 50, high F1 58.3/55.6 -> 69.6 at high precision 96.2)."""
+
+    @staticmethod
+    def _f(title, line, severity="important", file="a.py", problem="p"):
+        return {"severity": severity, "file": file, "line": line, "title": title, "problem": problem,
+                "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "w", "fix": "x"}
+
+    def _run(self, seat2_out=(), env=None, budget=None, nits=None, passes=1, seat2_cost=0.0, seat2_error=None,
+             review_cost=0.0, repo_files=None):
+        """-> (review.json, calls). The first seat raises "division by zero in f" (a.py:1) and "unclosed socket in g"
+        (a.py:5); the second seat raises `seat2_out`. Each call costs what it says, cut at its budget like the CLI."""
+        from unittest import mock
+        repo = make_repo(*(repo_files or ({"a.py": "x = 1\n"},
+                                          {"a.py": "x = 2\n" + "".join(f"y{i} = {i}\n" for i in range(30))})))
+        calls = []
+
+        def spend(budget, c):
+            if budget is not None:
+                r = budget.remaining()
+                c = c if r is None else min(c, r)
+                budget.add(c)
+            return c
+
+        def fake(prompt, model, schema, cwd, budget=None, *a, **kw):
+            kind = kw.get("kind")
+            calls.append({"kind": kind, "model": model, "schema": schema, "prompt": prompt})
+            if budget and budget.exhausted():
+                raise U.Failed(U.BUDGET_EXHAUSTED)
+            if kind == "seat2":
+                if seat2_error:
+                    raise U.Failed(seat2_error)
+                return {"summary": "s2", "findings": [dict(f) for f in seat2_out]}, spend(budget, seat2_cost)
+            if kind == "review":
+                out = {"summary": "s", "findings": [self._f("division by zero in f", 1),
+                                                    self._f("unclosed socket in g", 5, "medium")]}
+                if "nits" in schema["properties"]:
+                    out["nits"] = []
+                return out, spend(budget, review_cost)
+            if kind == "bug_sweep":
+                return {"findings": []}, 0.0
+            if kind == "nit_sweep":
+                return {"nits": []}, 0.0
+            if "verdicts" in schema["properties"]:
+                return {"verdicts": []}, 0.0
+            return {"keep": True, "severity": "important", "method": "read", "actions": "", "evidence": "e",
+                    "confidence": "high"}, spend(budget, 0.01)
+        home = tempfile.mkdtemp(prefix="crucible-home-")
+        real_chunk = V.diff_mod.chunk
+
+        def chunk(files, *a, **kw):                    # passes > 1: that many copies of each pass, told apart
+            chunks, unc = real_chunk(files, *a, **kw)
+            if passes == 1:
+                return chunks, unc
+            return [dict(c, text=c["text"] + f"\n# pass {i}") for c in chunks for i in range(passes)], unc
+        base_env = {"CRUCIBLE_CACHE": os.path.join(home, "c")}
+        with mock.patch.object(V, "HOME", home), mock.patch.object(U, "HOME", home), mock.patch.object(V, "claude", fake), \
+                mock.patch.object(V.diff_mod, "chunk", chunk), \
+                mock.patch.dict(os.environ, dict(base_env, **(env or {}))):
+            for k in ("CRUCIBLE_SEATS", "CRUCIBLE_SEAT2_MODEL", "CRUCIBLE_SEAT2_ORDER", "CRUCIBLE_SEAT2_SHARE",
+                      "CRUCIBLE_REVIEW_MODEL", "CRUCIBLE_BUG_SWEEP"):
+                if k not in (env or {}):
+                    os.environ.pop(k, None)
+            d = V.run_review(repo, "main", budget_usd=budget, offline=True, skip_checks=True, log=lambda *_: None,
+                             nits=nits)
+            return U.read_json(os.path.join(d, "review.json")), calls
+
+    def test_same_claim_is_the_union_rule(self):
+        a = self._f("Off-by-one in the page loop drops the last item", 10)
+        self.assertTrue(V.same_claim(a, dict(a, line=13)))                       # within 3 lines
+        self.assertFalse(V.same_claim(a, dict(a, line=14)))                      # 4 apart
+        self.assertFalse(V.same_claim(a, dict(a, file="b.py")))
+        self.assertTrue(V.same_claim(a, self._f("Off by one in page loop drops last item", 11, problem="other")))
+        self.assertTrue(V.same_claim(a, self._f("`page` loop off-by-one drops the last item (same flaw as b.py:3)", 9)))
+        self.assertFalse(V.same_claim(a, self._f("Token logged at info level", 10)))   # another claim at the line
+        self.assertTrue(V.same_claim(dict(a, title="x"), dict(a, title="x")))         # the same text
+        self.assertTrue(V.same_claim(dict(a, line=20, end_line=30), dict(a, line=33)))  # a range, within 3 of its end
+        self.assertFalse(V.same_claim(dict(a, line=20, end_line=30), dict(a, line=34)))
+        # a title is compared up to its first ": " (the union compared "title: problem" messages that way)
+        self.assertTrue(V.same_claim(self._f("Race: counter lost under load", 4), self._f("Race: other words", 4)))
+
+    def test_dedupe_keeps_the_first_seats_item_and_tags_both(self):
+        s1 = dict(self._f("Off-by-one in the page loop drops the last item", 10, "medium"), source="review", seat=1)
+        s2 = dict(self._f("page loop off by one: final element is lost", 13, "critical"), source="review", seat=2)
+        other = dict(self._f("Token logged at info level", 10), source="review", seat=2)
+        self.assertFalse(V.similar(s1, s2))                                     # only the union rule merges them
+        out = V.dedupe([s2, other, s1])
+        self.assertEqual([f["title"] for f in out], [s1["title"], other["title"]])
+        self.assertEqual((out[0]["seat"], out[0]["seats"], out[0]["severity"]), (1, [1, 2], "critical"))
+        self.assertEqual(out[0]["merged"][0]["seat"], 2)
+        self.assertNotIn("seats", out[1])
+        # within one seat, and with seats off, the rule is the old one: these two stay apart
+        self.assertEqual(len(V.dedupe([dict(s1), dict(s2, seat=1)])), 2)
+        out = V.dedupe([dict(self._f(s1["title"], 10), source="review"), dict(self._f(s2["title"], 13), source="review")])
+        self.assertEqual(len(out), 2)
+        self.assertFalse([f for f in out if {"seat", "seats", "merged"} & set(f)])
+
+    def test_off_by_default_nothing_changes(self):
+        r0, c0 = self._run(seat2_out=[self._f("lock held across await", 20)], budget=5.0, nits=True)
+        r1, c1 = self._run(env={"CRUCIBLE_SEATS": "1"}, budget=5.0, nits=True)
+        for r, calls in ((r0, c0), (r1, c1)):
+            self.assertNotIn("seats", r); self.assertNotIn("seats", r["inputs"])
+            self.assertNotIn("seat2", [c["kind"] for c in calls])
+            self.assertFalse([f for f in r["findings"] + r["dropped"] if "seat" in f or "seats" in f])
+            self.assertNotIn("Second seat", V.report(r, {}))
+            self.assertIn("bug_sweep", [c["kind"] for c in calls])            # the bug sweep still runs
+        same = lambda c: re.sub(r"\b[0-9a-f]{7,40}\b", "H", re.sub(r"crucible-repo-\w+", "R", c["prompt"]))  # each run's repo
+        self.assertEqual([same(c) for c in c0], [same(c) for c in c1])
+        # with two seats, the first seat's prompts are the same (cache keys unchanged)
+        _r2, c2 = self._run(env={"CRUCIBLE_SEATS": "2"}, budget=5.0, nits=True)
+        self.assertEqual([same(c) for c in c0 if c["kind"] == "review"], [same(c) for c in c2 if c["kind"] == "review"])
+
+    def test_second_seat_reads_independently_and_is_unioned_before_verification(self):
+        restated = self._f("Division by zero when f is called with 0", 2)
+        new = self._f("lock held across await", 20)
+        r, calls = self._run(seat2_out=[restated, new], env={"CRUCIBLE_SEATS": "2"}, budget=5.0, nits=True,
+                             seat2_cost=0.2)
+        s2 = [c for c in calls if c["kind"] == "seat2"]
+        self.assertEqual(len(s2), 1)
+        self.assertEqual(s2[0]["model"], U.MODELS["sonnet"]); self.assertEqual(r["review_model"], U.MODELS["opus"])
+        self.assertIs(s2[0]["schema"], V.FINDINGS_SCHEMA)                     # findings only
+        p = s2[0]["prompt"]
+        self.assertIn(V.LENS_NOTE, p); self.assertNotIn("House style.", p)    # no house-style or description section
+        self.assertNotIn("division by zero in f", p); self.assertNotIn("unclosed socket", p)   # nothing seat 1 raised
+        kinds = [c["kind"] for c in calls]
+        self.assertGreater(kinds.index("seat2"), max(i for i, k in enumerate(kinds) if k == "review"))
+        self.assertLess(kinds.index("seat2"), kinds.index("verify"))
+        self.assertNotIn("bug_sweep", kinds)                                  # off: the seat pays for it
+        self.assertIn("second review seat", r["bug_sweep"]["skipped"])
+        by = {f["title"]: f for f in r["findings"]}
+        self.assertEqual(by["division by zero in f"]["seats"], [1, 2])        # the first seat's wording stays
+        self.assertNotIn("Division by zero when f is called with 0", by)
+        self.assertEqual(by["lock held across await"]["seat"], 2)
+        self.assertEqual(by["unclosed socket in g"]["seat"], 1)
+        self.assertTrue(all(f["verification"]["status"] == "verified" for f in r["findings"] if f["source"] == "review"))
+        st = r["seats"]
+        self.assertEqual((st["n"], st["model"], st["order"], st["cap_usd"]), (2, U.MODELS["sonnet"], "reversed", 1.5))
+        self.assertEqual((st["passes"], st["of"], st["failed"], st["raised"], st["new"]), (1, 1, 0, 2, 1))
+        self.assertEqual(st["kept"], {"seat1": 1, "seat2": 1, "both": 1})
+        self.assertAlmostEqual(st["cost_usd"], 0.2)
+        self.assertAlmostEqual(r["cost_review_usd"], 0.2)                    # a review call: booked as review cost
+        self.assertEqual(r["inputs"]["seats"], 2)
+        self.assertIn("Second seat (claude-sonnet-5-5, reversed file order): 1 of 1 pass(es), 2 finding(s) raised, "
+                      "1 new after dedupe; kept: 1 only it raised, 1 raised by both seats", V.report(r, {}))
+        # an explicit CRUCIBLE_BUG_SWEEP=1 still runs the sweep beside the seat
+        _r, calls = self._run(env={"CRUCIBLE_SEATS": "2", "CRUCIBLE_BUG_SWEEP": "1"}, budget=5.0, nits=True)
+        self.assertIn("bug_sweep", [c["kind"] for c in calls])
+
+    def test_seat_model_and_order_are_configurable(self):
+        r, calls = self._run(env={"CRUCIBLE_SEATS": "2", "CRUCIBLE_SEAT2_MODEL": "opus", "CRUCIBLE_SEAT2_ORDER": "same"})
+        self.assertEqual(next(c["model"] for c in calls if c["kind"] == "seat2"), U.MODELS["opus"])
+        self.assertEqual((r["seats"]["order"], r["seats"]["cap_usd"]), ("same", None))   # no budget: no cap
+        with _mock.patch.dict(os.environ, {"CRUCIBLE_SEAT2_MODEL": "sonnet"}):
+            self.assertEqual(V.seat2_model(U.MODELS["opus"], [U.MODELS["sonnet"]]), U.MODELS["opus"])  # never the author's
+            self.assertEqual(V.seat2_model(U.MODELS["opus"], []), U.MODELS["sonnet"])
+        with _mock.patch.dict(os.environ, {"CRUCIBLE_SEAT2_MODEL": "claude-x-1"}):
+            self.assertEqual(V.seat2_model(U.MODELS["opus"]), "claude-x-1")
+        for v, want in (("", 1), ("1", 1), ("2", 2), ("3", 2), ("x", 1)):
+            with _mock.patch.dict(os.environ, {"CRUCIBLE_SEATS": v}):
+                self.assertEqual(V.seats(), want, v)
+
+    def test_reversed_chunk(self):
+        texts = {"a.py": "diff --git a/a.py b/a.py\n+a", "b.py": "diff --git a/b.py b/b.py\n+b"}
+        ch = {"files": ["a.py", "b.py"], "text": texts["a.py"] + "\n" + texts["b.py"] + "\n"}
+        r = V.reversed_chunk(ch, texts)
+        self.assertEqual(r["files"], ["b.py", "a.py"])
+        self.assertEqual(r["text"], texts["b.py"] + "\n" + texts["a.py"] + "\n")
+        self.assertEqual(ch["files"], ["a.py", "b.py"])                       # the first seat's pass is untouched
+        one = {"files": ["a.py"], "text": "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n+part"}
+        self.assertIs(V.reversed_chunk(one, texts), one)                     # a file split over passes: as is
+        odd = dict(ch, text=ch["text"] + "# extra")
+        self.assertIs(V.reversed_chunk(odd, texts), odd)                     # not exactly its files' texts: as is
+        # through run_review: a two-file pass reaches the second seat reversed
+        files = ({"a.py": "x = 1\n", "b.py": "y = 1\n"}, {"a.py": "x = 2\n", "b.py": "y = 2\n"})
+        _r, calls = self._run(env={"CRUCIBLE_SEATS": "2"}, repo_files=files)
+        p1 = next(c["prompt"] for c in calls if c["kind"] == "review")
+        p2 = next(c["prompt"] for c in calls if c["kind"] == "seat2")
+        self.assertLess(p1.index("diff --git a/a.py"), p1.index("diff --git a/b.py"))
+        self.assertGreater(p2.index("diff --git a/a.py"), p2.index("diff --git a/b.py"))
+        self.assertIn("This pass covers: b.py, a.py", p2)
+
+    def test_budget_cap_and_skips(self):
+        # 4 passes, each seat-2 call $0.60, $5 budget: the cap is $1.50, so passes 1-2 spend $1.20, the third gets the
+        # $0.30 left (the CLI cuts it there), and the fourth is never called
+        r, calls = self._run(env={"CRUCIBLE_SEATS": "2"}, budget=5.0, passes=4, seat2_cost=0.6)
+        st = r["seats"]
+        self.assertEqual(sum(c["kind"] == "seat2" for c in calls), 3)
+        self.assertEqual((st["passes"], st["of"], st["stopped"]), (3, 4, 1))
+        self.assertLessEqual(st["cost_usd"], 1.5 + 1e-9); self.assertAlmostEqual(st["cost_usd"], 1.5)
+        self.assertEqual(st["cap_usd"], 1.5)
+        r, _ = self._run(env={"CRUCIBLE_SEATS": "2", "CRUCIBLE_SEAT2_SHARE": "0.5"}, budget=5.0, passes=4, seat2_cost=0.6)
+        self.assertEqual(r["seats"]["cap_usd"], 2.5)
+        r, calls = self._run(env={"CRUCIBLE_SEATS": "2", "CRUCIBLE_SEAT2_SHARE": "0.05"}, budget=5.0)
+        self.assertIn("CRUCIBLE_SEAT2_SHARE", r["seats"]["skipped"]); self.assertNotIn("seat2", [c["kind"] for c in calls])
+        self.assertIn("Second seat skipped:", V.report(r, {}))
+        # the first seat's passes spent nearly everything: nothing left for the seat after its findings' verification
+        r, calls = self._run(env={"CRUCIBLE_SEATS": "2"}, budget=1.0, review_cost=0.6)
+        self.assertIn("first seat's verification", r["seats"]["skipped"]); self.assertNotIn("seat2", [c["kind"] for c in calls])
+        # the seat leaves the first seat's findings their verification money
+        r, calls = self._run(env={"CRUCIBLE_SEATS": "2"}, budget=2.0, review_cost=0.5, passes=2, seat2_cost=5.0)
+        self.assertLessEqual(r["seats"]["cost_usd"], 2.0 - 1.0 - 4 * V.BUG_SWEEP_VERIFY_EST_USD + 1e-9)
+        self.assertTrue(all(f["verification"]["status"] == "verified" for f in r["findings"] if f.get("seat") == 1))
+        r, calls = self._run(env={"CRUCIBLE_SEATS": "2", "CRUCIBLE_SMALL_TIER": "1"}, budget=5.0)
+        self.assertEqual(r["seats"], {"n": 2, "skipped": "small tier"})
+
+    def test_a_failed_seat_pass_leaves_the_review_whole(self):
+        r, calls = self._run(env={"CRUCIBLE_SEATS": "2"}, budget=5.0, seat2_error="overloaded")
+        self.assertEqual(r["status"], "done")
+        self.assertTrue(r["coverage"]["complete"])
+        self.assertEqual((r["seats"]["passes"], r["seats"]["failed"]), (0, 1))
+        self.assertEqual(sorted(f["title"] for f in r["findings"] if f["source"] == "review"),
+                         ["division by zero in f", "unclosed socket in g"])
+        self.assertNotIn("failed", r["summary"])
+
+    def test_seat_pass_is_cached(self):
+        from unittest import mock
+        home = tempfile.mkdtemp(prefix="crucible-home-")
+        seen = []
+
+        def fake(prompt, model, schema, cwd, budget=None, *a, **kw):
+            seen.append(kw.get("kind"))
+            return {"summary": "", "findings": [self._f("x", 1)]}, 0.1
+        passes = [({"files": ["a.py"], "text": "D1"}, "", ""), ({"files": ["a.py"], "text": "D2"}, "", "")]
+        pf = lambda ch, docs, since: (ch["text"], ch["text"])
+        with mock.patch.dict(os.environ, {"CRUCIBLE_CACHE": os.path.join(home, "c")}), mock.patch.object(V, "claude", fake):
+            got, st = V.second_seat(passes, pf, "m", U.Budget(None), ".", log=lambda *_: None)
+            self.assertEqual((len(seen), st["passes"], len(got)), (2, 2, 2))
+            self.assertTrue(all(f["seat"] == 2 and f["source"] == "review" for f in got))
+            got, st = V.second_seat(passes, pf, "m", U.Budget(None), ".", log=lambda *_: None)
+            self.assertEqual((len(seen), st["passes"], len(got)), (2, 2, 2))            # from the cache
+            V.second_seat(passes, pf, "m", U.Budget(None), ".", fresh=True, log=lambda *_: None)
+            self.assertEqual(len(seen), 4)                                              # --fresh bypasses it
+            V.second_seat(passes, pf, "other", U.Budget(None), ".", log=lambda *_: None)
+            self.assertEqual(len(seen), 6)                                              # keyed on the model too
+
+    def test_a_one_seat_review_is_redone_with_two(self):
+        prev = {"status": "done", "inputs": {"base": "b", "draft": None, "draft_sha": None}}
+        self.assertIsNone(V.stale_inputs(prev, dict(prev["inputs"])))
+        self.assertIn("one seat", V.stale_inputs(prev, dict(prev["inputs"], seats=2)))
+        self.assertIsNone(V.stale_inputs(dict(prev, inputs=dict(prev["inputs"], seats=2)), dict(prev["inputs"])))
+
+
 if __name__ == "__main__":
     unittest.main()
