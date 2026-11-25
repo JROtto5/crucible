@@ -1841,6 +1841,26 @@ name>-<first arg>.pid` (pid and script name), and refuses to start a second copy
 `~/rb-work/rb-alive.sh <key>` (exit 0 alive) or `--list`: kill -0 on the pid, then the pid's argv[0] or argv[1] must be
 that script, so a reused pid or a shell that only mentions the script reads as not alive (8 cases checked, including
 both of those). New drivers use it; don't write a pgrep pattern for a run again.
+
+**R8-train (feat/r8-recall fb540f5, image `crucible-rb:r8c`, same harness; accounts #18 then #16 across 5-hour limits:
+PRs 29, 90 and 192 were cut by a limit and re-run; `runs/r8train`, results.details.json sha256 57893db117b6…).**
+| | TRAIN base (8a5d035) | **R8-train (fb540f5)** |
+|---|---|---|
+| high: grounded P / R / F1 (macro) | 100.0 / 57.9 / 73.4 | **100.0 / 57.6 / 73.1** |
+| high: micro R, Wilson 95% | 17/30 = 56.7 [39.2, 72.6] | **18/30 = 60.0 [42.3, 75.4]** |
+| high: micro P | 14/14 | 17/17 = 100.0 [81.6, 100.0] |
+| all: grounded P / R / F1 (macro) | 82.4 / 48.2 / 60.8 | 81.2 / 47.1 / 59.6 |
+| all: micro P / R | 297/365, 337/719 | 315/381 = 82.7 [78.6, 86.1], 347/719 = 48.3 [44.6, 51.9] |
+| $ per PR (kept runs) | mean 2.21, median 1.76 | mean 2.67, median 2.49, max 5.03 (total 160.33; 168.02 with the 3 cut attempts) |
+High items, base → R8: **gained 4, lost 3.** Gained: entebus #0 through a text-named site (lever 1: `schemas.ts:153`, held
+by the verifier), katana #31 through a bug-sweep nit (lever 2), mississippi #16 and swarmbase #43 through first-pass
+findings. Lost: mississippi #19, hm-cupano #0, dotnet/android #2, none touched by either lever (no sweep or site row
+on them in either run): one-round variance in the first pass, the same size as the gains. Macro high F1 is flat
+(-0.3) because hm-cupano's loss is its PR's only high item. Text sites: 12 proposed, 4 held by the verifier. Bug sweep:
+ran on 49 of 60 PRs (11 skipped by the 50% rule or the reserve), 77 findings to verification, 60 kept as nits (7
+graded important by the verifier), 5 credited high rows (3 on items the first pass also found), $21.78 in all.
+Reading: each lever carried the item it was built for, and precision held (17/17); on 30 items one round can't
+separate +1 from noise. The held-out 50 is the measure (next).
 ### 2026-11-25 · field reads on the sealed held-out 50: Step 1 of the pre-registered paired arm ($0)
 
 **Switch.** `CRUCIBLE_NO_FIELD_READS=1` makes `fields_note` return "" (62a75e0, test mutation-checked; `modelreplay`
