@@ -516,14 +516,15 @@ def bug_sweep_cap_usd():
         return 0.60
 
 
-def bug_sweep_skip_reason(limit, spent, remaining):
+def bug_sweep_skip_reason(limit, spent, remaining, seat_ran=False):
     """None when the bug sweep may run; else why not. The nit sweep's rules (sweep_skip_reason), except that `remaining`
-    is what's left after the nit reserve and an estimate of verifying the findings already raised (None: no limit)."""
+    is what's left after the nit reserve and an estimate of verifying the findings already raised (None: no limit).
+    seat_ran: the second review seat reviewed a pass, and so took the sweep's budget."""
     mode = bug_sweep_mode()
     if mode == "off":
         return "off (CRUCIBLE_BUG_SWEEP=0)"
-    if mode == "auto" and seats() > 1:
-        return "off: the second review seat takes its budget (CRUCIBLE_SEATS=2; CRUCIBLE_BUG_SWEEP=1 runs it anyway)"
+    if mode == "auto" and seat_ran:
+        return "off: the second review seat took its budget (CRUCIBLE_SEATS=2; CRUCIBLE_BUG_SWEEP=1 runs it anyway)"
     if bug_sweep_cap_usd() < SWEEP_MIN_USD:
         return f"its cap (CRUCIBLE_BUG_SWEEP_USD) is under ${SWEEP_MIN_USD:.2f}"
     if limit is None:
@@ -673,7 +674,9 @@ def _claim_title(t):
 def same_claim(a, b):
     """Two seats' items are one claim (the rule of the union test, eval/NOTES 2026-11-25): the same file, lines
     overlapping or within SEAT_NEAR, and the same text or titles alike (character ratio >= 0.55, or Jaccard >= 0.4 over
-    the title's words less stopwords). A stricter ratio left restatements apart."""
+    the title's words less stopwords). A stricter ratio left restatements apart. One departure from the union test:
+    titles that differ by one swapped word ("missing validation for port" / "... for host", "cache read" / "cache
+    write") name two flaws, not one, so they stay apart; a restatement rewords more than its subject."""
     if a.get("file") != b.get("file"):
         return False
     def span(f):
@@ -688,7 +691,9 @@ def same_claim(a, b):
         return True
     ta, tb = _claim_title(a.get("title")), _claim_title(b.get("title"))
     wa, wb = ({w for w in re.findall(r"[\w.]+", t) if w not in SEAT_STOP} for t in (ta, tb))
-    jac = len(wa & wb) / len(wa | wb) if wa | wb else 0.0
+    if not (wa and wb) or (len(wa - wb) == 1 and len(wb - wa) == 1):   # no title to compare, or one swapped subject
+        return False
+    jac = len(wa & wb) / len(wa | wb)
     return jac >= 0.4 or difflib.SequenceMatcher(None, ta, tb).ratio() >= 0.55
 
 
@@ -2443,7 +2448,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             keep = BUG_SWEEP_VERIFY_EST_USD * (sum(f.get("source") == "review" for f in cands + reverify) + BUG_SWEEP_MAX)
             room = HeldBudget(budget, pass_hold + keep) if budget.limit is not None else budget
             skip = ("small tier" if record.get("small_tier") else "no pass was reviewed" if not sweep_chunks else
-                    bug_sweep_skip_reason(budget.limit, budget.spent, room.remaining()))
+                    bug_sweep_skip_reason(budget.limit, budget.spent, room.remaining(),
+                                          (record.get("seats") or {}).get("passes", 0) > 0))
             if skip:
                 record["bug_sweep"] = {"skipped": skip}
             else:
@@ -2482,7 +2488,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
 
         new = assign_ids(dedupe([apply_honesty(f) for f in cands]))
         taken = {f["id"] for f in carried + reverify}
-        new = [f for f in new if not any(similar(f, c) for c in carried + reverify)]   # earlier findings win over re-reports
+        # earlier findings win over re-reports; the second seat, which isn't told what was carried, by its own rule too
+        new = [f for f in new if not any(similar(f, c) or (f.get("seat") == 2 and same_claim(f, c)) for c in carried + reverify)]
         for f in new:
             if f["id"] in taken:
                 f["id"] += "-n"
@@ -2588,8 +2595,9 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             extra = 0.0
             hold = nits_reserve_usd(budget.limit, len(nit_pool(nit_cands, cands + carried + reverify, dlabel, measured)))
             left = None if budget.limit is None else max(0.0, budget.remaining() - hold - NIT_BATCH_EST_USD)
-            # its 50% rule reads the spend before the bug sweep, so the one can't switch the other off
-            first = budget.spent - (record.get("bug_sweep") or {}).get("cost_usd", 0.0)
+            # its 50% rule reads the spend before the bug sweep and the second seat, so neither switches it off
+            first = (budget.spent - (record.get("bug_sweep") or {}).get("cost_usd", 0.0)
+                     - (record.get("seats") or {}).get("cost_usd", 0.0))
             skip = ("small tier" if record.get("small_tier") else
                     sweep_skip_reason(budget.limit, first, left) if sweep_chunks else "no pass was reviewed")
             if skip:

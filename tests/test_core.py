@@ -9348,6 +9348,15 @@ class TestSecondSeat(unittest.TestCase):
         self.assertTrue(V.same_claim(a, self._f("Off by one in page loop drops last item", 11, problem="other")))
         self.assertTrue(V.same_claim(a, self._f("`page` loop off-by-one drops the last item (same flaw as b.py:3)", 9)))
         self.assertFalse(V.same_claim(a, self._f("Token logged at info level", 10)))   # another claim at the line
+        # parallel wording about two subjects is two flaws: one swapped word keeps them apart
+        for x, y in (("Missing validation for port", "Missing validation for host"),
+                     ("Missing null check on user", "Missing null check on config"),
+                     ("SQL injection via user_id param", "SQL injection via sort param"),
+                     ("Race condition on cache write", "Race condition on cache read"),
+                     ("Unchecked return value of open()", "Unchecked return value of close()")):
+            self.assertFalse(V.same_claim(self._f(x, 10), self._f(y, 11, problem="q")), (x, y))
+        self.assertFalse(V.same_claim(self._f("", 10), self._f("", 10, problem="q")))     # no titles: text only
+        self.assertFalse(V.same_claim(self._f("the", 10), self._f("a", 10, problem="q")))  # stopwords only
         self.assertTrue(V.same_claim(dict(a, title="x"), dict(a, title="x")))         # the same text
         self.assertTrue(V.same_claim(dict(a, line=20, end_line=30), dict(a, line=33)))  # a range, within 3 of its end
         self.assertFalse(V.same_claim(dict(a, line=20, end_line=30), dict(a, line=34)))
@@ -9471,9 +9480,10 @@ class TestSecondSeat(unittest.TestCase):
         self.assertEqual(st["cap_usd"], 1.5)
         r, _ = self._run(env={"CRUCIBLE_SEATS": "2", "CRUCIBLE_SEAT2_SHARE": "0.5"}, budget=5.0, passes=4, seat2_cost=0.6)
         self.assertEqual(r["seats"]["cap_usd"], 2.5)
-        r, calls = self._run(env={"CRUCIBLE_SEATS": "2", "CRUCIBLE_SEAT2_SHARE": "0.05"}, budget=5.0)
+        r, calls = self._run(env={"CRUCIBLE_SEATS": "2", "CRUCIBLE_SEAT2_SHARE": "0.05"}, budget=5.0, nits=True)
         self.assertIn("CRUCIBLE_SEAT2_SHARE", r["seats"]["skipped"]); self.assertNotIn("seat2", [c["kind"] for c in calls])
         self.assertIn("Second seat skipped:", V.report(r, {}))
+        self.assertIn("bug_sweep", [c["kind"] for c in calls])               # a skipped seat took nothing: the sweep runs
         # the first seat's passes spent nearly everything: nothing left for the seat after its findings' verification
         r, calls = self._run(env={"CRUCIBLE_SEATS": "2"}, budget=1.0, review_cost=0.6)
         self.assertIn("first seat's verification", r["seats"]["skipped"]); self.assertNotIn("seat2", [c["kind"] for c in calls])
@@ -9487,6 +9497,44 @@ class TestSecondSeat(unittest.TestCase):
         self.assertTrue([f for f in r["findings"] if f.get("seat") == 2])
         r, calls = self._run(env={"CRUCIBLE_SEATS": "2", "CRUCIBLE_SMALL_TIER": "1"}, budget=5.0)
         self.assertEqual(r["seats"], {"n": 2, "skipped": "small tier"})
+
+    def test_seat_spend_does_not_switch_the_nit_sweep_off(self):
+        # $5 budget: the first seat's pass $1.00, the seat's $1.50 ($2.50 in all, over half only with the seat counted)
+        r, calls = self._run(env={"CRUCIBLE_SEATS": "2"}, budget=5.0, nits=True, review_cost=1.0, seat2_cost=1.6)
+        self.assertAlmostEqual(r["seats"]["cost_usd"], 1.5)
+        self.assertIn("nit_sweep", [c["kind"] for c in calls])
+        self.assertNotIn("skipped", r["nit_sweep"])
+
+    def test_seat_restating_a_carried_finding_is_dropped(self):
+        """An incremental round: the seat isn't told what was carried, so its rewording of a carried finding goes by
+        same_claim, as against the first seat."""
+        from unittest import mock
+        repo = make_repo({"a.py": "x = 1\n", "b.py": "y = 1\n"},
+                         {"a.py": "x = 2\n" + "".join(f"z{i} = {i}\n" for i in range(20)), "b.py": "y = 1\n"})
+        carried = self._f("Off-by-one in the page loop drops the last item", 10)
+        restated = self._f("page loop off by one: final element is lost", 13)
+        state = {"round": 1}
+
+        def fake(prompt, model, schema, cwd, budget=None, *a, **kw):
+            kind = kw.get("kind")
+            if kind == "review":
+                return {"summary": "s", "findings": [dict(carried)] if state["round"] == 1 else []}, 0.0
+            if kind == "seat2":
+                return {"summary": "s", "findings": [dict(restated)] if state["round"] == 2 else []}, 0.0
+            return {"keep": True, "severity": "important", "method": "read", "actions": "", "evidence": "e",
+                    "confidence": "high"}, 0.0
+        home = tempfile.mkdtemp(prefix="crucible-home-")
+        with mock.patch.object(V, "HOME", home), mock.patch.object(U, "HOME", home), mock.patch.object(V, "claude", fake), \
+                mock.patch.dict(os.environ, {"CRUCIBLE_CACHE": os.path.join(home, "c"), "CRUCIBLE_SEATS": "2"}):
+            V.run_review(repo, "main", offline=True, skip_checks=True, log=lambda *_: None)
+            open(os.path.join(repo, "b.py"), "w").write("y = 2\n")
+            sh(repo, "git", "commit", "-qam", "more")
+            state["round"] = 2
+            d = V.run_review(repo, "main", offline=True, skip_checks=True, log=lambda *_: None)
+            r = U.read_json(os.path.join(d, "review.json"))
+        self.assertEqual(r["incremental"]["carried"], 1)
+        self.assertEqual(r["seats"]["raised"], 1)
+        self.assertEqual([f["title"] for f in r["findings"]], [carried["title"]])
 
     def test_a_failed_seat_pass_leaves_the_review_whole(self):
         r, calls = self._run(env={"CRUCIBLE_SEATS": "2"}, budget=5.0, seat2_error="overloaded")

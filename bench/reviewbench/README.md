@@ -13,8 +13,8 @@ findings file out.
   also gets the nit sweep, a nit-only second look at each pass (`CRUCIBLE_NITS_SWEEP_USD`, default $0.75;
   `CRUCIBLE_NITS_SWEEP=0` turns it off for an A/B), and the bug sweep before verification, a second look for blocking
   bugs the passes missed (`CRUCIBLE_BUG_SWEEP_USD`, default $0.60; `CRUCIBLE_BUG_SWEEP=0` turns it off).
-- `CRUCIBLE_SEATS=2` (off by default; a seat image such as `crucible-rb:r9seat` sets it in its Dockerfile, since
-  `agent.sh` passes no environment of its own) adds a second, independent review seat, with or without `--nits`:
+- `CRUCIBLE_SEATS=2` (off by default; `agent.sh` passes no environment of its own, so a seat run needs it in the
+  image, e.g. the Dockerfile above plus `ENV CRUCIBLE_SEATS=2`) adds a second, independent review seat, with or without `--nits`:
   `CRUCIBLE_SEAT2_MODEL` (default `sonnet`), `CRUCIBLE_SEAT2_ORDER` (default `reversed`), `CRUCIBLE_SEAT2_SHARE`
   (default 0.30 of the budget). Its findings are unioned with the first seat's before verification, and it turns the
   bug sweep off unless `CRUCIBLE_BUG_SWEEP=1` (CHANGELOG 2026-11-25).
