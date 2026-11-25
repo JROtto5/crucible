@@ -9356,6 +9356,11 @@ class TestSecondSeat(unittest.TestCase):
                       "regeneration failure shows the setup error message"),
                      ("broken doc comment", "doc comment damaged")):
             self.assertTrue(V.same_claim(self._f(x, 10), self._f(y, 13, problem="q")), (x, y))
+        # the accepted trade-off: parallel wording about two subjects merges (as under `similar`); the boundary is the
+        # title rule itself, so titles that share less stay apart
+        self.assertTrue(V.same_claim(self._f("Missing validation for port", 10), self._f("Missing validation for host", 11)))
+        self.assertTrue(V.similar(self._f("Missing validation for port", 10), self._f("Missing validation for host", 11)))
+        self.assertFalse(V.same_claim(self._f("Unchecked port value", 10), self._f("Unvalidated host string", 11)))
         self.assertFalse(V.same_claim(self._f("", 10), self._f("", 10, problem="q")))     # no titles: text only
         self.assertFalse(V.same_claim(self._f("the", 10), self._f("a", 10, problem="q")))  # stopwords only
         self.assertTrue(V.same_claim(dict(a, title="x"), dict(a, title="x")))         # the same text
