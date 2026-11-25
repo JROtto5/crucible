@@ -1985,3 +1985,87 @@ stored full-judge outputs, recomputed by the same totals script (they reproduce 
 - So the cheapest measured high-recall lever so far is a second independent review seat. Building it (Design 2:
   Opus + Sonnet seats, the bug sweep off) and measuring the build itself on held-out is next, at ≤ $3/PR only if the
   seats get cheaper (design 3's batched verification) or the budget rule changes.
+
+### 2026-11-25 · the second seat built (`CRUCIBLE_SEATS=2`, feat/second-seat): $/PR estimate ($0) and the pre-registered measurement plan
+
+**What is built** (CHANGELOG 2026-11-25; off by default). After the first seat's passes, each reviewed pass is read
+again in a fresh call told nothing the first seat raised: Sonnet 5.5 (`CRUCIBLE_SEAT2_MODEL`), the pass's files in
+reverse order (`CRUCIBLE_SEAT2_ORDER`), the lens prompt (no house-style or description section), findings only (max
+10 per pass), the same context notes. Its cap is 30% of the budget (`CRUCIBLE_SEAT2_SHARE`; $1.50 of ReviewBench's
+$5), taken after the nit reserve and an estimate of verification ($0.10 per finding the first seat raised, plus 5 of
+the seat's own), riskiest pass first. Both seats' findings go to `dedupe` together: a seat-2 item merges into a seat-1 item under `similar` or
+the union test's rule (`same_claim`: same file, lines overlapping or within 3, same text or titles alike, ratio ≥ 0.55
+or word Jaccard ≥ 0.4; titles with no words to compare merge only on the same text), and the seat-1 item stays the kept
+one; a seat-2 rewording of a carried finding is dropped by the same rule. Every item carries `seat` (and `seats: [1, 2]` when
+both raised it); review.json `seats` has passes, cost, raised, new after dedupe, and kept/dropped by seat. The bug sweep
+is off when the seat ran (`CRUCIBLE_BUG_SWEEP=1` overrides); the nit sweep's 50% rule leaves the seat's spend out, as
+it does the bug sweep's. Tests: 12 new (562 in all), each rule mutation-checked.
+
+**A guard tried and dropped ($0, TRAIN).** The self-review asked whether `same_claim` merges two flaws worded in
+parallel ("missing validation for port" / "... for host"). Replayed on the TRAIN union (`r8base` ∪ `r8train` findings,
+`~/rb-work/tmp/union/guard.py`): of the rule's 418 merges, 23 have titles differing by one swapped word on each side,
+and all 23 read as the same claim ("max_vtt_ms guard / check can never trigger", "relicense / license change has no
+change-log entry", "regenerate / regeneration failure ..."); a narrower guard (≤ 6 words, not an inflection) still
+split 4 restatements and no two-flaw pair. So the measured rule stands; `similar`, the one-seat rule, merges such
+pairs too.
+
+**$/PR estimate from the stored R8-train review.json splits** (`runs/r8train` via `.try-agent-r8train/out/*/review.json`,
+60 TRAIN PRs, $0; nothing on held-out read). Today: mean $2.67 (review passes $1.33, bug sweep $0.36, nit sweep $0.26,
+verification $0.72; 8 PRs Sonnet-reviewed, 5 at the $5 budget). Price ratio Sonnet/Opus as metered: list 0.60;
+fitting each kind's tokens to list prices, Opus review costs 0.83 of list and Sonnet verify 0.91, so **0.66** here.
+Seat 2 = min(0.66 × 0.9 × the first seat's review $ (lens prompt, no nits section), $1.50, what the budget leaves
+after the first seat's spend). Added verification = the first seat's verified findings × 0.84 (the share of round 2's
+items that were new in the held-out union: 1,613 kept of 1,917) × the seat's covered fraction × $0.083 (R8-train's
+cost per verified finding), within the budget left. Less the bug sweep and its verified findings (1.28 per PR).
+| assumption | mean $/PR | median | max | seat 2 mean |
+|---|---|---|---|---|
+| ratio 0.66, 84% new | **2.96** | 2.80 | 5.03 | 0.51 |
+| ratio 0.66, 60% new | 2.89 | 2.71 | 5.03 | 0.51 |
+| ratio 0.80, 84% new | 3.01 | 2.87 | 5.03 | 0.56 |
+So **≈ $2.9-3.0 per PR, at the ≤ $3 target's edge** (the $5 budget still bounds every PR). If the measured mean is over
+$3.00, `CRUCIBLE_SEAT2_SHARE=0.2` is the first lever (about -$0.15 by the same arithmetic), not dropping the seat.
+The nit sweep is assumed unchanged (its 50% rule leaves the seat's spend out), so the estimate keeps its $0.26.
+
+**Self-review** (crucible-rb:r8c with the branch mounted, `--budget 4`, account #11): 5 rounds, $3.48. a45daa3 NOT_GREEN
+(7 low: same-seat merges counted as "both seats", no verification money for the seat's own findings, the knobs
+undocumented in the README and the review help, a private path in a docstring), 85cb443 NOT_GREEN (the seat's spend
+switched the nit sweep off; the bug sweep went off even when the seat was skipped; a seat-2 rewording of a carried
+finding was kept; same_claim merging parallel titles), c9e471e NOT_GREEN (the one-swapped-word guard added for that
+split real restatements: dropped, above), dfbd242 NOT_GREEN (pin the accepted merge in a test), **ec52463 GREEN**.
+
+**Local eval with the seat on** (`CRUCIBLE_SEATS=2 crucible eval --nits --no-write --jobs 3`, all 41 cases, budget
+1.50, crucible-rb:r8c with ec52463 mounted, account #11 79% → 81% weekly, $19.31): recall **0.958** (build 21/22,
+holdout 2/2; js-refcount missed at blocking severity as always), any severity **1.0**, false blocking **0 on 9 clean
+cases**. Nit cases 22/22 planted issues, false blocking 2 (maintainability-cross, reliability: 1 each; fb540f5: 3).
+True dropped 4 (fb540f5: 2). Nits kept 131 (21 on clean cases; fb540f5: 146 and 22). Against the shipped one-seat
+build (fb540f5, 11-24: recall 0.917, $19.01) it is +1 caught case at about the same cost, the seat's Sonnet passes
+standing in for the bug sweep. Passes the bar (recall ≥ 0.913, 0 false blocking on clean cases). The eval keeps no
+review.json (`--no-write` runs in temp homes), so per-seat counts come from the ReviewBench run.
+
+**Image.** `crucible-rb:r9seat` on blaze-3 (image 1c40269354be; `~/rb-work/img9seat`, built like r8c from a git
+archive of ec52463 (REF); agent.sh and to_findings.py identical to r8c's; `ENV CRUCIBLE_SEATS=2` in its Dockerfile,
+everything else R8's harness: `--nits`, budget 5; checked in the image: `seats()` 2, share 0.3, seat model
+claude-sonnet-5-5, Claude Code 2.1.319). Not run: accounts #16/#18 are at 92-96% weekly until the 11-29 22:00 /
+11-30 07:00 ET resets.
+
+**Measurement plan, pre-registered (bars fixed now, before any run). One round per stage; each stage only if the one
+before passes. Same harness as R8 (`rb-run-set.sh`, `RB_CONFIG_KEEP_REVIEW=1`, Sonnet 5 judge), reference R8-train
+(`runs/r8train`, fb540f5) on the same PRs. Borrowed accounts stop at 85% weekly; never #1, #2, #4, #5, #10, #17,
+#19-#21, #23.**
+1. **Targeted, 13 TRAIN PRs** (`SET=train60 IMG=r9seat PRS="7 8 13 25 29 86 90 92 151 192 2 5 19"`): the 10 PRs
+   holding TRAIN's 13 missed high items (Maui 7, agent-orchestrator 8, mississippi 13, nestjs-yalc 25, entebus 29,
+   dotnet/android 86, katana 90, ia-dev-environment 92, obot 151, swarmbase 192) plus 3 with no golden high item,
+   fixed by rule (the three lowest TRAIN manifest indices without one: 2, 5, 19; PR 2 is also a $5-budget PR).
+   Estimate ≈ $38 for the reviews (13 × ~$2.9) plus the judge. **Pass, all of:** (a) high items credited on the 10
+   PRs ≥ R8-train's + 3; (b) at most 1 of R8-train's credited high items on them lost; (c) at least 2 of the gained
+   items credited to a finding whose `seat` is 2 with no `seats` (carried by the second seat alone; else the gain is
+   first-pass variance, not the seat); (d) high micro P ≥ 90 over the 13, and 0 high-view false positives on PRs 2,
+   5, 19; (e) mean ≤ $3.00 per PR over the 13. Report per-seat counts (raised, new, kept, credited) from review.json.
+2. **TRAIN-60** (`SET=train60 IMG=r9seat`, ≈ $180 + judge). **Pass, all of:** high micro R ≥ 21/30 (the stored
+   union's $0 bound; R8-train 18/30), high micro P ≥ 90, all-severity micro P ≥ 78 (R8-train 82.7; the union cost
+   1-3 points), mean ≤ $3.00 per PR.
+3. **Held-out 50, once, totals only** (`SET=heldout50 IMG=r9seat`, `TOTALS_ONLY=1` scoring, ≈ $150 + judge; this is
+   the held-out 50's third full use after R7 and R8, plus the stored-union read: say so with the number). Report
+   macro high P/R/F1 (the board's), high micro R/P with Wilson 95%, all-severity P/R/F1, $/PR. **Bar for turning the
+   seat on by default:** high F1 ≥ 65.0 (R7 58.3, R8 55.6; the stored two-round union reached 69.6 at ~2× cost), high
+   micro P ≥ 90, mean ≤ $3.00 per PR. Below 65 with P held, the seat stays a knob and the reading goes here.
