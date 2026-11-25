@@ -1953,3 +1953,35 @@ Reading:
   different matcher pass than the singles (1-2 F1 points of matcher noise, RevEngine's figure).
 - Next is the main session's call: a totals-only union of the stored held-out R7 + R8 runs. The remaining 28 TRAIN PRs
   can be matched for about 1-2% of an account (resumable: `match-only.mts` keeps finished PRs).
+
+### 2026-11-25 · held-out 50, totals only: R7 ∪ R8 unioned, high F1 69.6 (R7 58.3, R8 55.6), high micro R 28/60
+
+The same test on the sealed held-out 50, on the main session's go after the TRAIN result above: the stored R7 held-out
+run (`runs/h50`, c9501a5) unioned with R8's (`runs/r8h50`, fb540f5), deduped by the same rule (`union.py`), then
+scored by matching only (`match-only.mts`, judge f223ce3, claude-sonnet-5, concurrency 3, account #18: 89% → 90%
+weekly, token over ssh stdin and deleted). **Totals only:** the scripts were changed to print no per-PR line
+(`TOTALS_ONLY=1`; the matcher logs only a running count). The only output read was the aggregate rows below. No
+per-item match, miss or golden text was printed or read. All 50 PRs matched, none failed. The singles come from their
+stored full-judge outputs, recomputed by the same totals script (they reproduce the R7 and R8 rows above exactly).
+
+| | R7 held-out | R8 held-out | **R7 ∪ R8** |
+|---|---|---|---|
+| findings per PR | 18.9 | 19.4 | **32.3** (1,613; 304 merged as duplicates) |
+| **high: grounded P / R / F1 (macro, the board's)** | 92.9 / 42.5 / 58.3 | 94.4 / 39.4 / 55.6 | **95.0 / 54.9 / 69.6** |
+| high: micro R, Wilson 95% | 23/60 = 38.3 [27.1, 51.0] | 22/60 = 36.7 [25.6, 49.3] | **28/60 = 46.7 [34.6, 59.1]** |
+| high: micro P, Wilson 95% | 20/21 = 95.2 [77.3, 99.2] | 19/20 = 95.0 [76.4, 99.1] | **25/26 = 96.2 [81.1, 99.3]** |
+| all: grounded P / R / F1 (macro) | 83.3 / 49.7 / 62.3 | 81.8 / 53.3 / 64.6 | **79.9 / 59.9 / 68.5** |
+| all: micro P / R | 239/297 = 80.5, 264/579 = 45.6 | 256/310 = 82.6, 285/579 = 49.2 | **308/386 = 79.8, 324/579 = 56.0 [51.9, 59.9]** |
+
+**Rank on the High table** (unchanged since 11-19): 69.6 sits between #9 Klaussy Opus 69.3 and #8 Codex Ultra 69.9,
+**≈ #9** (R7 ≈ #23). Read with care:
+- It is two rounds of two slightly different builds, unioned: a second independent seat's ceiling, at about twice
+  today's review cost (R7 $1.99 + R8 $2.46 per PR), not a measured two-seat build. The union was matched in one fresh
+  matcher pass and the singles in their own judge passes (RevEngine's figure for matcher noise: 1-2 F1 points).
+- The interval is wide (high micro R [34.6, 59.1], n = 60). Still, +5 or +6 high items over either round at the same
+  high precision (96.2) agrees with TRAIN (+3 of 22 on 32 PRs) and with the outside evidence (TraceHound's x2 union;
+  docs/research/2026-11-oss-reviewers.md T2).
+- All-severity precision dips 1-3 points (79.9 macro), and recall rises 7-10.
+- So the cheapest measured high-recall lever so far is a second independent review seat. Building it (Design 2:
+  Opus + Sonnet seats, the bug sweep off) and measuring the build itself on held-out is next, at ≤ $3/PR only if the
+  seats get cheaper (design 3's batched verification) or the budget rule changes.
