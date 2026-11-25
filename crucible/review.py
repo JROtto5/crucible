@@ -674,9 +674,11 @@ def _claim_title(t):
 def same_claim(a, b):
     """Two seats' items are one claim (the rule of the union test, eval/NOTES 2026-11-25): the same file, lines
     overlapping or within SEAT_NEAR, and the same text or titles alike (character ratio >= 0.55, or Jaccard >= 0.4 over
-    the title's words less stopwords). A stricter ratio left restatements apart. One departure from the union test:
-    titles that differ by one swapped word ("missing validation for port" / "... for host", "cache read" / "cache
-    write") name two flaws, not one, so they stay apart; a restatement rewords more than its subject."""
+    the title's words less stopwords). A stricter ratio left restatements apart. Parallel wording about two subjects
+    ("missing validation for port" / "... for host") merges too, as it does under `similar`; on the TRAIN union
+    every one of the 23 merged pairs whose titles differ by one swapped word was a restatement ("guard" / "check",
+    "relicense" / "license change"), so no guard for it (eval/NOTES 2026-11-25). Titles with no words left to compare
+    merge only on the same text."""
     if a.get("file") != b.get("file"):
         return False
     def span(f):
@@ -691,7 +693,7 @@ def same_claim(a, b):
         return True
     ta, tb = _claim_title(a.get("title")), _claim_title(b.get("title"))
     wa, wb = ({w for w in re.findall(r"[\w.]+", t) if w not in SEAT_STOP} for t in (ta, tb))
-    if not (wa and wb) or (len(wa - wb) == 1 and len(wb - wa) == 1):   # no title to compare, or one swapped subject
+    if not (wa and wb):                                # no title to compare: only the same text (above) is one claim
         return False
     jac = len(wa & wb) / len(wa | wb)
     return jac >= 0.4 or difflib.SequenceMatcher(None, ta, tb).ratio() >= 0.55
