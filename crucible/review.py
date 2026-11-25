@@ -607,19 +607,14 @@ def bug_sweep(sweep_chunks, raised, repo, model, budget, project, sha, base, rul
 
 
 # ---------- the second review seat: an independent first look, unioned before verification ----------
-# The cheapest high-recall lever measured so far (eval/NOTES 2026-11-25): two stored rounds of the same PRs, unioned,
-# took high-severity grounded F1 on the sealed held-out 50 from 58.3 (R7) / 55.6 (R8) to 69.6, high micro recall
-# 23 -> 28 of 60, high precision 96.2; on 32 TRAIN PRs +3 of 22 high items. Different samples stop at different places.
-# So CRUCIBLE_SEATS=2 runs every reviewed pass a second time, after the first seat's passes, in a fresh call that is
-# told nothing the first seat raised (a model shown a list to extend mostly re-checks it: RevEngine's follow-up note,
-# docs/research/2026-11-oss-reviewers.md T2). It differs by sample and, by default, by model (CRUCIBLE_SEAT2_MODEL,
-# default Sonnet: cheaper), file order (CRUCIBLE_SEAT2_ORDER: reversed, the default, or same) and brief (the lens
-# prompt: no house-style or description section). It spends at most CRUCIBLE_SEAT2_SHARE (default 0.30) of the
-# budget, riskiest pass first, and leaves the first seat's findings their verification money. Both seats' findings
-# are deduped together (same_claim: the rule the union test used) and verified one by one as usual; no vote.
-# The bug sweep is off with two seats (it pays for the seat; it showed no high gain on held-out). Off by default
-# until a build is measured (eval/NOTES 2026-11-25, the pre-registered plan); with one seat nothing changes.
+# Two independent samples of a review stop at different places, so their union finds more (eval/NOTES 2026-11-25:
+# two stored rounds unioned, held-out high F1 58.3 -> 69.6 at the same precision). CRUCIBLE_SEATS=2 reads every
+# reviewed pass again in a fresh call told nothing the first seat raised (a model shown a list to extend mostly
+# re-checks it: docs/research/2026-11-oss-reviewers.md T2), with another model, file order and brief by default.
+# Both seats' findings are deduped together and verified one by one as usual; no vote. The bug sweep is off with two
+# seats: the seat takes its budget. Off by default until a build is measured (eval/NOTES has the plan).
 SEAT2_SHARE = 0.30
+SEAT_NEW_EST = 5                     # the seat's own new findings to leave verification money for (R8: ~2.5 per pass)
 SEAT_MIN_USD = 0.30                  # less than this for the seat: skip it (a Sonnet pass costs ~$0.20-0.40)
 SEAT_NEAR = 3                        # lines apart (or overlapping) for two seats' items to be one claim
 SEAT_STOP = frozenset("a an the of to in on at for and or is are be by with as it its this that not no from into "
@@ -676,10 +671,9 @@ def _claim_title(t):
 
 
 def same_claim(a, b):
-    """Two seats' items are one claim (the rule of eval/NOTES 2026-11-25's union, ~/rb-work/tmp/union/union.py): the
-    same file, lines overlapping or within SEAT_NEAR, and the same text or titles alike (character ratio >= 0.55, or
-    Jaccard >= 0.4 over the title's words less stopwords). Under it 418 of 2,645 TRAIN items merged, and 12 sampled
-    merges read as the same claim; a strict rule (ratio >= 0.85) merged 81 and left restatements apart."""
+    """Two seats' items are one claim (the rule of the union test, eval/NOTES 2026-11-25): the same file, lines
+    overlapping or within SEAT_NEAR, and the same text or titles alike (character ratio >= 0.55, or Jaccard >= 0.4 over
+    the title's words less stopwords). A stricter ratio left restatements apart."""
     if a.get("file") != b.get("file"):
         return False
     def span(f):
@@ -1414,8 +1408,8 @@ def dedupe(findings):
             # `also` (titles only) stays for existing readers of review.json; `merged` is the superset.
             dup.setdefault("merged", []).append({k: f.get(k) for k in ("title", "file", "line", "severity", "source")}
                                                 | ({"seat": f["seat"]} if "seat" in f else {}))
-            if "seat" in f and "seat" in dup:          # which seats raised it: runs count what each seat carried
-                dup["seats"] = sorted(set(dup.get("seats") or [dup["seat"]]) | {f["seat"]})
+            if "seat" in f and "seat" in dup and f["seat"] not in (dup.get("seats") or [dup["seat"]]):
+                dup["seats"] = sorted(set(dup.get("seats") or [dup["seat"]]) | {f["seat"]})   # both seats raised it
             if SEV.index(f["severity"]) < SEV.index(dup["severity"]):
                 dup["severity"] = f["severity"]
         else:
@@ -2409,8 +2403,9 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                     f["line"] = readiness.draft_file_line(draft_full, f["line"])
                 nit_cands.append(f)
         if n_seats > 1:                                # the second seat: review calls too, so before tok_split
-            # like the bug sweep, it leaves the nit reserve and what verifying the first seat's findings should cost
-            keep = BUG_SWEEP_VERIFY_EST_USD * sum(f.get("source") == "review" for f in cands + reverify)
+            # like the bug sweep, it leaves the nit reserve, what verifying the first seat's findings should cost, and
+            # SEAT_NEW_EST of its own (blocking ones verify against the whole budget anyway)
+            keep = BUG_SWEEP_VERIFY_EST_USD * (sum(f.get("source") == "review" for f in cands + reverify) + SEAT_NEW_EST)
             room = HeldBudget(budget, pass_hold + keep) if budget.limit is not None else budget
             skip = seat2_skip_reason(budget.limit, room.remaining(), bool(record.get("small_tier")), bool(sweep_chunks))
             if skip:
@@ -2653,7 +2648,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             def by_seat(fs):
                 return {"seat1": sum(f.get("seat") == 1 and not f.get("seats") for f in fs),
                         "seat2": sum(f.get("seat") == 2 and not f.get("seats") for f in fs),
-                        "both": sum(bool(f.get("seats")) for f in fs)}
+                        "both": sum(len(f.get("seats") or ()) > 1 for f in fs)}
             record["seats"].update(new=sum(f.get("seat") == 2 for f in to_verify), kept=by_seat(kept),
                                    dropped=by_seat(dropped))
         record.update(status="done", summary=summary[:3000], findings=kept, dropped=dropped,

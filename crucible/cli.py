@@ -274,7 +274,8 @@ def main(argv=None):
                    "second look at each pass (CRUCIBLE_NITS_SWEEP=0 turns it off, =1 runs it without a budget; "
                    "capped by CRUCIBLE_NITS_SWEEP_USD, default $0.75), and, before verification, a second look for "
                    "blocking bugs the passes missed, whose findings are verified like the others (CRUCIBLE_BUG_SWEEP=0 "
-                   "turns it off, =1 runs it without a budget; capped by CRUCIBLE_BUG_SWEEP_USD, default $0.60)")
+                   "turns it off, =1 runs it without a budget; capped by CRUCIBLE_BUG_SWEEP_USD, default $0.60; off with "
+                   "CRUCIBLE_SEATS=2, the second review seat, unless =1)")
     r.add_argument("--lens", action="store_true", help="run as one lens inside another reviewer: code findings only "
                    "(no PR-description, readiness or house-style items), each with a stable id, file:line and wrong_if, "
                    "written to lens.json (its path is printed; exit 3 if the review failed). Implies --offline and the "

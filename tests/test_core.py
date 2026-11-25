@@ -9364,6 +9364,12 @@ class TestSecondSeat(unittest.TestCase):
         self.assertEqual((out[0]["seat"], out[0]["seats"], out[0]["severity"]), (1, [1, 2], "critical"))
         self.assertEqual(out[0]["merged"][0]["seat"], 2)
         self.assertNotIn("seats", out[1])
+        # two items of one seat merged by similar() are that seat's alone, not "both seats"
+        a1 = dict(self._f("division by zero in f", 1), source="review", seat=1)
+        out = V.dedupe([a1, dict(a1, line=2)])
+        self.assertEqual(len(out), 1); self.assertNotIn("seats", out[0])
+        out = V.dedupe([dict(a1), dict(a1, line=2), dict(a1, seat=2, line=3), dict(a1, seat=2, line=4)])
+        self.assertEqual(out[0]["seats"], [1, 2])
         # within one seat, and with seats off, the rule is the old one: these two stay apart
         self.assertEqual(len(V.dedupe([dict(s1), dict(s2, seat=1)])), 2)
         out = V.dedupe([dict(self._f(s1["title"], 10), source="review"), dict(self._f(s2["title"], 13), source="review")])
@@ -9471,10 +9477,14 @@ class TestSecondSeat(unittest.TestCase):
         # the first seat's passes spent nearly everything: nothing left for the seat after its findings' verification
         r, calls = self._run(env={"CRUCIBLE_SEATS": "2"}, budget=1.0, review_cost=0.6)
         self.assertIn("first seat's verification", r["seats"]["skipped"]); self.assertNotIn("seat2", [c["kind"] for c in calls])
-        # the seat leaves the first seat's findings their verification money
-        r, calls = self._run(env={"CRUCIBLE_SEATS": "2"}, budget=2.0, review_cost=0.5, passes=2, seat2_cost=5.0)
-        self.assertLessEqual(r["seats"]["cost_usd"], 2.0 - 1.0 - 4 * V.BUG_SWEEP_VERIFY_EST_USD + 1e-9)
-        self.assertTrue(all(f["verification"]["status"] == "verified" for f in r["findings"] if f.get("seat") == 1))
+        # the seat leaves verification money for the first seat's 4 findings and SEAT_NEW_EST of its own
+        new = [self._f("lock held across await", 20, "medium"), self._f("retry loop never sleeps", 25, "medium")]
+        r, calls = self._run(seat2_out=new, env={"CRUCIBLE_SEATS": "2"}, budget=3.0, review_cost=0.5, passes=2,
+                             seat2_cost=5.0)
+        self.assertGreater(r["seats"]["passes"], 0)
+        self.assertLessEqual(r["seats"]["cost_usd"], 3.0 - 1.0 - (4 + V.SEAT_NEW_EST) * V.BUG_SWEEP_VERIFY_EST_USD + 1e-9)
+        self.assertTrue(all(f["verification"]["status"] == "verified" for f in r["findings"] if f["source"] == "review"))
+        self.assertTrue([f for f in r["findings"] if f.get("seat") == 2])
         r, calls = self._run(env={"CRUCIBLE_SEATS": "2", "CRUCIBLE_SMALL_TIER": "1"}, budget=5.0)
         self.assertEqual(r["seats"], {"n": 2, "skipped": "small tier"})
 

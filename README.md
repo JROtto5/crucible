@@ -279,6 +279,7 @@ Environment variables:
 - `CRUCIBLE_VERIFY_CHEAP`: the cheap verification tier (default `claude-haiku-5-5`; `none` turns tiering off, as does `--no-tiers`).
 - `CRUCIBLE_NO_TOOLS_CACHE=1`: keep prompt caching on for tool-less calls (`learn`, verdict salvage). They run uncached by default: one request never re-reads its cache, so the cache write only adds cost.
 - `CRUCIBLE_NO_FIELD_READS=1`: leave the `--nits` field-reads note (fields the change reads that nothing writes) out of the review prompt; the off arm of a paired on/off measurement.
+- `CRUCIBLE_SEATS=2` (off by default, being measured): a second, independent review seat. After the passes, each pass is reviewed again in a fresh call that isn't told what the first seat raised: `CRUCIBLE_SEAT2_MODEL` (default `sonnet`; the first seat's model when that one wrote the change), `CRUCIBLE_SEAT2_ORDER` (`reversed`, the default, or `same` file order), at most `CRUCIBLE_SEAT2_SHARE` of `--budget` (default 0.30). Both seats' findings are deduped together and verified as usual, and each records its `seat` in review.json. With two seats the `--nits` bug sweep is off unless `CRUCIBLE_BUG_SWEEP=1`.
 - `CRUCIBLE_CATALOG_DIGEST=0`: review big `.po`/`.pot` changes as a raw diff instead of the entry digest.
 - `CRUCIBLE_HOME`: where state is kept (default `~/.crucible`). `CRUCIBLE_CACHE` can point at a shared cache.
 
