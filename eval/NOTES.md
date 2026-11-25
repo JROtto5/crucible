@@ -1878,7 +1878,7 @@ $1.99 = $8. With n = 1 it can only say whether the reviewer raised a finding at 
 matched it; no rate is quoted (n < 60, the decision rule). The falsifier (fires on 3+ of 50 with none on a golden
 item) can't trip at 1 fire. The check stays in: $0, fires on ~2% of PRs.
 
-### 2026-11-25 · R8 on the sealed held-out 50: reviewed, judge 48 of 50 (totals pending)
+### 2026-11-25 · R8 on the sealed held-out 50: high F1 55.6 (R7 58.3), all-severity 64.6 (R7 62.3)
 
 Image `crucible-rb:r8c` (fb540f5; main 11cb247 is the same code plus 62a75e0's `CRUCIBLE_NO_FIELD_READS` off switch,
 default unchanged), R7's harness, `runs/r8h50`. All 50 PRs reviewed: $123.09 (mean $2.46, median $1.86, max $5.17;
@@ -1888,4 +1888,21 @@ finished 48 of 50 into its checkpoint; 2 PRs failed inside the judge (Artemis #1
 #13175: classifier timeout). Both allotted accounts then passed the 85% weekly stop (#16 87%, #18 89%: the 5-minute
 watcher overshoots while a judge is spending), so the run stopped there. To finish: `SET=heldout50
 ~/rb-work/rb-run-set.sh r8h50 judge-only` with a fresh token (it resumes from the checkpoint), after `rm
-~/rb-work/STOP`. No total has been read; the sealed rule stands (totals only, no per-PR reading).
+~/rb-work/STOP`. The main session then raised the cap for this slot to 95% and resumed the judge on #16; it finished
+all 50 (`runs/r8h50/scoring/results.details.json` sha256 e26d14e00e16…). Totals only:
+| | R7 held-out (c9501a5) | **R8 held-out (fb540f5)** |
+|---|---|---|
+| high: grounded P / R / F1 (macro, the board's) | 92.9 / 42.5 / 58.3 | **94.4 / 39.4 / 55.6** |
+| high: micro R, Wilson 95% | 23/60 = 38.3 [27.1, 51.0] | **22/60 = 36.7 [25.6, 49.3]** |
+| high: micro P | 20/21 | 19/20 = 95.0 [76.4, 99.1] |
+| all: grounded P / R / F1 (macro) | 83.3 / 49.7 / 62.3 | **81.8 / 53.3 / 64.6** |
+| all: micro P / R | 239/297, 264/579 | 256/310 = 82.6 [78.0, 86.4], 285/579 = 49.2 [45.2, 53.3] |
+| $ per PR | mean 1.99 | mean 2.46, median 1.86, max 5.17 |
+**Rank (High table, unchanged since 11-19): 55.6 ≈ #23 of 25** (below diffox 59.1, above Cubic 35.8); #5 is 73.3, #4
+75.7. Not a trigger for the FINAL84 / submission question.
+Reading: on unseen PRs the two levers did not move high recall (22 vs 23 of 60, inside one round's noise; macro -3.1).
+They did move recall at every severity (+21 golden items, macro +3.6) at the same precision, which fits where their
+output goes: the bug sweep's verified results are nits, and both levers mostly find medium/low items. High recall on
+unseen PRs stays a first-look detection gap (TRAIN: 9 of 13 misses never raised). Next levers have to change what the
+first pass raises at high severity, and need repeated rounds or more items to measure: one round on 60 high items
+can't resolve ±2.
