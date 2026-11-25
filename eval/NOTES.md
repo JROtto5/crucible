@@ -1721,3 +1721,20 @@ covers two golden claims is credited to one (translator), and (b) the reviewer s
 claim precision, not detection; measure any fix on the held-out set, never on these items.
 
 Spend: R7 $60.78 (dev, incl. 2 cut attempts), held-out $100.23, judges on the same accounts.
+
+### 2026-11-25 · field reads on the sealed held-out 50: Step 1 of the pre-registered paired arm ($0)
+
+**Switch.** `CRUCIBLE_NO_FIELD_READS=1` makes `fields_note` return "" (62a75e0, test mutation-checked; `modelreplay`
+arms unset it). Unset, every prompt is byte-identical.
+
+**Step 1, as pre-registered (exchange 2026-11-24 crucible note).** `fieldreads.mismatches` alone on each held-out PR's
+`base..head` diff (`--unified=5`, as the review takes it), grepped in a private `clone --shared` of the judge's checkout
+at head, so nothing of the judge's is touched. Script `/tmp/claude-1000/fr-h50/count.py` (blaze-3 `~/dragon/work/fr-h50`)
+opens only `heldout50.json` (PR metadata: repo, base, head) and prints totals; no golden file and no per-PR row was
+read. Result: **50 PRs, 49 scanned, fires on 1, 1 not scannable** (no checkout under `review-repos`). Inside the
+expected 0-2. Dev was 1 of 25, eval 0 of 41, public commits 0 of 1,047.
+
+**Step 2 (not run here; the lane never runs ReviewBench).** ON vs OFF on the one firing PR, 2 rounds each, ≈ 4 x
+$1.99 = $8. With n = 1 it can only say whether the reviewer raised a finding at the flagged read and whether the judge
+matched it; no rate is quoted (n < 60, the decision rule). The falsifier (fires on 3+ of 50 with none on a golden
+item) can't trip at 1 fire. The check stays in: $0, fires on ~2% of PRs.
