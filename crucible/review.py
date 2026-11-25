@@ -1467,7 +1467,10 @@ def callers_note(repo, base, sha, files, ch):
 def fields_note(repo, sha, files, ch):
     """The --nits prompt's list of fields this pass's files read that nothing writes, each beside a similar name the
     change writes and nothing reads (crucible.fieldreads); "" when there are none or the search fails. files: the
-    whole change, so a writer in a file another pass reviews still counts."""
+    whole change, so a writer in a file another pass reviews still counts. CRUCIBLE_NO_FIELD_READS=1 leaves it out
+    (the off arm of a paired on/off run)."""
+    if os.environ.get("CRUCIBLE_NO_FIELD_READS", "0") == "1":
+        return ""
     try:
         rows = fieldreads.mismatches(repo, files, lambda p: git_blob(repo, sha, p), set(ch["files"]))
         if not rows:

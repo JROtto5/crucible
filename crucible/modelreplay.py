@@ -32,7 +32,8 @@ INCOMPLETE = "stored round's coverage incomplete"
 # settings that would change an arm's pipeline away from the default for its reviewer: the verifier pick, cost
 # routing (which can swap the reviewer on a docs-only round), the cheap tier, and cache/prompt switches
 ARM_UNSET = ("CRUCIBLE_VERIFY_MODEL", "CRUCIBLE_ROUTE", "CRUCIBLE_ROUTE_DOCS_MODEL", "CRUCIBLE_VERIFY_CHEAP",
-             "CRUCIBLE_CATALOG_DIGEST", "CRUCIBLE_CACHE_VERIFY", "CRUCIBLE_NO_TOOLS_CACHE")
+             "CRUCIBLE_CATALOG_DIGEST", "CRUCIBLE_CACHE_VERIFY", "CRUCIBLE_NO_TOOLS_CACHE",
+             "CRUCIBLE_NO_FIELD_READS")
 DISPOSITIONS = HELD + ("refuted",)
 LINE_NEAR, LINE_FAR, WORDS_MIN = 3, 15, 0.25
 # the by-shape breakdown: production lines changed (outside tests and docs), upper bounds of each size bucket

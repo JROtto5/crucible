@@ -8922,6 +8922,14 @@ class TestFieldReads(unittest.TestCase):
         self.assertEqual(V.fields_note(d, "fix", files, {"files": ["src/Form.tsx"]}), "")  # another pass's read
         self.assertEqual(fieldreads.note([]), "")
 
+    def test_the_switch_leaves_the_note_out(self):
+        from unittest import mock
+        d, files, _ = self._rows({"src/Form.tsx": self.FORM, "src/s3.ts": self.ADAPTER})
+        with mock.patch.dict(os.environ, {"CRUCIBLE_NO_FIELD_READS": "1"}):
+            self.assertEqual(V.fields_note(d, "fix", files, {"files": ["src/s3.ts"]}), "")
+        with mock.patch.dict(os.environ, {"CRUCIBLE_NO_FIELD_READS": "0"}):
+            self.assertIn("read config.keyId", V.fields_note(d, "fix", files, {"files": ["src/s3.ts"]}))
+
     def test_each_falsifier_silences_the_pair(self):
         # (change files, checkout files): the last three sit in the checkout, so the git grep is what silences them
         cases = {

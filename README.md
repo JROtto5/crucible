@@ -278,6 +278,7 @@ Environment variables:
 - `CRUCIBLE_FABLE_FALLBACK`: the model a Fable call moves to when the account refuses it for a spend or usage limit (default `opus`; a short name or full id; `off` turns it off). Each move is listed under `model_fallbacks` in review.json.
 - `CRUCIBLE_VERIFY_CHEAP`: the cheap verification tier (default `claude-haiku-5-5`; `none` turns tiering off, as does `--no-tiers`).
 - `CRUCIBLE_NO_TOOLS_CACHE=1`: keep prompt caching on for tool-less calls (`learn`, verdict salvage). They run uncached by default: one request never re-reads its cache, so the cache write only adds cost.
+- `CRUCIBLE_NO_FIELD_READS=1`: leave the `--nits` field-reads note (fields the change reads that nothing writes) out of the review prompt; the off arm of a paired on/off measurement.
 - `CRUCIBLE_CATALOG_DIGEST=0`: review big `.po`/`.pot` changes as a raw diff instead of the entry digest.
 - `CRUCIBLE_HOME`: where state is kept (default `~/.crucible`). `CRUCIBLE_CACHE` can point at a shared cache.
 
