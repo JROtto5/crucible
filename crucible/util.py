@@ -10,7 +10,7 @@ SEV = ["critical", "important", "medium", "low"]
 BLOCKING = {"critical", "important"}
 
 TEST_PATH_RX = re.compile(r"(^|/)(tests?|__tests__|spec|specs|fixtures?|testdata|__fixtures__|__mocks__)(/|$)|"
-                          r"\.(test|spec)\.[cm]?[jt]sx?$|_test\.(py|go)$|(^|/)test_[^/]+\.py$")
+                          r"\.(test|spec)\.[cm]?[jt]sx?$|_test\.(py|go)$|(^|/)test_[^/]+\.py$|(^|/|_)tests\.rs$")
 CODE_EXT_RX = re.compile(r"\.(c|cc|cpp|h|hpp|cs|go|java|kt|rs|swift|py|rb|php|[cm]?[jt]sx?|vue|svelte|glsl|wgsl|frag|vert)$")
 
 # Version of what `crucible learn` writes (meta.json, style.json). Stored files keep their numbers until `learn` re-runs

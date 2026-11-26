@@ -222,9 +222,20 @@ def issue_placeholder(draft_text):
     return m.group(0).strip() if m else None
 
 
-def tests_touched(paths):
+# Rust keeps unit tests in the source file (`#[cfg(test)] mod tests`), so a .rs file outside tests/ whose added lines
+# open a test module or a test function is a test change too.
+RUST_TEST_RX = re.compile(r"^\s*#\[\s*(?:cfg\s*\(\s*test\s*\)|(?:\w+::)*(?:test|test_case|rstest)\b)")
+
+
+def _rust_inline_tests(f):
+    return f.get("path", "").endswith(".rs") and not f.get("deleted") and any(
+        k == "+" and RUST_TEST_RX.match(t) for h in f.get("hunks") or [] for k, t, *_ in h["lines"])
+
+
+def tests_touched(paths, files=None):
+    inline = {f["path"] for f in files or [] if _rust_inline_tests(f)}
     src = [p for p in paths if CODE_EXT_RX.search(p) and not TEST_PATH_RX.search(p)]
-    tests = [p for p in paths if TEST_PATH_RX.search(p)]
+    tests = [p for p in paths if TEST_PATH_RX.search(p) or p in inline]
     if not src:
         return _item("tests updated for behaviour change", "na", "no source files changed")
     return _item("tests updated for behaviour change", "pass" if tests else "fail",
@@ -1743,7 +1754,7 @@ def evaluate(repo, project, base, files, draft=None, me=None, offline=False, bas
               (f"template placeholder still in the draft: {issue_placeholder(draft_text)!r}" if issue_placeholder(draft_text)
                else f"the linked number(s) {['#' + str(n) for n in prs]} are pull requests, not issues" if prs
                else "no 'Fixes #N' / 'Related issue: #N' / issue URL in the draft (a bare #N doesn't count)")),
-        tests_touched(paths),
+        tests_touched(paths, files),
         ci_matrix(repo, paths),
         api_docs_touched(files),
         changelog(repo, paths),

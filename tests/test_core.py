@@ -269,6 +269,23 @@ class TestReadiness(unittest.TestCase):
         self.assertEqual(R.tests_touched(["src/a.js", "test/a.test.js"])["status"], "pass")
         self.assertEqual(R.tests_touched(["README.md"])["status"], "na")
 
+    def test_tests_touched_rust_inline(self):
+        def rs(path, *added, kind="+"):
+            return {"path": path, "hunks": [{"new_start": 1, "lines": [(kind, t, None, 1) for t in added]}]}
+        ok = lambda files: R.tests_touched([f["path"] for f in files], files)["status"]
+        self.assertEqual(ok([rs("src/lib.rs", "fn f() {}")]), "fail")
+        self.assertEqual(ok([rs("src/lib.rs", "fn f() {}", "#[cfg(test)]", "mod tests {")]), "pass")
+        self.assertEqual(ok([rs("src/lib.rs", "    #[test]", "    fn splits_char() {")]), "pass")
+        self.assertEqual(ok([rs("src/lib.rs", "    #[tokio::test]")]), "pass")
+        self.assertEqual(ok([rs("src/lib.rs", "    #[test_case(1)]")]), "pass")
+        # a removed test, a test-named function without the attribute, or the attribute in a non-Rust file is no test
+        self.assertEqual(ok([rs("src/lib.rs", "    #[test]", kind="-")]), "fail")
+        self.assertEqual(ok([rs("src/lib.rs", "fn test_helper() {}", "#[testing_only]")]), "fail")
+        self.assertEqual(ok([rs("src/a.py", "#[test]")]), "fail")
+        self.assertEqual(ok([rs("src/a.rs", "fn f() {}"), rs("src/net/dpi/stun_tests.rs", "fn g() {}")]), "pass")
+        self.assertEqual(R.tests_touched(["src/a.rs", "src/net/tests.rs"])["status"], "pass")
+        self.assertEqual(R.tests_touched(["src/a.rs", "src/contests.rs"])["status"], "fail")
+
     def test_issue_link(self):
         self.assertEqual(R.linked_issue("Fixes #1234"), 1234)
         self.assertEqual(R.linked_issue("see https://github.com/o/r/issues/77"), 77)
