@@ -189,7 +189,8 @@ diff --git a/test/fixtures/keys.js b/test/fixtures/keys.js
         want = {0: ["src/auth/login.ts", "packages/auth-x/src/routes/callback.ts", "app/middleware/session.py"],
                 1: ["packages/admin/src/App.tsx", "src/routes/api/posts.ts", "tests/auth/test_login.py", "src/util.ts",
                     ".github/workflows/ci.yml", "src/user/.codex/AGENTS.md.template", "src/tokenizer.ts",
-                    "templates/index.html", "templates/starter/src/a.ts"],
+                    "templates/index.html", "templates/starter/src/a.ts",
+                    "src/auth/session_tests.rs", "src/auth/tests.rs"],
                 2: ["README.md", "docs/guide.md"],
                 3: ["pnpm-lock.yaml", "demos/a/src/x.astro", ".changeset/x.md",
                     "dist/a.min.js", "server/package-lock.json"]}
@@ -285,6 +286,12 @@ class TestReadiness(unittest.TestCase):
         self.assertEqual(ok([rs("src/a.rs", "fn f() {}"), rs("src/net/dpi/stun_tests.rs", "fn g() {}")]), "pass")
         self.assertEqual(R.tests_touched(["src/a.rs", "src/net/tests.rs"])["status"], "pass")
         self.assertEqual(R.tests_touched(["src/a.rs", "src/contests.rs"])["status"], "fail")
+        self.assertEqual(ok([rs("src/lib.rs", "    #[rstest]")]), "pass")
+        # the real readiness run goes through evaluate(), which must hand the parsed files on
+        d = make_repo({"src/lib.rs": "fn f() {}\n"}, {"src/lib.rs": "fn f() {}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n"})
+        base = U.git(d, "merge-base", "main", "HEAD")
+        out = R.evaluate(d, "t__rust", base, D.parse(U.git(d, "diff", f"{base}..HEAD")), offline=True)
+        self.assertIn(("tests updated for behaviour change", "pass"), [(i["item"], i["status"]) for i in out["items"]])
 
     def test_issue_link(self):
         self.assertEqual(R.linked_issue("Fixes #1234"), 1234)
