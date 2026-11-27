@@ -225,13 +225,14 @@ def issue_placeholder(draft_text):
 # Rust keeps unit tests in the source file (`#[cfg(test)] mod tests`), so a .rs file outside tests/ whose added lines
 # open a test module or a test function is a test change too (first real input: RustNet #753). Falsifiers
 # (test_tests_touched_rust_inline). Must match: `#[test]`, `#[tokio::test]`, `#[test_log::test]`, `#[test_case(1)]`,
-# `#[rstest]`, `#[cfg(test)]`, `#[cfg(all(test, x))]`, `#[cfg( all( x , test ) )]`. Must not: `#[cfg(any(test, x))]`
+# `#[rstest]`, `#[wasm_bindgen_test]`, `#[cfg(test)]`, `#[cfg(all(test, x))]`, `#[cfg( all( x , test ) )]`,
+# `#[cfg(all(not(windows), test))]` (one nested group). Must not: `#[cfg(any(test, x))]`
 # (also gates non-test builds), `#[cfg(not(test))]`, `#[cfg(all(unix, not(test)))]` (either order), `#[cfg(testing)]`,
 # `#[cfg(all(feature = "test"))]`, `#[cfg(all(unix, testing))]`, `#[cfg(all(no_test))]`, `#[testing_only]`,
 # `fn test_helper()`, a removed `#[test]`, a non-.rs file. Not seen: an edit inside a test body that adds no
-# attribute, and `test` after a nested group, `#[cfg(all(not(windows), test))]` (its new tests still add `#[test]`).
-RUST_TEST_RX = re.compile(r"^\s*#\[\s*(?:cfg\s*\(\s*(?:test\s*\)|all\s*\([^()]*?(?<![\w\"])test\s*[,)])"
-                          r"|(?:\w+::)*(?:test|test_case|rstest)\b)")
+# attribute, and `test` after a group nested two deep.
+RUST_TEST_RX = re.compile(r"^\s*#\[\s*(?:cfg\s*\(\s*(?:test\s*\)|all\s*\((?:[^()]|\([^()]*\))*?(?<![\w\"])test\s*[,)])"
+                          r"|(?:\w+::)*(?:test|test_case|rstest|wasm_bindgen_test)\b)")
 
 
 def _rust_inline_tests(f):
