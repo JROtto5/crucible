@@ -9272,6 +9272,124 @@ class TestFieldReads(unittest.TestCase):
             self.assertEqual(V.fields_note("/nonexistent", "fix", files, {"files": ["src/s3.ts"]}), "")
 
 
+class TestMentions(unittest.TestCase):
+    """mentions: readers of a value the change removed, replaced or moved, and repo paths it names that don't exist
+    (TRAIN entebus #32: the old id format 'COMP-001' still compared elsewhere; agent-orchestrator #4/#17: a moved
+    script still running $REPO_ROOT/packages/agent-orchestrator/bin/ao.js)."""
+
+    def setUp(self):
+        from unittest import mock
+        p = mock.patch.dict(os.environ, {"CRUCIBLE_MENTIONS": "1"})
+        p.start(); self.addCleanup(p.stop)
+
+    def _note(self, base, new, paths=None):
+        d = make_repo(base, new)
+        files = D.parse(sh(d, "git", "diff", "-M", "main..fix") + "\n")
+        return d, files, V.mentions_note(d, "fix", files, {"files": paths or [f["path"] for f in files]})
+
+    def test_a_replaced_id_format_lists_its_readers(self):
+        d, files, note = self._note(
+            {"src/data.ts": "export const C = [\n  { id: 'COMP-001' },\n  { id: 'COMP-002' },\n  { id: 'COMP-003' },\n];\n",
+             "src/pages/ops.ts": "const rows = [{ companyId: 'COMP-001' }];\nrows.filter(o => o.companyId === id);\n"},
+            {"src/data.ts": "export const C = api.map(x => ({ id: `COMP-${x.id}`, apiId: x.id }));\n"})
+        self.assertIn("src/pages/ops.ts:1: const rows = [{ companyId: 'COMP-001' }];  [COMP-001]", note)
+        self.assertIn("removed, replaced or moved (COMP-001, COMP-002)", note)   # one format: two samples
+        self.assertNotIn("COMP-003", note)
+        self.assertIn("a finding at THAT file and line", note)
+
+    def test_a_value_the_change_still_carries_is_not_listed(self):
+        _, _, note = self._note({"a.py": "URL = '/api/v1/users'\n", "b.py": "get('/api/v1/users')\n"},
+                                {"a.py": "USERS_URL = '/api/v1/users'\n"})
+        self.assertEqual(note, "")
+
+    def test_a_moved_file_lists_what_still_names_its_old_path(self):
+        script = "#!/bin/sh\necho ok\n"
+        _, _, note = self._note({"scripts/ao-doctor.sh": script, "docs/guide.html": "<li>scripts/ao-doctor.sh</li>\n",
+                                 "pkg/cli/index.ts": "x\n"},
+                                {"scripts/ao-doctor.sh": None, "pkg/cli/assets/ao-doctor.sh": script})
+        self.assertIn("docs/guide.html:1: <li>scripts/ao-doctor.sh</li>  [scripts/ao-doctor.sh]", note)
+
+    def test_a_moved_script_naming_a_missing_repo_path_is_listed_in_each_file(self):
+        body = 'if [ ! -f "$REPO_ROOT/packages/old-name/bin/ao.js" ]; then exit 1; fi\nnode "$REPO_ROOT/packages/ao/bin/ao.js"\n'
+        _, _, note = self._note({"scripts/doctor.sh": body, "scripts/update.sh": body + "# update\n",
+                                 "packages/ao/bin/ao.js": "x\n"},
+                                {"scripts/doctor.sh": None, "scripts/update.sh": None,
+                                 "packages/cli/doctor.sh": body, "packages/cli/update.sh": body + "# update\n"})
+        self.assertIn("packages/cli/doctor.sh:1:", note)
+        self.assertIn("packages/cli/update.sh:1:", note)                          # once per naming file
+        self.assertIn("[packages/old-name/bin/ao.js]", note)
+        self.assertNotIn("[packages/ao/bin/ao.js]", note)                         # that one exists
+
+    def test_missing_path_falsifiers(self):
+        from crucible import mentions
+        base = {"src/lib/foo.ts": "x\n", "src/app/x.ts": "x\n", "README.md": "x\n", "lib/other.ts": "x\n"}
+        new = {"src/run.sh": "\n".join([
+            'cp "${RUNNER_TEMP}/src/gone/a.js" .',        # a runtime root, not the checkout
+            'node "src/lib/foo"',                         # a module stem: src/lib/foo.ts
+            '# see src/gone/b.js',                        # a comment
+            'cat "src/app/x.ts"',                         # exists
+            'cat "lib/foo.ts"',                           # exists from the file's own directory (src/)
+            'M="src/models/$(V)/m.bin"',                  # built at runtime
+            'P="src/plans/epic-XXXX/a.md"',               # a placeholder
+            'Q="nope/a/b.js"',                            # top directory not in the checkout
+            'S="src/pack-$V.bin"',                        # built at runtime
+            'T="src/original data/x"',                    # a name with a space: not read as src/original
+            'R="src/gone"']) + "\n",
+            "docs/howto.md": "run `src/gone/c.js`\n",     # prose
+            "src/__tests__/a.test.ts": "const p = 'src/gone/d.js';\n"}  # a test's fake path
+        d = make_repo(base, new)
+        files = D.parse(sh(d, "git", "diff", "main..fix") + "\n")
+        got = mentions.missing_paths(d, files, lambda p: V.git_blob(d, "fix", p))
+        self.assertEqual(got, ['src/run.sh:11: R="src/gone"  [src/gone]'])
+
+    def test_value_falsifiers(self):
+        from crucible import mentions
+        old = "\n".join([
+            "import x from 'src/lib/helpers';",           # an import: a module, not a value
+            "const a = './rel/path/x';",                  # relative
+            "const b = '/etc/app/conf';",                 # outside the checkout
+            "const c = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY';",   # a key
+            "const t = 'text/plain';",                    # a MIME type
+            "const e = 'plans/epic-XXXX/a.md';",          # a placeholder
+            "const r = '/company/dashboard';"]) + "\n"
+        f = D.parse(sh(make_repo({"src/a.ts": old}, {"src/a.ts": "const r = 1;\n"}), "git", "diff", "main..fix") + "\n")
+        self.assertEqual(list(mentions.changed_values(f)), ["/company/dashboard"])
+        t = D.parse(sh(make_repo({"tests/a.py": "P = 'src/x/y.py'\n"}, {"tests/a.py": "P = 1\n"}),
+                       "git", "diff", "main..fix") + "\n")
+        self.assertEqual(mentions.changed_values(t), {})                         # a test's fixture string
+
+    def test_reader_caps(self):
+        from crucible import mentions
+        many = {f"m{i}/f.ts": "go('/route/one')\n" for i in range(9)}           # 9 files: not one flaw's readers
+        some = {f"s{i}.ts": "go('/route/two')\n" * 2 for i in range(3)}        # 6 lines in 3 files: summarized
+        d = make_repo(dict(many, **some, **{"r.ts": "go('/route/three/x')\n"}), {"z.ts": "y\n"})
+        lines, picked = mentions.readers(d, {"/route/one": "", "/route/two": "", "/route/three": ""})
+        self.assertEqual(lines, ["(used too often to list; search them if the change alters what they mean: "
+                                 "/route/two (6 lines in 3 files))"])            # /route/three/x isn't /route/three
+        self.assertEqual(set(picked), {"/route/one", "/route/two", "/route/three"})
+
+    def test_switch_and_failure_leave_the_note_out(self):
+        from unittest import mock
+        base = {"a.py": "URL = '/api/v1/users'\n", "b.py": "get('/api/v1/users')\n"}
+        d = make_repo(base, {"a.py": "URL = '/api/v2/users'\n"})
+        files = D.parse(sh(d, "git", "diff", "main..fix") + "\n")
+        with mock.patch.dict(os.environ, {"CRUCIBLE_MENTIONS": "1"}):
+            self.assertIn("b.py:1: get('/api/v1/users')", V.mentions_note(d, "fix", files, {"files": ["a.py"]}))
+            self.assertEqual(V.mentions_note(d, "fix", files, {"files": ["b.py"]}), "")   # another pass's file
+            self.assertEqual(V.mentions_note("/nonexistent", "fix", files, {"files": ["a.py"]}), "")
+        for off in ({"CRUCIBLE_MENTIONS": "0"}, {}):                              # off by default
+            with mock.patch.dict(os.environ, off):
+                if not off:
+                    os.environ.pop("CRUCIBLE_MENTIONS", None)
+                self.assertEqual(V.mentions_note(d, "fix", files, {"files": ["a.py"]}), "")
+        # a line the change adds that names the old value unquoted (a comment) is the author's, not a reader
+        d = make_repo(base, {"a.py": "# was /api/v1/users\nURL = '/api/v2/users'\n"})
+        files = D.parse(sh(d, "git", "diff", "main..fix") + "\n")
+        note = V.mentions_note(d, "fix", files, {"files": ["a.py"]})
+        self.assertIn("b.py:1:", note)
+        self.assertNotIn("a.py:1:", note)
+
+
 class TestSecondSeat(unittest.TestCase):
     """CRUCIBLE_SEATS=2: an independent second first look, unioned before verification (eval/NOTES 2026-11-25: R7 ∪ R8
     on the held-out 50, high F1 58.3/55.6 -> 69.6 at high precision 96.2)."""

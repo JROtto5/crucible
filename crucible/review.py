@@ -1,6 +1,6 @@
 """The review pipeline: checks → scanners → chunked review → per-finding verification → verdict."""
 import concurrent.futures as cf, datetime as dt, difflib, fcntl, hashlib, os, re, subprocess, textwrap, threading
-from . import callsites, catalog, checks as checks_mod, diff as diff_mod, docrefs, fieldreads, readiness, routing, style as style_mod
+from . import callsites, catalog, checks as checks_mod, diff as diff_mod, docrefs, fieldreads, mentions, readiness, routing, style as style_mod
 from .util import (BLOCKING, BUDGET_EXHAUSTED, HOME, MODELS, PREFERENCE, SEV, TOOLS_READ, TOOLS_RUN, Budget, Failed, NoStructuredOutput,
                    claude, crucible_build, default_base,
                    exclude_locally, git, is_dirty, norm_words, project_dir, project_key, read_json, review_dir,
@@ -1854,6 +1854,23 @@ def fields_note(repo, sha, files, ch):
         return ""
 
 
+def mentions_note(repo, sha, files, ch):
+    """The --nits prompt's list of lines outside the change that still use a value this pass's files removed,
+    replaced or moved (a path, a route, an id format, a moved file's old path), and of repo paths those files name
+    that don't exist at HEAD (crucible.mentions); "" when nothing fires or the search fails. files: the whole change,
+    also in an incremental round (a reader left stale in round 1 is still stale); a value an added line anywhere in
+    it still carries isn't listed, and its added lines are left out of the readers. Off unless CRUCIBLE_MENTIONS=1
+    until its arm is measured (eval/NOTES 2026-11-27), so the seat and recall-first arms built from main don't carry
+    it; off, the prompt is byte-identical."""
+    if os.environ.get("CRUCIBLE_MENTIONS", "0") != "1":
+        return ""
+    try:
+        mine = [f for f in files if f.get("path") in set(ch["files"])]
+        return mentions.mentions(repo, mine, lambda p: git_blob(repo, sha, p), files, added_lines(files))
+    except Exception:
+        return ""
+
+
 def is_ancestor(repo, a, b):
     return subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", a, b], capture_output=True).returncode == 0
 
@@ -2411,7 +2428,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             docs = docs_note(repo, sha, dfiles if prev_sha else files, ch, files) if nits else ""
             if nits:
                 docs = "\n".join(x for x in (callers_note(repo, base, sha, files, ch), fields_note(repo, sha, files, ch),
-                                              docs) if x)
+                                              mentions_note(repo, sha, files, ch), docs) if x)
             prompt = review_prompt(project, sha, base, ch, rules, mem, facts, clog, all_files, house,
                                    draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured, since, nits, docs,
                                    recall, draft_text)

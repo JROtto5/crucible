@@ -2108,3 +2108,58 @@ If the seat and this arm both pass stage 2 alone, a stacked arm is its own pre-r
 - **6538962 GREEN.**
 
 570 tests, ruff clean. **Local eval with the knob on** (`CRUCIBLE_RECALL_FIRST=1 crucible eval --nits --no-write --jobs 2`, all 41 cases, at e96c6e7; the later commits change only reuse, logging and the >40 cut, which no eval case reaches; account #25, $20.84, 80 min): recall **0.917** (build 20/22, holdout 2/2). The misses are js-refcount and py-race (py-race was caught on fb540f5). Any severity: **1.0**. False blocking: **0 on 9 clean cases**. Nit cases: 22/22, false blocking **0** (fb540f5: 3; ec52463 with the seat: 2). Nits kept: 167 (22 on clean cases; fb540f5: 146 and 22). Against the shipped one-seat build (fb540f5, 11-24: 0.917, $19.01) it is the same recall at +9.6% cost. The bar used is the one written for the seat on 11-25 (recall ≥ 0.913, 0 false blocking on clean cases), since this run started before the plan above was written: **passes**. What the eval can't show: no fixture holds more than a few planted issues or a description with promises, so the lever's target (unraised high items on real PRs) is measured only by the ReviewBench stages above. The first run due is stage 1 on the 13 PRs, after the seat's stage 1 and after the 11-29/11-30 resets.
+
+### 2026-11-27 · mentions context (`CRUCIBLE_MENTIONS=1`, focus item c): $0 replay on TRAIN and 1,017 commits, pre-registered arm
+
+**What it is.** `crucible/mentions.py`, called as `mentions_note` beside `callers_note`, `fields_note` and `docs_note`
+in each `--nits` pass; $0 (git grep, git ls-files), no model call. Two lists: (1) **readers of a changed value**: a
+path or route string, an id in a fixed format (`[A-Z]{2,10}-\d{2,}`, two samples per format) or a moved or deleted
+file's old path, taken from the pass's removed lines when no added line of the whole change still carries it; every
+line of the checkout that still uses it (whole value, not a prefix), outside the change's added lines; at most 12
+values, 5 lines each, a value in more than 8 files left out; (2) **missing repo paths**: a path on an added line, or
+on any line of a file the change adds or moves, whose top directory is tracked at HEAD but which is neither a file, a
+directory nor a module stem, from the root or from the naming file's directory. A `$VAR/` root counts only when the
+variable names the checkout (`REPO_ROOT`, `GITHUB_WORKSPACE`), not a temp, home, runner or build root. Left out:
+imports, relative and system paths, keys (5+ case switches), MIME types, `XXXX` placeholders, test files (fake
+paths, fixture strings), docs and ignore files (example and planned paths), comment lines, a path built at runtime
+(`src/pack-$V.bin`, `$(...)`). **Off by default** (`CRUCIBLE_MENTIONS=1` on): the seat's and recall-first's
+pre-registered arms are built from main and must not carry it. Off, prompts are byte-identical (tested).
+
+**Why this lever.** TRAIN's never-raised high misses (2026-11-24) include value changes that no existing note sees:
+callers_note fires on a signature, fields_note on a field name, docs_note on a definition's name.
+
+**Replay** (`~/rb-work/tmp/ment/replay.py r8base`, the shipped functions on each TRAIN PR's stored `diff.patch`, a
+shared clone checked out at the PR head; a line "reaches" a golden item at the same file within its span ±3; reach
+definitions fixed before the run):
+| variant | lines on TRAIN (PRs firing) | on missed high | other tagged | none | 1,017 commits |
+|---|---|---|---|---|---|
+| first cut | 82 (19 of 60), max 15/PR | 1 (AO #17) | tp-missed 2, golden-fp 10, tp-covered 2 | 67 | not run |
+| **shipped: + noise rules** | **37 (8 of 60), max 9/PR** | **2 (AO #4 ao-update.sh:61, AO #17 ao-doctor.sh:325)** | tp-missed 1 (catwalk neuralwatt.json:35), golden-fp 2 | 32 | **14 commits fire, 42 lines** |
+- **agent-orchestrator #4 and #17** (high, a moved script still runs `$REPO_ROOT/packages/agent-orchestrator/bin/ao.js`):
+  both listed at their exact lines. The first cut lost #4 to a per-path dedupe; it is now once per naming file.
+- **entebus #32** (high, the dashboard link now passes the raw id; pages compare with `COMP-001`): evidence only, not
+  at the golden line. The note lists `src/lib/dummy-data.ts:347 companyId: 'COMP-002'` and summarizes `COMP-001 (57
+  lines in 1 file)`: the old format's readers, not the comparing page the golden item names.
+- All three were missed in both stored TRAIN rounds (r8base and r8train, checked from the scoring files). The research
+  bar for an arm (≥ 2 of the 5 never-raised NF items reached, lines per PR under the cap) is **met: 2 at the line, 1
+  by evidence**. ia-dev #28 (golden fixtures not updated), Maui #3 and swarmbase #43 aren't value changes; not reached.
+- The 1,017 ordinary commits are the TRAIN repos' own recent history (the stored clones are partial, so only commits
+  whose blobs are local check out; `commits.py`, 60 repos walked until 1,000 checked out). 14 fire. Read by hand:
+  most are real stale mentions (docs and `.cursorrules` naming a deleted `log_setup.py`, a Dockerfile naming a moved
+  JSON); it also fires on agent-orchestrator c2358798, the commit that first left the stale path. The noise rules
+  for the AWS example key, `XXXX` placeholders and a path with a space came from this read (in the table's shipped row).
+- Eval: the note fires on **0 of the 41 eval cases** (each case's base..change built as `evalrun` builds it), so with
+  the knob on every eval prompt is byte-identical: no eval run.
+- Tests 570 -> 578, every rule mutation-checked (23 mutations, all killed; 3 survived the first test set and got cases).
+
+**Pre-registered arm (bars fixed now, before any run; one round; after the seat's stage 1 and the recall-first arm's
+stage 1, never in the same run; after the 11-29/11-30 resets).** Image `crucible-rb:r9mn` = r8c's harness on this
+commit with `ENV CRUCIBLE_MENTIONS=1`, `CRUCIBLE_SEATS` and `CRUCIBLE_RECALL_FIRST` unset. The off arm is the stored
+R8-train run (`runs/r8train`, fb540f5) on the same PRs, not a re-run (COST RULE): the default pipeline hasn't changed
+since fb540f5 (the seat and recall-first are off by default). PRs: the 8 TRAIN PRs where the note fires (agent-
+orchestrator, entebus, catwalk, burglekitt, caasi, swarmbase, arolariu, tile-ai; ≈ $22 + judge). The 6 without a
+targeted item are the false-alarm check; on the other 52 the prompt is byte-identical, so they aren't run.
+**Pass, all of:** (a) ≥ 2 of AO #4, AO #17, entebus #32 credited; (b) none of R8-train's credited high items on the 8
+lost (entebus #0/#22/#27/#28, swarmbase #43); (c) 0 high-view false positives on the 8; (d) mean ≤ R8-train's mean
+on the 8 + $0.15. Reported, not a bar: which kept items cite a listed line, nits kept on the 6. Pass → TRAIN-60 with
+the seat plan's bars, then the held-out 50 once, totals only; only then on by default.
