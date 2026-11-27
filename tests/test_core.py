@@ -9739,7 +9739,10 @@ class TestRecallFirst(unittest.TestCase):
     _f = staticmethod(TestSecondSeat._f)
     _run = TestSecondSeat._run
     DRAFT = "# Retry uploads on 503\n\nUploads now retry up to 3 times on a 503, with backoff. No behaviour change otherwise.\n"
-    same = staticmethod(lambda c: re.sub(r"\b[0-9a-f]{7,40}\b", "H", re.sub(r"crucible-(repo|home)-\w+", "R", c["prompt"])))
+    # the prompt shows the project as its slug, where a temp dir's "__" reads as "/" (crucible-repo-ab__cd ->
+    # crucible-repo-ab/cd), so the random suffix may hold slashes: ~1 run in 200 failed on it (eval/NOTES 2026-11-27)
+    same = staticmethod(lambda c: re.sub(r"\b[0-9a-f]{7,40}\b", "H", re.sub(r"crucible-(repo|home)-[\w/]*", "R",
+                                                                             c["prompt"])))
 
     def test_off_by_default_prompts_and_schema_unchanged(self):
         for nits in (None, True):

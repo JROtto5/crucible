@@ -2112,21 +2112,21 @@ If the seat and this arm both pass stage 2 alone, a stacked arm is its own pre-r
 ### 2026-11-27 · mentions context (`CRUCIBLE_MENTIONS=1`, focus item c): $0 replay on TRAIN and 1,017 commits, pre-registered arm
 
 **What it is.** `crucible/mentions.py`, called as `mentions_note` beside `callers_note`, `fields_note` and `docs_note`
-in each `--nits` pass; $0 (git grep, git ls-files), no model call. Two lists: (1) **readers of a changed value**: a
-path or route string, an id in a fixed format (`ID_RX` = `[A-Z][A-Z0-9]{1,9}-\d{2,}`, two samples per format) or a moved or deleted
-file's old path, taken from the pass's removed lines when no added line of the whole change still carries it; every
-line of the checkout that still uses it (whole value, not inside a longer path; a root-relative path may follow
-a root variable `$VAR/`, `${VAR}/`, `$(VAR)/` by the name rule below, or a run of `./` and `../`), outside the change's added lines; at most 12 values, 5 lines each, a
-value with more lines only counted (lines and files); (2) **missing repo paths**: a path on an added line, or
-on any line of a file the change adds or moves, whose top directory is tracked at HEAD but which is neither a file, a
-directory nor a module stem, from the root or from the naming file's directory. A `$VAR/` root counts only when the
-variable's name matches `root|repo|workspace|project|src|source|top` and not `te?mp|home|cache|runner|tool|out|build|
-dist` (`REPO_ROOT`, `PROJECT_DIR`, `GITHUB_WORKSPACE` count; `RUNNER_TEMP`, `BUILD_DIR` don't). git runs with
-`core.quotePath=false`, so non-ASCII names match. Left out:
-imports, relative and system paths, keys (5+ case switches), MIME types, `XXXX` placeholders, test files (fake
-paths, fixture strings), docs and ignore files (example and planned paths), comment lines, a path built at runtime
-(`src/pack-$V.bin`, `$(...)`). **Off by default** (`CRUCIBLE_MENTIONS=1` on): the seat's and recall-first's
-pre-registered arms are built from main and must not carry it. Off, prompts are byte-identical (tested).
+in each `--nits` pass; $0 (git grep, git ls-files), no model call. Two lists: (1) **readers of a changed value**: a path
+or route string, an id in a fixed format (`ID_RX` = `[A-Z][A-Z0-9]{1,9}-\d{2,}`, two samples per format) or a moved or
+deleted file's old path, taken from the pass's removed lines when no added line of the whole change still carries it;
+every line of the checkout that still uses it (whole value, not inside a longer path; a root-relative path may follow a
+root variable `$VAR/`, `${VAR}/`, `$(VAR)/` by the name rule below, or a run of `./` and `../`), outside the change's
+added lines; at most 12 values, 5 lines each, a value with more lines only counted (lines and files); (2) **missing repo
+paths**: a path on an added line, or on any line of a file the change adds or moves, whose top directory is tracked at
+HEAD but which is neither a file, a directory nor a module stem, from the root or from the naming file's directory. A
+`$VAR/` root counts only when the variable's name matches `root|repo|workspace|project|src|source|top` and not
+`te?mp|home|cache|runner|tool|out|build|dist` (`REPO_ROOT`, `PROJECT_DIR`, `GITHUB_WORKSPACE` count; `RUNNER_TEMP`,
+`BUILD_DIR` don't). git runs with `core.quotePath=false`, so non-ASCII names match. Left out: imports, relative and
+system paths, keys (5+ case switches), MIME types, `XXXX` placeholders, test files (fake paths, fixture strings), docs
+and ignore files (example and planned paths), comment lines, a path built at runtime (`src/pack-$V.bin`, `$(...)`).
+**Off by default** (`CRUCIBLE_MENTIONS=1` on): the seat's and recall-first's pre-registered arms are built from main and
+must not carry it. Off, prompts are byte-identical (tested).
 
 **Why this lever.** TRAIN's never-raised high misses (2026-11-24) include value changes that no existing note sees:
 callers_note fires on a signature, fields_note on a field name, docs_note on a definition's name.
@@ -2152,7 +2152,7 @@ definitions fixed before the run):
   #32)**. Maui #3 and swarmbase #43 (never raised in r8base; r8train credited #43 through a first-pass finding) aren't
   value changes: not reached. Outside the NF row, ia-dev #28 (golden fixtures not updated) isn't reached either.
 - The 1,017 ordinary commits are the TRAIN repos' own recent history (the stored clones are partial, so only commits
-  whose blobs are local check out; `commits.py`, 60 repos walked until 1,000 checked out). 14 fired on 0124e42, 13 on the shipped code. Read by hand:
+  whose blobs are local check out; `eval/replays/mentions_commits.py`, 60 repos walked until 1,000 checked out). 14 fired on 0124e42, 13 on the shipped code. Read by hand:
   most are real stale mentions (docs and `.cursorrules` naming a deleted `log_setup.py`, a Dockerfile naming a moved
   JSON); it also fires on agent-orchestrator c2358798, the commit that first left the stale path. The noise rules
   for the AWS example key, `XXXX` placeholders and a path with a space came from this read (in the table's shipped row).
@@ -2168,7 +2168,13 @@ definitions fixed before the run):
   took any `$VAR/` (`$HOME/`) as a root while missing paths used a name rule (now one rule, `_root_var`, and a run of
   `./`/`../`; tests for `../../`, `${REPO_ROOT}/`, `$HOME/`); the replay drivers weren't in the repo (now
   `eval/replays/`, re-run from there: same TRAIN numbers).
-- blaze-3 suite: 579 tests, one run with 1 failure (not shown by `-q`; not reproduced in the next 3 runs, all OK).
+- blaze-3 suite: one run of 579 failed 1 test. Six more full runs caught it again (run 6: `TestRecallFirst`'s two
+  prompt-equality tests, from 11-26, not this change). Cause: the prompt names the project by its slug, where a temp
+  dir's `__` reads as `/` (`crucible-repo-ab__cd` -> `crucible-repo-ab/cd`), and the test's normalizer
+  `crucible-(repo|home)-\w+` stopped at the slash, so two runs' prompts differed; about 1 temp name in 200 has a `__`.
+  Fixed (`[\w/]*`); with every temp name forced to start with `__`, the old normalizer fails those 2 tests and the new
+  one passes both.
+- Round 3 (dcdf4fd): NOT_GREEN, 3 low, all fixed: the flake above; a stale `commits.py` name; an over-long line.
 
 **Pre-registered arm (bars fixed now, before any run; one round; after the seat's stage 1 and the recall-first arm's
 stage 1, never in the same run; after the 11-29/11-30 resets).** Image `crucible-rb:r9mn` = r8c's harness on this
