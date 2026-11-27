@@ -1832,7 +1832,8 @@ class TestIncremental(unittest.TestCase):
                   "Benchmark numbers don't exercise the changed code and imply a speedup that is noise",
                   "Error paths aren't tested", "Suite doesn't exercise the Windows branch",  # (made up)
                   "Fixture setup does not test the cleanup path", "Return value is never asserted",  # (made up)
-                  "New exit code is not documented", "Fallback isn't  covered"]:  # (made up; two spaces)
+                  "New exit code is not documented", "Fallback isn't  covered",  # (made up; two spaces)
+                  "No case for the Windows separator fix, in tests"]:  # (made up) a 40-char gap, the bound
             self.assertIsNotNone(V.absence_anchor({"title": t}), t)
         for t in ["Mono test runner leaks a thread on timeout",  # (made up) "no" inside a word
                   "API.md not regenerated for the changed docs and new option",  # "no" as a prefix
@@ -1841,7 +1842,8 @@ class TestIncremental(unittest.TestCase):
                   "Lock order is not testable from the public API", "Global state makes the parser untestable",  # (made up)
                   "Test note ties the master failures to having no network, which is true only for the existing tests",
                   "Generator version bumps no longer excuse a hand-edit warning; the comment above still says they do",
-                  "Returns no value. The comment above it says it returns the count"]:  # (made up)
+                  "Returns no value. The comment above it says it returns the count",  # (made up)
+                  "No case for the Windows separator fixes in tests"]:  # (made up) a 41-char gap, one past the bound
             self.assertIsNone(V.absence_anchor({"title": t}), t)
         self.assertEqual(V.absence_anchor({"title": "x", "anchor_files": ["t.py", "", 3]}), ["t.py"])
 
