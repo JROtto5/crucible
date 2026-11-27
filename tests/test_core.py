@@ -9968,9 +9968,13 @@ class TestVerifyBatch(unittest.TestCase):
         v = by["division by zero in f"]["verification"]                       # no verdict for it: kept, retryable
         self.assertEqual((v["status"], v["reason"]), ("unverified", "no verdict returned for this claim"))
         self.assertTrue(V.verify_retryable(by["division by zero in f"]))
-        self.assertEqual([f["title"] for f in r["dropped"]], ["missing timeout on fetch"])   # the audit failed: drop stands
+        self.assertEqual(r["dropped"], [])                                    # the audit failed: kept, disputed
+        t = by["missing timeout on fetch"]
+        self.assertEqual((t["verification"]["status"], t["severity"]), ("disputed", "medium"))
+        self.assertIn("the audit failed: model call failed: boom", t["verification"]["audit"]["reason"])
         self.assertIn("boom", r["verify_batch"]["audit"]["error"])
-        self.assertEqual(r["verify_batch"]["unverified"], 1)
+        self.assertEqual((r["verify_batch"]["unverified"], r["verify_batch"]["disputed"], r["verify_batch"]["dropped"]),
+                         (1, 1, 0))
         self.assertIn("(failed: model call failed: boom)", V.report(r, {}))
 
     def test_batches_of_six_blocking_first_under_a_limit(self):
@@ -10003,15 +10007,32 @@ class TestVerifyBatch(unittest.TestCase):
         v = lambda kind, text: self._v(0, False, counter=text, disproof=kind)
         for kind, text in (("line", "a.py:3 sets timeout=5"), ("line", "see src/x/y.ts:120"),
                            ("command", "`python3 -c 'import a'` prints 5"), ("command", "`grep -rn fetch_all src`: none"),
-                           ("line", "could not run it, but a.py:3 sets timeout=5")):
+                           ("command", "ran `npm test`: 12 passing"), ("line", "could not run it, but a.py:3 sets timeout=5")):
             self.assertTrue(V.cited(v(kind, text)), (kind, text))
-        # a doubt (declared or not), and a declared kind without the citation it needs
+        # a doubt (declared or not), and a declared kind without the citation it needs: a name in backticks is not a
+        # command, and nothing at all is a doubt
         for kind, text in (("none", "a.py:3 sets timeout=5"), ("none", "Could not reproduce."), (None, "a.py:3"),
                            ("line", "Other handlers do the same; predates this change."), ("line", "`a.py` handles it"),
                            ("command", "could not run anything"), ("command", "ran it: no output"), ("command", ""),
-                           ("line", ""), ("bogus", "a.py:3 `x`")):
+                           ("command", "Other handlers do the same (see `handlers`), predates this change"),
+                           ("command", "`foo` is pre-existing"), ("command", "couldn't run `pytest` here"),
+                           ("command", "It ran out of time; `retry_loop` already handles it"),
+                           ("line", ""), ("bogus", "a.py:3 `x y`")):
             self.assertFalse(V.cited(v(kind, text)), (kind, text))
         self.assertFalse(V.cited(None)); self.assertFalse(V.cited({}))
+
+    def test_a_doubt_declared_as_a_disproof_needs_the_audit_to_agree(self):
+        """The code can't read prose: a doubt the verifier labels "command" with a real command in it reaches the
+        audit, which restores it; without an audit answer it is kept. Only the audit's "no" drops it."""
+        many = [self._f("missing timeout on fetch", 12)]
+        doubt = (False, "important", "ran `pytest tests/test_a.py`: passed; could not reproduce the hang", "command")
+        for audits, err, status in ((("missing timeout on fetch",), None, "disputed"), ((), "model call failed: x", "disputed"),
+                                    ((), None, "dropped")):
+            r, _ = self._run(env={"CRUCIBLE_VERIFY_BATCH": "1"}, budget=None, review_out=many,
+                             on_call=self._answer({"missing timeout on fetch": doubt}, audits=audits, audit_error=err))
+            f = (r["findings"] + r["dropped"])[0]
+            self.assertEqual(f["verification"]["status"], status, (audits, err))
+            self.assertEqual(f["verification"]["disproof"], "command")
 
     def test_a_short_answer_is_not_cached(self):
         from unittest import mock

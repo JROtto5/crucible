@@ -1831,11 +1831,13 @@ AUDIT_SCHEMA = {"type": "object", "properties": {"audits": {"type": "array", "it
                                      "reason": {"type": "string"}},
     "required": ["index", "restore", "reason"]}}}, "required": ["audits"]}
 # A drop stands on what the verifier declares (`disproof`) and shows: a file:line for "line", a backticked command for
-# "command". The model names the kind; the code only checks that the citation is there; the audit judges the rest.
+# "command" (a span with an argument in it: `retry_loop` alone is a name, `pytest a.py` a command). The model names the
+# kind, the code only checks that the citation is there, and a drop stands only when the audit, on a second model,
+# agrees; a failed audit keeps the claim as disputed.
 # A regex over free prose was tried first and every self-review round found another phrase it misread ("could not
 # run it", "`retry_loop`", "ran out of time; `foo`", "ran `x`; could not reproduce"): 2026-11-27 rounds 1-3.
 CITED_LINE_RX = re.compile(r"[\w./-]+\.\w+:\d+")
-CITED_COMMAND_RX = re.compile(r"`[^`\n]{2,}`")
+CITED_COMMAND_RX = re.compile(r"`[^`\n]*\S\s+\S[^`\n]*`")
 
 
 def cited(v):
@@ -1946,8 +1948,8 @@ def verify_batched(items, repo, budget, model, fresh=False, base="", added=None,
 
 
 def audit_drops(items, repo, budget, model, fresh=False):
-    """items: [(finding, verdict)] -> ({index: reason} to restore, error or None). One tool-less call; a failed call
-    restores nothing (the drops stand, as they would without the audit) and says why."""
+    """items: [(finding, verdict)] -> ({index: reason} to restore, error or None). One tool-less call; on a failed call
+    it returns the error, and the caller keeps every drop as disputed."""
     if not items:
         return {}, None
     prompt = drop_audit_prompt(items)
@@ -2850,8 +2852,9 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 vb["audit"] = {"model": amodel, "audited": len(drops), "restored": len(restore),
                                "cost_usd": round(budget.spent - a0, 4), **({"error": aerr[:300]} if aerr else {})}
                 for i, (f, v) in enumerate(drops):
-                    if i in restore:
-                        f["verification"].update(status="disputed", audit={"model": amodel, "reason": restore[i]})
+                    if i in restore or aerr:           # no audit: no second model agreed, so it is kept, disputed
+                        f["verification"].update(status="disputed", audit={"model": amodel, "reason": restore.get(i)
+                                                                           or f"the audit failed: {aerr[:200]}"})
                         f["severity"] = v["severity"]
                         vb["disputed"] += 1
                         kept.append(apply_honesty(f))
