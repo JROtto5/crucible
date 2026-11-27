@@ -229,10 +229,11 @@ def issue_placeholder(draft_text):
 # `#[cfg( all( x , test ) )]`, `#[cfg(all(not(windows), test))]` (one nested group). Must not: `#[cfg(any(test, x))]`
 # (also gates non-test builds), `#[cfg(not(test))]`, `#[cfg(all(unix, not(test)))]` (either order), `#[cfg(testing)]`,
 # `#[cfg(all(feature = "test"))]`, `#[cfg(all(unix, testing))]`, `#[cfg(all(no_test))]`, `#[testing_only]`,
-# `fn test_helper()`, a removed `#[test]`, a non-.rs file. Not seen: an edit inside a test body that adds no
-# attribute, and `test` after a group nested two deep.
+# `#![cfg_attr(not(test), no_std)]`, `#[cfg_attr(test, derive(Debug))]`, `fn test_helper()`, a removed `#[test]`,
+# a non-.rs file. Not seen: an edit inside a test body that adds no attribute, and `test` after a group nested two deep.
 RUST_TEST_RX = re.compile(r"^\s*#!?\[\s*(?:cfg\s*\(\s*(?:test\s*\)"
-                          r"|all\s*\((?:[^()]|\([^()]*\))*?(?<![\w\"])test\s*[,)])|(?:\w+::)*(?:test|test_case|rstest|wasm_bindgen_test)\b)")
+                          r"|all\s*\((?:[^()]|\([^()]*\))*?(?<![\w\"])test\s*[,)])"
+                          r"|(?:\w+::)*(?:test|test_case|rstest|wasm_bindgen_test)\b)")
 
 
 def _rust_inline_tests(f):
