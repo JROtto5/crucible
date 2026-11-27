@@ -10017,9 +10017,35 @@ class TestVerifyBatch(unittest.TestCase):
                            ("command", "Other handlers do the same (see `handlers`), predates this change"),
                            ("command", "`foo` is pre-existing"), ("command", "couldn't run `pytest` here"),
                            ("command", "It ran out of time; `retry_loop` already handles it"),
+                           ("command", "`foo` is pre-existing and `bar` too"), ("command", "see `a`, then `b`"),
                            ("line", ""), ("bogus", "a.py:3 `x y`")):
             self.assertFalse(V.cited(v(kind, text)), (kind, text))
         self.assertFalse(V.cited(None)); self.assertFalse(V.cited({}))
+
+    def test_audit_answers_by_index(self):
+        from unittest import mock
+        items = [(dict(self._f(t, n), id=t), self._v(n, False, counter="a.py:3", disproof="line"))
+                 for n, t in enumerate(("a", "b", "c"))]
+        for audits, want in (([{"index": 0, "restore": True, "reason": ""}, {"index": 1, "restore": False, "reason": "r"},
+                               {"index": 2, "restore": False, "reason": "r"}], {0: ""}),
+                             ([{"index": 1, "restore": False, "reason": "r"}],      # 0 and 2 unanswered: restored
+                              {0: "the audit gave no answer for this claim", 2: "the audit gave no answer for this claim"}),
+                             ([{"index": 7, "restore": False, "reason": "r"}, {"index": 0, "restore": False, "reason": "r"},
+                               {"index": 1, "restore": False, "reason": "r"}, {"index": 2, "restore": False, "reason": "r"}],
+                              {})):
+            with mock.patch.object(V, "claude", lambda *a, **kw: ({"audits": audits}, 0.0)):
+                self.assertEqual(V.audit_drops(items, ".", U.Budget(None), "m", fresh=True), (want, None))
+        # end to end: a restore with an empty reason is kept, with a reason that doesn't say the audit failed
+        def on_call(prompt, model, schema, kind):
+            if schema is V.AUDIT_SCHEMA:
+                return {"audits": [{"index": 0, "restore": True, "reason": ""}]}, 0.0
+            if schema is V.BATCH_VERDICTS_SCHEMA:
+                return {"verdicts": [self._v(0, False, counter="a.py:3 sets it", disproof="line")]}, 0.0
+            return None
+        r, _ = self._run(env={"CRUCIBLE_VERIFY_BATCH": "1"}, budget=None, review_out=[self._f("missing timeout", 12)],
+                         on_call=on_call)
+        self.assertEqual(r["status"], "done")
+        self.assertEqual(r["findings"][0]["verification"]["audit"]["reason"], "restored by the audit")
 
     def test_a_doubt_declared_as_a_disproof_needs_the_audit_to_agree(self):
         """The code can't read prose: a doubt the verifier labels "command" with a real command in it reaches the

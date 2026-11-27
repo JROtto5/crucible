@@ -1831,20 +1831,23 @@ AUDIT_SCHEMA = {"type": "object", "properties": {"audits": {"type": "array", "it
                                      "reason": {"type": "string"}},
     "required": ["index", "restore", "reason"]}}}, "required": ["audits"]}
 # A drop stands on what the verifier declares (`disproof`) and shows: a file:line for "line", a backticked command for
-# "command" (a span with an argument in it: `retry_loop` alone is a name, `pytest a.py` a command). The model names the
+# "command" (a span of two words or more: `retry_loop` alone is a name, `pytest a.py` a command; a shallow check, and
+# "`not reproduced`" passes it). The model names the
 # kind, the code only checks that the citation is there, and a drop stands only when the audit, on a second model,
 # agrees; a failed audit keeps the claim as disputed.
 # A regex over free prose was tried first and every self-review round found another phrase it misread ("could not
 # run it", "`retry_loop`", "ran out of time; `foo`", "ran `x`; could not reproduce"): 2026-11-27 rounds 1-3.
 CITED_LINE_RX = re.compile(r"[\w./-]+\.\w+:\d+")
-CITED_COMMAND_RX = re.compile(r"`[^`\n]*\S\s+\S[^`\n]*`")
+SPAN_RX = re.compile(r"`([^`\n]+)`")
 
 
 def cited(v):
     """True when a "no" verdict declares a disproof and shows the citation its kind needs."""
     ce = (v or {}).get("counter_evidence") or ""
     kind = (v or {}).get("disproof")
-    return bool(kind == "line" and CITED_LINE_RX.search(ce) or kind == "command" and CITED_COMMAND_RX.search(ce))
+    # spans are taken whole, left to right, so the prose between two of them is never read as one
+    command = any(re.search(r"\S\s+\S", sp) for sp in SPAN_RX.findall(ce))
+    return bool(kind == "line" and CITED_LINE_RX.search(ce) or kind == "command" and command)
 
 
 def verify_batch_on():
@@ -1949,7 +1952,8 @@ def verify_batched(items, repo, budget, model, fresh=False, base="", added=None,
 
 def audit_drops(items, repo, budget, model, fresh=False):
     """items: [(finding, verdict)] -> ({index: reason} to restore, error or None). One tool-less call; on a failed call
-    it returns the error, and the caller keeps every drop as disputed."""
+    it returns the error, and the caller keeps every drop as disputed. A drop the answer skips is restored too: only an
+    explicit restore = false lets a drop stand."""
     if not items:
         return {}, None
     prompt = drop_audit_prompt(items)
@@ -1963,8 +1967,9 @@ def audit_drops(items, repo, budget, model, fresh=False):
                 cache_put(key, res)
         except Failed as e:
             return {}, str(e)
-    return {a["index"]: a.get("reason", "") for a in res.get("audits") or []
-            if a.get("restore") and isinstance(a.get("index"), int) and 0 <= a["index"] < len(items)}, None
+    answered = {a["index"]: a for a in res.get("audits") or [] if isinstance(a.get("index"), int)}
+    return {i: (answered[i].get("reason", "") if i in answered else "the audit gave no answer for this claim")
+            for i in range(len(items)) if i not in answered or answered[i].get("restore")}, None
 
 
 def git_blob(repo, rev, path):
@@ -2853,8 +2858,8 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                                "cost_usd": round(budget.spent - a0, 4), **({"error": aerr[:300]} if aerr else {})}
                 for i, (f, v) in enumerate(drops):
                     if i in restore or aerr:           # no audit: no second model agreed, so it is kept, disputed
-                        f["verification"].update(status="disputed", audit={"model": amodel, "reason": restore.get(i)
-                                                                           or f"the audit failed: {aerr[:200]}"})
+                        why = (restore[i] or "restored by the audit") if i in restore else f"the audit failed: {aerr[:200]}"
+                        f["verification"].update(status="disputed", audit={"model": amodel, "reason": why})
                         f["severity"] = v["severity"]
                         vb["disputed"] += 1
                         kept.append(apply_honesty(f))
