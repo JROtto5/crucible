@@ -299,10 +299,12 @@ class TestReadiness(unittest.TestCase):
         self.assertEqual(ok([rs("src/lib.rs", "    #[rstest]")]), "pass")
         self.assertEqual(ok([rs("src/lib.rs", "    #[test_log::test]")]), "pass")
         self.assertEqual(ok([rs("src/lib.rs", '#[cfg(all(test, feature = "x"))]')]), "pass")
-        self.assertEqual(ok([rs("src/lib.rs", "#[cfg(any(test, fuzzing))]")]), "pass")
-        self.assertEqual(ok([rs("src/lib.rs", "#[cfg(not(test))]")]), "fail")
-        self.assertEqual(ok([rs("src/lib.rs", "#[cfg(all(not(test), unix))]")]), "fail")
-        self.assertEqual(ok([rs("src/lib.rs", "#[cfg(testing)]")]), "fail")
+        self.assertEqual(ok([rs("src/lib.rs", "#[cfg(all(unix, test))]")]), "pass")
+        self.assertEqual(ok([rs("src/lib.rs", "#[cfg( all( feature = \"x\" , test ) )]")]), "pass")
+        for line in ("#[cfg(any(test, fuzzing))]", "#[cfg(not(test))]", "#[cfg(all(not(test), unix))]",
+                     "#[cfg(all(unix, not(test)))]", "#[cfg(testing)]", '#[cfg(all(feature = "test"))]',
+                     "#[cfg(all(unix, testing))]", "#[cfg(all(no_test))]"):
+            self.assertEqual(ok([rs("src/lib.rs", line)]), "fail", line)
         # the real readiness run goes through evaluate(), which must hand the parsed files on
         d = make_repo({"src/lib.rs": "fn f() {}\n"}, {"src/lib.rs": "fn f() {}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n"})
         base = U.git(d, "merge-base", "main", "HEAD")

@@ -223,12 +223,14 @@ def issue_placeholder(draft_text):
 
 
 # Rust keeps unit tests in the source file (`#[cfg(test)] mod tests`), so a .rs file outside tests/ whose added lines
-# open a test module or a test function is a test change too. First real input: RustNet #753 (two `#[test]` fns added
-# to stun.rs). Falsifiers (tests/test_core.py test_tests_touched_rust_inline). Must match on an added .rs line:
-# `#[test]`, `#[tokio::test]`, `#[test_log::test]`, `#[test_case(1)]`, `#[rstest]`, `#[cfg(test)]`,
-# `#[cfg(all(test, feature = "x"))]`. Must not: `#[cfg(not(test))]`, `#[testing_only]`, `fn test_helper()`, a removed
-# `#[test]`, `#[test]` in a non-.rs file. An edit inside an existing test body with no new attribute isn't seen.
-RUST_TEST_RX = re.compile(r"^\s*#\[\s*(?:cfg\s*\(\s*(?:(?:all|any)\s*\(\s*)?test\b|(?:\w+::)*(?:test|test_case|rstest)\b)")
+# open a test module or a test function is a test change too (first real input: RustNet #753). Falsifiers
+# (test_tests_touched_rust_inline). Must match: `#[test]`, `#[tokio::test]`, `#[test_log::test]`, `#[test_case(1)]`,
+# `#[rstest]`, `#[cfg(test)]`, `#[cfg(all(test, x))]`, `#[cfg(all(unix, test))]`. Must not: `#[cfg(any(test, x))]`
+# (also gates non-test builds), `#[cfg(not(test))]`, `#[cfg(all(unix, not(test)))]` (either order), `#[cfg(testing)]`,
+# `#[cfg(all(feature = "test"))]`, `#[cfg(all(unix, testing))]`, `#[cfg(all(no_test))]`, `#[testing_only]`,
+# `fn test_helper()`, a removed `#[test]`, a non-.rs file. Not seen: an edit inside a test body that adds no attribute.
+RUST_TEST_RX = re.compile(r"^\s*#\[\s*(?:cfg\s*\(\s*(?:test\s*\)|all\s*\([^()]*?(?<![\w\"])test\s*[,)])"
+                          r"|(?:\w+::)*(?:test|test_case|rstest)\b)")
 
 
 def _rust_inline_tests(f):
