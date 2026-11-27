@@ -9640,6 +9640,10 @@ class TestRecallFirst(unittest.TestCase):
         late = many + [self._f("critical flaw written last", 150, "critical")]
         r_late, _ = self._run(env={"CRUCIBLE_RECALL_FIRST": "1"}, budget=None, review_out=late, repo_files=self.BIG)
         self.assertIn("critical flaw written last", [f["title"] for f in r_late["findings"] + r_late["dropped"]])
+        self.assertEqual(r_late["recall_first"], {"cut_passes": 1, "cut_findings": 6})
+        # within a grade the written order stands: the survivors are the critical plus the first 39 mediums written
+        kept = {f["title"] for f in r_late["findings"] + r_late["dropped"] if f.get("source") == "review"}
+        self.assertEqual(kept, {"critical flaw written last"} | {f["title"] for f in many[:V.RECALL_FINDINGS_MAX - 1]})
 
     def test_an_incremental_round_does_not_carry_across_the_knob(self):
         from unittest import mock
