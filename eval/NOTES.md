@@ -2243,3 +2243,13 @@ blocking: that is this arm's precision risk; (c) nit-case false blocking ≤ 3. 
 calls against fb540f5, findings dropped / disputed / restored, and the audit's cost. A pass only says the arm is safe
 to put on ReviewBench. Its gain (high items kept that the per-claim verifier dropped) is measured only there: a
 pre-registered arm after the seat's, recall-first's and mentions' stage 1, never stacked with them.
+
+**Local eval result** (5de41ba, `CRUCIBLE_VERIFY_BATCH=1 crucible eval --nits --no-write --jobs 2`, 41 cases, account #9,
+$18.87, 54 min): recall **1.0** (build 22/22, holdout 2/2; any severity 1.0), true dropped 0. False blocking **0 on 9
+clean cases**. Nit cases: 22/22 planted, false blocking **3** (maintainability-cross 1, reliability 2). Nits kept 165
+(24 on clean cases; fb540f5 146 / 22, 3aaea37 167 / 22), nit verification $1.97. Against the bar: (a) 1.0 ≥ 0.913
+**pass**, (b) 0 **pass**, (c) 3 ≤ 3 **pass, at the limit**. Cost $18.87 against fb540f5's $19.01 (−0.7%; per-kind
+verification $ isn't printed by `eval`, so the batching saving itself is not measured here). Read with care: js-refcount
+and py-race, missed in the recall-first run, are caught here. That is one round, and both have flipped between rounds
+before, so the 1.0 is not a gain of this arm. What the run says is that keeping disputed findings put no false
+blocking on the clean cases. **Passes: the arm may go on ReviewBench, in its pre-registered place in the queue.**
