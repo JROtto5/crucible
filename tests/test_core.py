@@ -9584,10 +9584,6 @@ class TestSecondSeat(unittest.TestCase):
         self.assertIsNone(V.stale_inputs(dict(prev, inputs=dict(prev["inputs"], seats=2)), dict(prev["inputs"])))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TestRecallFirst(unittest.TestCase):
     """CRUCIBLE_RECALL_FIRST=1: the first seat is asked for every supportable problem (no "at most 10", no maxItems,
     no "an empty list is a good answer", two flaws at one line are two), and checks the PR's title and body as a spec
@@ -9657,6 +9653,20 @@ class TestRecallFirst(unittest.TestCase):
         self.assertEqual(s0, [self.same(c) for c in c1 if c["kind"] == "seat2"])
         self.assertIs([c for c in c1 if c["kind"] == "seat2"][0]["schema"], V.FINDINGS_SCHEMA)
 
+    def test_a_stored_review_is_not_reused_across_the_knob(self):
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"CRUCIBLE_RECALL_FIRST": "0"}):
+            off = V.review_inputs(".", "b", lens=True)
+        with mock.patch.dict(os.environ, {"CRUCIBLE_RECALL_FIRST": "1"}):
+            on = V.review_inputs(".", "b", lens=True)
+        self.assertNotIn("recall_first", off)                         # stored reviews from before still match
+        self.assertTrue(on["recall_first"])
+        done = lambda inp: {"status": "done", "inputs": inp}
+        self.assertIn("CRUCIBLE_RECALL_FIRST=1", V.stale_inputs(done(off), on))
+        self.assertIn("CRUCIBLE_RECALL_FIRST=0", V.stale_inputs(done(on), off))   # another brief: not a superset
+        self.assertIsNone(V.stale_inputs(done(on), dict(on)))
+        self.assertIsNone(V.stale_inputs(done(off), dict(off)))
+
     def test_spec_survives_lens_prompt_and_braces(self):
         ch = {"files": ["a.py"], "text": "+x"}
         args = ("o__r", "a" * 40, "b" * 40, ch, "R", "M", "F", "L", ["a.py"])
@@ -9666,3 +9676,7 @@ class TestRecallFirst(unittest.TestCase):
         long = V.review_prompt(*args, recall=True, spec="x" * (V.RECALL_SPEC_CHARS + 500))
         self.assertIn("x" * V.RECALL_SPEC_CHARS, long); self.assertNotIn("x" * (V.RECALL_SPEC_CHARS + 1), long)
         self.assertEqual(V.review_prompt(*args), V.review_prompt(*args, spec="ignored when recall is off"))
+
+
+if __name__ == "__main__":
+    unittest.main()

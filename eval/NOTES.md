@@ -2069,3 +2069,33 @@ before passes. Same harness as R8 (`rb-run-set.sh`, `RB_CONFIG_KEEP_REVIEW=1`, S
    macro high P/R/F1 (the board's), high micro R/P with Wilson 95%, all-severity P/R/F1, $/PR. **Bar for turning the
    seat on by default:** high F1 ≥ 65.0 (R7 58.3, R8 55.6; the stored two-round union reached 69.6 at ~2× cost), high
    micro P ≥ 90, mean ≤ $3.00 per PR. Below 65 with P held, the seat stays a knob and the reading goes here.
+
+### 2026-11-26 · the recall-first reporting contract built (`CRUCIBLE_RECALL_FIRST=1`, focus item a): pre-registered arm
+
+**What it is.** One knob, first seat only. The review prompt's "Give at most 10 findings, ranked; merge findings that
+share a root cause. An empty list is a good answer." becomes "Report EVERY problem you can support from the code ...
+there is no cap. Merge only restatements of one flaw (one cause, one fix): two different flaws at the same line are two
+findings". The findings list loses `maxItems: 10`; the output is cut at 40 per pass (`RECALL_FINDINGS_MAX`, a runaway
+guard the prompt doesn't name). Every pass, not only pass 1, gets the PR's title and body (ReviewBench writes them to
+PR_DRAFT.md) as a spec: list each promise, check it against this pass's code, and cite a promise the code doesn't keep
+at the code that breaks it. Today pass 2..n see "(reviewed in pass 1)" and pass 1 sees the description only in the
+house-style section. The second seat's prompt and schema are unchanged (tested), so the arm is not stacked on stage 1
+of the seat plan. Off: prompts, schemas and cache keys byte-identical (tested). The nit tier, verification and
+dedupe are untouched; every extra finding is still verified one by one.
+
+**Why this lever.** 9 of TRAIN's 13 missed high items were never raised by the first pass (2026-11-24), 4 of them at a
+line where crucible raised another flaw; both 11-25 research notes name the brief's stopping cues first. The nits'
+cap of 10 never bound in R2 but still set the reviewer's sights (review.py, NITS_MAX_PER_PASS); the findings' cap is
+the same kind of cue. Cost risk: more findings means more verification ($0.083 per verified finding on R8-train).
+
+**Pre-registered plan (bars fixed now, before any run; one round per stage; each stage only if the one before passes;
+after the seat's stage 1, never in the same run).** Image `crucible-rb:r9rf` = r8c's harness on this commit with
+`ENV CRUCIBLE_RECALL_FIRST=1`, `CRUCIBLE_SEATS` unset (1). Reference R8-train (`runs/r8train`, fb540f5) on the same PRs.
+1. **Targeted, the same 13 TRAIN PRs as the seat's stage 1** (`SET=train60 IMG=r9rf PRS="7 8 13 25 29 86 90 92 151 192
+   2 5 19"`, ≈ $38 + judge). **Pass, all of:** (a) high items credited on the 10 miss PRs ≥ R8-train's + 3; (b) at
+   most 1 of R8-train's credited high items on them lost; (c) high micro P ≥ 90 over the 13, and 0 high-view false
+   positives on PRs 2, 5, 19; (d) mean ≤ $3.00 per PR over the 13. Reported, not a bar: first-pass findings raised
+   per pass against R8-train's, passes that raised > 10, and which gained items cite a promise of the description.
+2. **TRAIN-60**, then 3. **held-out 50 once, totals only**, with the seat plan's bars (high micro R ≥ 21/30 on TRAIN,
+   high micro P ≥ 90, all-severity micro P ≥ 78, mean ≤ $3.00; held-out high F1 ≥ 65.0 to turn it on by default).
+If the seat and this arm both pass stage 2 alone, a stacked arm is its own pre-registered plan, written then.

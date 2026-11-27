@@ -2041,6 +2041,7 @@ def review_inputs(repo, base, draft=None, no_exec=False, nits=False, lens=False,
     sorted model set): it picks the reviewer, so a rerun that adds it, as the thin-checkout note advises, re-reviews."""
     au = {"author": sorted(parse_authors(author))} if parse_authors(author) else {}
     two = {"seats": 2} if seats() > 1 else {}          # recorded only when on, like no_exec and nits
+    two |= {"recall_first": True} if recall_first() else {}
     if lens:                                           # a lens never reads the draft, so it can't depend on it
         return {"base": base, "draft": None, "draft_sha": None, "lens": True,
                 **({"no_exec": True} if no_exec else {}), **({"nits": True} if nits else {}), **au, **two}
@@ -2128,6 +2129,9 @@ def stale_inputs(prev, inputs):
         return "it was reviewed without --nits"
     if inputs.get("seats") and not old.get("seats"):   # the reverse is fine, as with nits
         return "it was reviewed with one seat (CRUCIBLE_SEATS=2 now)"
+    if bool(inputs.get("recall_first")) != bool(old.get("recall_first")):   # either way: another brief, not a superset
+        return ("it was reviewed with" + ("out" if inputs.get("recall_first") else "") +
+                " the recall-first contract (CRUCIBLE_RECALL_FIRST=" + ("1" if inputs.get("recall_first") else "0") + " now)")
     if old.get("author") != inputs.get("author"):
         return "the --author models changed since its last review"
     return None
