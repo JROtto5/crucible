@@ -2202,3 +2202,44 @@ builds it (recent merged PRs, repeat authors first, 20), since style.json keeps 
 (tox-dev/tox 304 / 262 / 242, colyseus 384 / 353 / 338, atuin 53 / 53 / 53 the only tie). The samples are today's,
 not the ones learned earlier. Fix: both p75 lines in STYLE.md read `(p75 N, interpolated, exclusive)` (`P75_RULE`,
 tested; a sample under 4 PRs shows no p75 at all, not `p75 None`). No check compares against p75 (the length check uses the outside median), so no verdict changes.
+
+### 2026-11-27 · keep unless disproved, batched, drop audit (`CRUCIBLE_VERIFY_BATCH=1`, focus item d): built, local eval bar
+
+**What it is** (d661a74..5de41ba, off by default). The review's own findings are verified 6 per call on the strong
+verifier (Sonnet when Opus reviews), blocking claims batched apart and first under a `--budget`. A "no" counts as a
+disproof only when the verdict declares one (`disproof`: `line` or `command`) and the citation is there (a `file:line`,
+or a backticked span of two words or more); any other "no" is kept as `disputed` at the verifier's severity. Every
+disproof goes to one tool-less call on another model (the review model by default), and it stands only if that call
+answers "don't restore" for it: a restore, a skipped index or a failed call keeps it, disputed. A missing verdict keeps
+the claim as unverified and retryable; a short answer isn't cached. Absence re-checks and claims about the description
+keep the per-claim verifier. review.json `verify_batch` counts verified / disputed / dropped / unverified, the audit's
+audited / restored, and the cost.
+
+**Self-review** (local, `--skip-checks --budget 4 --offline`, base dc0dfda, account #25): 6 rounds, $2.94.
+- d661a74 NOT_GREEN (3 medium): the citation regex took "could not run it" as a citation; a short batch answer was
+  cached, so a re-run replayed it; no CHANGELOG/README line.
+- 04d2447 NOT_GREEN (2 low): a backticked name counted as a run; "no output" vetoed a real grep disproof.
+- a8e3954 NOT_GREEN (5 low): three more prose phrasings the regex misread; a stale short cache entry; a cache hit
+  counted for an entry then thrown away. **Lesson: a regex over the verifier's free-text reason can't tell a doubt from
+  a disproof; every round found a new phrase.** dc8ca69 moved the decision into the schema (`disproof`), the code checks
+  only that the citation is present, and the audit judges.
+- dc8ca69 NOT_GREEN (1 medium, 2 low): a doubt labelled `command` with any backticked name was a cited drop, and a
+  failed audit let it stand. e9cf17d: a drop needs the audit's explicit "don't restore"; command spans need two words.
+- e9cf17d NOT_GREEN (3 medium, 1 low): an audit restore with an empty reason crashed the review (`None[:200]`); the
+  span regex read the prose between two spans; an index the audit skipped let the drop stand; a stale test count.
+- **5de41ba GREEN.**
+- Also fixed on the way: `TestSecondSeat.test_off_by_default_nothing_changes` failed once in a full run. It is the
+  `__` temp-name flake fixed for `TestRecallFirst` this morning, in another class: with every temp name forced to start
+  with `__` it fails, and it passes on the shared normalizer.
+- Tests 580 -> 590, ruff clean; 21 mutations of the new rules, all killed (one more, a dropped cache write, survived as
+  expected: no test can see it).
+
+**Local eval bar (fixed before the run).** `CRUCIBLE_VERIFY_BATCH=1 crucible eval --nits --no-write --jobs 2`, all 41
+cases, at 5de41ba, account #9 (pick-account; #25's 5 h window was at 90%). The comparison is the stored runs, not a
+re-run (COST RULE): fb540f5 (11-24, shipped default: recall 0.917, false blocking 0 on 9 clean, nit-case false blocking
+3, $19.01) and 3aaea37's recall-first run (0.917, 0, 0, $20.84). **Pass, all of:** (a) recall ≥ 0.913 (the seat's 11-25
+bar); (b) 0 false blocking on the 9 clean cases. A kept "disputed" blocking finding on a clean case counts as false
+blocking: that is this arm's precision risk; (c) nit-case false blocking ≤ 3. Reported, not a bar: verification $ and
+calls against fb540f5, findings dropped / disputed / restored, and the audit's cost. A pass only says the arm is safe
+to put on ReviewBench. Its gain (high items kept that the per-claim verifier dropped) is measured only there: a
+pre-registered arm after the seat's, recall-first's and mentions' stage 1, never stacked with them.
