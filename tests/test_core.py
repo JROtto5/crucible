@@ -177,6 +177,16 @@ diff --git a/test/fixtures/keys.js b/test/fixtures/keys.js
         hits = [h["line"] for h in D.scan(D.parse(diff)) if h["title"] == "Possible secret in added line"]
         self.assertEqual(hits, [3])
 
+    def test_rust_test_files_grade_a_secret_as_test_code(self):
+        """DRG-225: `tests.rs` / `*_tests.rs` are Rust test modules, so a key there is medium, not critical."""
+        want = {"src/net/stun.rs": "critical", "src/net/contests.rs": "critical",
+                "src/net/stun_tests.rs": "medium", "src/net/tests.rs": "medium", "tests.rs": "medium"}
+        for path, sev in want.items():
+            diff = (f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -0,0 +1,1 @@\n"
+                    '+    let key = "AKIAIOSFODNN7EXAMPLE1";\n')
+            hits = [h for h in D.scan(D.parse(diff)) if h["title"] == "Possible secret in added line"]
+            self.assertEqual([(h["severity"], h["reachable_in_real_use"]) for h in hits], [(sev, sev == "critical")], path)
+
     def test_chunk_coverage_splits_big_file(self):
         big = "diff --git a/b.js b/b.js\n--- a/b.js\n+++ b/b.js\n" + "".join(
             f"@@ -{i},1 +{i},1 @@\n-x{i}\n+y{i}\n" for i in range(1, 400))
