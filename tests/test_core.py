@@ -9282,7 +9282,7 @@ class TestSecondSeat(unittest.TestCase):
                 "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "w", "fix": "x"}
 
     def _run(self, seat2_out=(), env=None, budget=None, nits=None, passes=1, seat2_cost=0.0, seat2_error=None,
-             review_cost=0.0, repo_files=None):
+             review_cost=0.0, repo_files=None, review_out=None, draft=None):
         """-> (review.json, calls). The first seat raises "division by zero in f" (a.py:1) and "unclosed socket in g"
         (a.py:5); the second seat raises `seat2_out`. Each call costs what it says, cut at its budget like the CLI."""
         from unittest import mock
@@ -9307,8 +9307,8 @@ class TestSecondSeat(unittest.TestCase):
                     raise U.Failed(seat2_error)
                 return {"summary": "s2", "findings": [dict(f) for f in seat2_out]}, spend(budget, seat2_cost)
             if kind == "review":
-                out = {"summary": "s", "findings": [self._f("division by zero in f", 1),
-                                                    self._f("unclosed socket in g", 5, "medium")]}
+                out = {"summary": "s", "findings": [dict(f) for f in review_out] if review_out is not None else
+                       [self._f("division by zero in f", 1), self._f("unclosed socket in g", 5, "medium")]}
                 if "nits" in schema["properties"]:
                     out["nits"] = []
                 return out, spend(budget, review_cost)
@@ -9333,11 +9333,16 @@ class TestSecondSeat(unittest.TestCase):
                 mock.patch.object(V.diff_mod, "chunk", chunk), \
                 mock.patch.dict(os.environ, dict(base_env, **(env or {}))):
             for k in ("CRUCIBLE_SEATS", "CRUCIBLE_SEAT2_MODEL", "CRUCIBLE_SEAT2_ORDER", "CRUCIBLE_SEAT2_SHARE",
-                      "CRUCIBLE_REVIEW_MODEL", "CRUCIBLE_BUG_SWEEP"):
+                      "CRUCIBLE_REVIEW_MODEL", "CRUCIBLE_BUG_SWEEP", "CRUCIBLE_RECALL_FIRST"):
                 if k not in (env or {}):
                     os.environ.pop(k, None)
+            dpath = None
+            if draft is not None:
+                dpath = os.path.join(home, "PR_DRAFT.md")
+                with open(dpath, "w", encoding="utf-8") as fh:
+                    fh.write(draft)
             d = V.run_review(repo, "main", budget_usd=budget, offline=True, skip_checks=True, log=lambda *_: None,
-                             nits=nits)
+                             nits=nits, draft=dpath)
             return U.read_json(os.path.join(d, "review.json")), calls
 
     def test_same_claim_is_the_union_rule(self):
@@ -9581,3 +9586,83 @@ class TestSecondSeat(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRecallFirst(unittest.TestCase):
+    """CRUCIBLE_RECALL_FIRST=1: the first seat is asked for every supportable problem (no "at most 10", no maxItems,
+    no "an empty list is a good answer", two flaws at one line are two), and checks the PR's title and body as a spec
+    in every pass. 9 of TRAIN's 13 missed high items were never raised (eval/NOTES 2026-11-24)."""
+    _f = staticmethod(TestSecondSeat._f)
+    _run = TestSecondSeat._run
+    DRAFT = "# Retry uploads on 503\n\nUploads now retry up to 3 times on a 503, with backoff. No behaviour change otherwise.\n"
+    same = staticmethod(lambda c: re.sub(r"\b[0-9a-f]{7,40}\b", "H", re.sub(r"crucible-(repo|home)-\w+", "R", c["prompt"])))
+
+    def test_off_by_default_prompts_and_schema_unchanged(self):
+        for nits in (None, True):
+            r0, c0 = self._run(budget=5.0, nits=nits, draft=self.DRAFT)
+            r1, c1 = self._run(env={"CRUCIBLE_RECALL_FIRST": "0"}, budget=5.0, nits=nits, draft=self.DRAFT)
+            self.assertEqual([self.same(c) for c in c0], [self.same(c) for c in c1])
+            for r, calls in ((r0, c0), (r1, c1)):
+                self.assertNotIn("recall_first", r)
+                rev = [c for c in calls if c["kind"] == "review"]
+                self.assertTrue(rev)
+                for c in rev:
+                    self.assertIn(V.CAP_SENTENCE, c["prompt"])
+                    self.assertNotIn("What the PR says it does", c["prompt"])
+                    self.assertIs(c["schema"], V.FINDINGS_NITS_SCHEMA if nits else V.FINDINGS_SCHEMA)
+                    self.assertEqual(c["schema"]["properties"]["findings"]["maxItems"], 10)
+
+    def test_on_lifts_the_cap_and_checks_the_spec_in_every_pass(self):
+        r, calls = self._run(env={"CRUCIBLE_RECALL_FIRST": "1"}, budget=5.0, nits=True, passes=2, draft=self.DRAFT)
+        self.assertTrue(r["recall_first"])
+        rev = [c for c in calls if c["kind"] == "review"]
+        self.assertEqual(len(rev), 2)
+        for c in rev:
+            p = c["prompt"]
+            self.assertNotIn(V.CAP_SENTENCE, p)
+            self.assertNotIn("An empty list is a good answer", p)
+            self.assertIn("two different flaws at the same line are two", p)
+            self.assertNotIn("maxItems", c["schema"]["properties"]["findings"])
+            self.assertEqual(c["schema"]["properties"]["nits"]["maxItems"], V.NITS_MAX_PER_PASS)   # the rest is kept
+            # the description is in every pass (pass 2 used to see "(reviewed in pass 1)" only), after the rules
+            self.assertIn("Retry uploads on 503", p[p.index("What the PR says it does"):p.index("Commits in this change:")])
+            self.assertLess(p.index("Project rules:"), p.index("What the PR says it does"))
+        self.assertNotIn("Retry uploads on 503", rev[1]["prompt"].split("What the PR says it does")[0])
+        self.assertEqual(V.FINDINGS_SCHEMA["properties"]["findings"]["maxItems"], 10)      # module schemas untouched
+        self.assertEqual(V.FINDINGS_NITS_SCHEMA["properties"]["findings"]["maxItems"], 10)
+
+    def test_on_keeps_more_than_ten_findings_up_to_the_guard(self):
+        many = [self._f(f"distinct flaw {chr(97 + i % 26)}{i} in handler{i}", 3 * i + 1, "medium")
+                for i in range(V.RECALL_FINDINGS_MAX + 5)]
+        n = lambda r: sum(f.get("source") == "review" for f in r["findings"] + r["dropped"])
+        r_off, _ = self._run(budget=None, review_out=many, repo_files=self.BIG)
+        r_on, _ = self._run(env={"CRUCIBLE_RECALL_FIRST": "1"}, budget=None, review_out=many, repo_files=self.BIG)
+        self.assertEqual(n(r_off), 10)
+        self.assertEqual(n(r_on), V.RECALL_FINDINGS_MAX)
+
+    BIG = ({"a.py": "x = 1\n"}, {"a.py": "".join(f"y{i} = {i}\n" for i in range(200))})
+
+    def test_no_description_no_spec_block(self):
+        _r, calls = self._run(env={"CRUCIBLE_RECALL_FIRST": "1"}, budget=5.0)
+        for c in (c for c in calls if c["kind"] == "review"):
+            self.assertNotIn("What the PR says it does", c["prompt"])
+            self.assertIn("Report EVERY problem", c["prompt"])
+
+    def test_second_seat_brief_is_not_changed(self):
+        _r0, c0 = self._run(env={"CRUCIBLE_SEATS": "2"}, budget=5.0, nits=True, draft=self.DRAFT)
+        _r1, c1 = self._run(env={"CRUCIBLE_SEATS": "2", "CRUCIBLE_RECALL_FIRST": "1"}, budget=5.0, nits=True,
+                            draft=self.DRAFT)
+        s0 = [self.same(c) for c in c0 if c["kind"] == "seat2"]
+        self.assertTrue(s0)
+        self.assertEqual(s0, [self.same(c) for c in c1 if c["kind"] == "seat2"])
+        self.assertIs([c for c in c1 if c["kind"] == "seat2"][0]["schema"], V.FINDINGS_SCHEMA)
+
+    def test_spec_survives_lens_prompt_and_braces(self):
+        ch = {"files": ["a.py"], "text": "+x"}
+        args = ("o__r", "a" * 40, "b" * 40, ch, "R", "M", "F", "L", ["a.py"])
+        p = V.review_prompt(*args, recall=True, spec="# Fix {name} lookup\n\nbody")
+        self.assertIn("# Fix {name} lookup", p)
+        self.assertIn("What the PR says it does", V.lens_prompt(p))
+        long = V.review_prompt(*args, recall=True, spec="x" * (V.RECALL_SPEC_CHARS + 500))
+        self.assertIn("x" * V.RECALL_SPEC_CHARS, long); self.assertNotIn("x" * (V.RECALL_SPEC_CHARS + 1), long)
+        self.assertEqual(V.review_prompt(*args), V.review_prompt(*args, spec="ignored when recall is off"))

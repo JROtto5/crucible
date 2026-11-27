@@ -180,6 +180,46 @@ def nits_enabled(flag=None):
     return os.environ.get("CRUCIBLE_NITS", "").strip().lower() in ("1", "true", "yes")
 
 
+# ---------- recall-first reporting (CRUCIBLE_RECALL_FIRST=1): an arm, off by default ----------
+# 9 of TRAIN's 13 missed high items were never raised by the first pass (eval/NOTES 2026-11-24), and both research
+# notes (docs/research/2026-11-*.md) put the cause in the brief, not the model: "at most 10 findings", "merge
+# findings that share a root cause" and "an empty list is a good answer" tell a reviewer to stop early, and two
+# flaws at one line get folded into one. The board ranks high-severity recall; precision there is already 100, and
+# every finding is still verified one by one, so the brief asks for every supportable problem instead. The PR's
+# title and body also go to every pass as a spec, with each promise checked against the code: "the change does not
+# do what it claims" is critical by SEVERITY_DEFS, and pass 1 alone used to see the description, as house style.
+# The first seat only: seat 2 keeps its own brief (its stage-1 measurement is pre-registered; arms are not stacked).
+# Off, every prompt, schema and cache key is byte-identical to before.
+RECALL_FINDINGS_MAX = 40             # a runaway guard, not a sight-line: the prompt names no number
+RECALL_SPEC_CHARS = 5000             # the same cut as the description in the house-style section
+CAP_SENTENCE = "Give at most 10 findings, ranked; merge findings that share a root cause. An empty list is a good answer."
+RECALL_SENTENCE = ("Report EVERY problem you can support from the code, most severe first; there is no cap. Merge\n"
+                   "        only restatements of one flaw (one cause, one fix): two different flaws at the same line are "
+                   "two\n        findings, and a flaw at several sites is one finding. Don't leave out a real problem "
+                   "because it\n        seems small or the list is long; each finding is checked separately before "
+                   "anyone sees it.")
+RECALL_SPEC_NOTE = """
+        What the PR says it does: its title and description, a spec to check this pass's code against. List each
+        promise it makes (a fix, a feature, an option, a behaviour, a compatibility claim, "no behaviour change") and
+        check them one by one against the code. A promise the code doesn't keep, keeps only on some paths, or keeps
+        in one file but not its siblings is a finding at the code that breaks it (critical when the change does not
+        do what it claims). Promises about files outside this pass are checked in their own pass. Don't review
+        the description's wording here.
+        {spec}
+"""
+
+
+def recall_first():
+    """CRUCIBLE_RECALL_FIRST (1/true/yes): the recall-first reporting contract for the first seat's review passes."""
+    return os.environ.get("CRUCIBLE_RECALL_FIRST", "").strip().lower() in ("1", "true", "yes")
+
+
+def _uncapped(schema):
+    """`schema` with no maxItems on its findings list (the RECALL_FINDINGS_MAX guard is applied to the output)."""
+    items = {k: v for k, v in schema["properties"]["findings"].items() if k != "maxItems"}
+    return {**schema, "properties": {**schema["properties"], "findings": items}}
+
+
 def nits_model(authors=()):
     """The nit verifier: the mid model (CRUCIBLE_NITS_VERIFY_MODEL), unless it wrote the change."""
     m = os.environ.get("CRUCIBLE_NITS_VERIFY_MODEL", MODELS["sonnet"])
@@ -1444,7 +1484,7 @@ def assign_ids(findings):
 
 # ---------- pipeline ----------
 def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, house="", draft="", draft_file="PR_DRAFT.md",
-                  length_measured=True, since="", nits=False, docs=""):
+                  length_measured=True, since="", nits=False, docs="", recall=False, spec=""):
     # with no learned median the length check can't judge, so the reviewer still may (see length_only)
     length = ("Don't report the description's length: crucible measures it against this project's merged\n"
               "        PRs and reports it separately." if length_measured else "Also flag length far from the project norm.")
@@ -1503,6 +1543,14 @@ def review_prompt(project, sha, base, ch, rules, mem, facts, log, all_files, hou
         Diff for this pass:
         {ch['text']}
         """)
+    if recall:                          # CRUCIBLE_RECALL_FIRST; off, the prompt is unchanged
+        p = p.replace(CAP_SENTENCE, RECALL_SENTENCE, 1)
+        at = p.find("Commits in this change:")
+        if spec.strip() and at >= 0:    # after the facts and rules, so lens_prompt's cut leaves it in
+            at = p.rfind("\n", 0, at) + 1
+            pad = p[at:p.find("Commits in this change:", at)]
+            note = textwrap.indent(textwrap.dedent(RECALL_SPEC_NOTE).strip("\n"), pad)
+            p = p[:at] + note.replace("{spec}", spec[:RECALL_SPEC_CHARS].strip()) + "\n\n" + p[at:]
     if not nits:                        # unchanged without --nits, so cached review passes still match
         return p
     anchor = "so a later round re-checks it there.\n"
@@ -2342,6 +2390,13 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         pass_hold = nits_reserve_usd(budget.limit) if nits else 0.0
         pass_budget = HeldBudget(budget, pass_hold) if pass_hold else budget
         sweep_chunks, sweep_notes = [], []             # the reviewed passes, for the nit sweep's second look
+        recall = recall_first()
+        schema = FINDINGS_NITS_SCHEMA if nits else FINDINGS_SCHEMA
+        if recall:
+            schema = _uncapped(schema)
+            record["recall_first"] = True
+            log("  recall-first reporting (CRUCIBLE_RECALL_FIRST=1): no findings cap, the description checked as a spec"
+                + ("" if draft_text.strip() else "; no description to check"))
         def run_pass(i, ch, pbudget):
             """One review pass -> (ch, docs, out | None, cost, status). Runs in a worker thread for passes 2..n."""
             since = since_note(prev_sha, record["incremental"]["amended"], ch, full_texts, base) if prev_sha else ""
@@ -2350,12 +2405,13 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 docs = "\n".join(x for x in (callers_note(repo, base, sha, files, ch), fields_note(repo, sha, files, ch),
                                               docs) if x)
             prompt = review_prompt(project, sha, base, ch, rules, mem, facts, clog, all_files, house,
-                                   draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured, since, nits, docs)
+                                   draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured, since, nits, docs,
+                                   recall, draft_text)
             # keyed on the prompt with check output reduced to outcomes: a template change invalidates the cache, but
             # volatile output (timings) doesn't, so --force on the same commit is stable
             key_prompt = review_prompt(project, sha, base, ch, rules, mem, fkey, clog, all_files, house,
                                        draft_text if i == 1 else "(reviewed in pass 1)", dlabel, measured, since, nits,
-                                       docs)
+                                       docs, recall, draft_text)
             if lens:
                 prompt, key_prompt = lens_prompt(prompt), lens_prompt(key_prompt)
             key = hashlib.sha256((review_model + "\0" + key_prompt).encode()).hexdigest()[:32]
@@ -2367,8 +2423,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             log(f"  review pass {i}/{len(chunks)}: {', '.join(ch['files'])[:90]}")
             call = pbudget.slot() if isinstance(pbudget, ShareBudget) else pbudget
             try:
-                out, cost = claude(prompt, review_model, FINDINGS_NITS_SCHEMA if nits else FINDINGS_SCHEMA, repo,
-                                   call, kind="review")
+                out, cost = claude(prompt, review_model, schema, repo, call, kind="review")
                 cache_put(key, out)
             except Failed as e:
                 held_pass = str(e) == BUDGET_EXHAUSTED and pass_hold and not budget.exhausted()
@@ -2397,7 +2452,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 continue
             sweep_chunks.append(ch); sweep_notes.append(docs)
             summaries.append(out["summary"])
-            for f in out["findings"][:10]:
+            for f in out["findings"][:RECALL_FINDINGS_MAX if recall else 10]:
                 f = cite_draft(dict(f, source="review", **({"seat": 1} if n_seats > 1 else {})), dlabel, repo, tracked)
                 if f["file"] == dlabel and draft_path:
                     f["line"] = readiness.draft_file_line(draft_full, f["line"])
