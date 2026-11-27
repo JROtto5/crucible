@@ -2099,3 +2099,12 @@ after the seat's stage 1, never in the same run).** Image `crucible-rb:r9rf` = r
 2. **TRAIN-60**, then 3. **held-out 50 once, totals only**, with the seat plan's bars (high micro R ≥ 21/30 on TRAIN,
    high micro P ≥ 90, all-severity micro P ≥ 78, mean ≤ $3.00; held-out high F1 ≥ 65.0 to turn it on by default).
 If the seat and this arm both pass stage 2 alone, a stacked arm is its own pre-registered plan, written then.
+
+**Built, reviewed, local eval (2026-11-26).** Commits e96c6e7..6538962. Self-review ran in 5 rounds, $1.36 on account #25, run locally with `--skip-checks --budget 4`:
+- e96c6e7 NOT_GREEN: the knob wasn't in the reuse inputs, and the test class sat below `unittest.main()`.
+- c72219e NOT_GREEN: an incremental round carried the other brief's findings, and the 40 cut was silent.
+- ce2563a NOT_GREEN: the cut kept the written order, not severity order.
+- bbf0496 NOT_GREEN: the cut's within-grade order was unpinned.
+- **6538962 GREEN.**
+
+570 tests, ruff clean. **Local eval with the knob on** (`CRUCIBLE_RECALL_FIRST=1 crucible eval --nits --no-write --jobs 2`, all 41 cases, at e96c6e7; the later commits change only reuse, logging and the >40 cut, which no eval case reaches; account #25, $20.84, 80 min): recall **0.917** (build 20/22, holdout 2/2). The misses are js-refcount and py-race (py-race was caught on fb540f5). Any severity: **1.0**. False blocking: **0 on 9 clean cases**. Nit cases: 22/22, false blocking **0** (fb540f5: 3; ec52463 with the seat: 2). Nits kept: 167 (22 on clean cases; fb540f5: 146 and 22). Against the shipped one-seat build (fb540f5, 11-24: 0.917, $19.01) it is the same recall at +9.6% cost. The bar used is the one written for the seat on 11-25 (recall ≥ 0.913, 0 false blocking on clean cases), since this run started before the plan above was written: **passes**. What the eval can't show: no fixture holds more than a few planted issues or a description with promises, so the lever's target (unraised high items on real PRs) is measured only by the ReviewBench stages above. The first run due is stage 1 on the 13 PRs, after the seat's stage 1 and after the 11-29/11-30 resets.
