@@ -1263,6 +1263,9 @@ class TestLearnStyleSources(unittest.TestCase):
 
     def test_bots_excluded_and_code_from_upstream_branch(self):
         m = S.learn_style(self.c, "o/r", "o__r_bugj", log=lambda *_: None)
+        style_md = open(os.path.join(S.project_dir("o__r_bugj"), "STYLE.md")).read()
+        self.assertIsNone(m["body"]["p75_words"])                      # 2 PRs: too few for a p75
+        self.assertNotIn("p75", style_md)                              # so none is shown, nor its rule
         self.assertEqual(m["prs_sampled"], 2)
         self.assertLess(m["body"]["median_words"], 10)
         self.assertNotIn("Bumps lodash", " ".join(e["body"] for e in m["examples"]))

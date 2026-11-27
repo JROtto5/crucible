@@ -2201,4 +2201,4 @@ builds it (recent merged PRs, repeat authors first, 20), since style.json keeps 
 (all n = 20); exclusive, inclusive and nearest-rank (ceil(0.75 n)-th) **disagree on 20 of 21**, by 0 to 62 words
 (tox-dev/tox 304 / 262 / 242, colyseus 384 / 353 / 338, atuin 53 / 53 / 53 the only tie). The samples are today's,
 not the ones learned earlier. Fix: both p75 lines in STYLE.md read `(p75 N, interpolated, exclusive)` (`P75_RULE`,
-tested). No check compares against p75 (the length check uses the outside median), so no verdict changes.
+tested; a sample under 4 PRs shows no p75 at all, not `p75 None`). No check compares against p75 (the length check uses the outside median), so no verdict changes.
