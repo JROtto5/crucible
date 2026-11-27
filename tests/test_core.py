@@ -9563,7 +9563,7 @@ class TestSecondSeat(unittest.TestCase):
             self.assertFalse([f for f in r["findings"] + r["dropped"] if "seat" in f or "seats" in f])
             self.assertNotIn("Second seat", V.report(r, {}))
             self.assertIn("bug_sweep", [c["kind"] for c in calls])            # the bug sweep still runs
-        same = lambda c: re.sub(r"\b[0-9a-f]{7,40}\b", "H", re.sub(r"crucible-repo-\w+", "R", c["prompt"]))  # each run's repo
+        same = TestRecallFirst.same                    # each run's repo, also a temp name holding "__"
         self.assertEqual([same(c) for c in c0], [same(c) for c in c1])
         # with two seats, the first seat's prompts are the same (cache keys unchanged)
         _r2, c2 = self._run(env={"CRUCIBLE_SEATS": "2"}, budget=5.0, nits=True)
@@ -9920,7 +9920,7 @@ class TestVerifyBatch(unittest.TestCase):
                "unclosed socket in g": (True, "low"),
                "race on the counter": (False, "important", "Could not reproduce; other handlers do the same."),
                "missing timeout on fetch": (False, "medium", "a.py:3 sets timeout=5 on the session, so every fetch has one"),
-               "token logged at info": (False, "medium", "ran python3 -c ... output shows the token is redacted")}
+               "token logged at info": (False, "medium", "ran `python3 -c 'import a; a.log()'`: the token prints redacted")}
         r, calls = self._run(env={"CRUCIBLE_VERIFY_BATCH": "1"}, budget=None, review_out=many,
                              on_call=self._answer(ans, audits=("missing timeout on fetch",)))
         vb_calls = [c for c in calls if c["schema"] is V.BATCH_VERDICTS_SCHEMA]
@@ -9998,10 +9998,44 @@ class TestVerifyBatch(unittest.TestCase):
         self.assertEqual({f["verification"]["method"] for f in r["findings"] if f["source"] == "review"}, {"read"})
 
     def test_citation_rule(self):
-        for text in ("a.py:3 sets timeout=5", "see src/x/y.ts:120", "I ran pytest and it passed", "exit code 0"):
-            self.assertTrue(V.CITED_RX.search(text), text)
-        for text in ("", "Could not reproduce.", "Other handlers do the same; predates this change.", "unlikely"):
-            self.assertFalse(V.CITED_RX.search(text), text)
+        for text in ("a.py:3 sets timeout=5", "see src/x/y.ts:120", "ran `python3 -c 'import a'`: prints 5",
+                     "`npx vitest run a.test.ts` passed", "the probe exited with exit code 0",
+                     "could not run it, but a.py:3 sets timeout=5"):          # a cited line stands on its own
+            self.assertTrue(V.cited(text), text)
+        # the doubts the prompt names, and bare words that only sound like a run
+        for text in (None, "", "Could not reproduce.", "Other handlers do the same; predates this change.", "unlikely",
+                     "could not run anything", "Could not run the test suite", "no output", "Unable to run it",
+                     "I did not run it", "couldn't run `pytest` here", "e.g.:5", "it ran fine", "the output looks right"):
+            self.assertFalse(V.cited(text), text)
+
+    def test_a_short_answer_is_not_cached(self):
+        from unittest import mock
+        f = lambda t, ln: dict(self._f(t, ln), id=t)
+        items = [(f("division by zero in f", 1), "code"), (f("missing timeout", 4), "code")]
+        seen = []
+
+        def fake(prompt, model, schema, cwd, budget=None, *a, **kw):
+            seen.append(kw.get("kind"))
+            if schema is V.AUDIT_SCHEMA:
+                return {"audits": [{"index": 0, "restore": False, "reason": "r"}]}, 0.0
+            return {"verdicts": [self._v(0, True)]}, 0.0                     # [1] has no verdict
+        home = tempfile.mkdtemp(prefix="crucible-home-")
+        with mock.patch.object(V, "claude", fake), mock.patch.dict(os.environ, {"CRUCIBLE_CACHE": home}):
+            for _ in range(2):
+                out = V.verify_batched(items, ".", U.Budget(None), "m")
+                self.assertEqual([v is None for _, v, _ in out], [False, True])
+            self.assertEqual(seen, ["verify", "verify"])                      # asked again, not replayed
+            drops = [(items[0][0], self._v(0, False)), (items[1][0], self._v(1, False))]
+            for _ in range(2):
+                V.audit_drops(drops, ".", U.Budget(None), "m")
+            self.assertEqual(seen[2:], ["drop_audit", "drop_audit"])
+            # a full answer is cached
+            seen.clear()
+            full = lambda prompt, model, schema, cwd, budget=None, *a, **kw: (seen.append(1) or
+                                                                             {"verdicts": [self._v(0, True), self._v(1, True)]}, 0.0)
+            with mock.patch.object(V, "claude", full):
+                V.verify_batched(items, ".", U.Budget(None), "m2"); V.verify_batched(items, ".", U.Budget(None), "m2")
+            self.assertEqual(seen, [1])
 
     def test_audit_model_and_stored_reviews(self):
         from unittest import mock

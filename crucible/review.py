@@ -1827,8 +1827,20 @@ AUDIT_SCHEMA = {"type": "object", "properties": {"audits": {"type": "array", "it
     "type": "object", "properties": {"index": {"type": "integer"}, "restore": {"type": "boolean"},
                                      "reason": {"type": "string"}},
     "required": ["index", "restore", "reason"]}}}, "required": ["audits"]}
-# a cited place: path:line, or a command the verifier ran. A drop whose counter-evidence has neither is a doubt.
-CITED_RX = re.compile(r"[\w./-]+\.\w+:\d+|\b(?:ran|run|executed|output|exit(?:ed)? (?:code|status))\b", re.I)
+# A cited place is a path:line, or a command shown as run: a backticked command, or an exit code. A drop whose
+# counter-evidence has neither is a doubt. Bare words like "run" or "output" don't count: "could not run it" and "no
+# output" are the doubts the prompt names (self-review, 2026-11-27).
+CITED_LINE_RX = re.compile(r"[\w./-]+\.\w+:\d+")
+CITED_RUN_RX = re.compile(r"`[^`\n]{2,}`|\bexit(?:ed)? (?:code|status) \d+", re.I)
+NOT_RUN_RX = re.compile(r"\b(?:could ?n[o']t|unable to|did ?n[o']t|can ?n[o']t|was not able to|failed to|no) "
+                        r"(?:\w+ )?(?:run|execute|reproduce|output)", re.I)
+
+
+def cited(text):
+    """True when a verifier's counter-evidence cites code (path:line) or a command it ran, and doesn't say it
+    couldn't run one."""
+    text = text or ""
+    return bool(CITED_LINE_RX.search(text) or (CITED_RUN_RX.search(text) and not NOT_RUN_RX.search(text)))
 
 
 def verify_batch_on():
@@ -1915,7 +1927,9 @@ def verify_batched(items, repo, budget, model, fresh=False, base="", added=None,
                 schema = BATCH_VERDICTS_SITES_SCHEMA if any(f.get("also_at") for f, _ in batch) else BATCH_VERDICTS_SCHEMA
                 res, _ = claude(prompt, model, schema, repo, budget, tools=TOOLS_READ if no_exec else TOOLS_RUN,
                                 effort="high", timeout=1800, kind="verify")
-                cache_put(key, res)
+                # a short answer isn't cached, or a re-run would replay it and never get the missing verdicts
+                if {v.get("index") for v in res.get("verdicts") or []} >= set(range(len(batch))):
+                    cache_put(key, res)
             except Failed as e:
                 err = str(e)
         by_index = {v.get("index"): v for v in (res or {}).get("verdicts") or []}
@@ -1934,12 +1948,13 @@ def audit_drops(items, repo, budget, model, fresh=False):
         return {}, None
     prompt = drop_audit_prompt(items)
     key = "da-" + hashlib.sha256((model + prompt).encode()).hexdigest()[:32]
-    res = None if fresh else cache_hit(key, budget, "drop_audit")
+    res = None if fresh or os.environ.get("CRUCIBLE_CACHE_VERIFY", "1") == "0" else cache_hit(key, budget, "drop_audit")
     if res is None:
         try:
             res, _ = claude(prompt, model, AUDIT_SCHEMA, repo, budget, tools=None, effort="medium", timeout=600,
                             kind="drop_audit")
-            cache_put(key, res)
+            if {a.get("index") for a in res.get("audits") or []} >= set(range(len(items))):
+                cache_put(key, res)
         except Failed as e:
             return {}, str(e)
     return {a["index"]: a.get("reason", "") for a in res.get("audits") or []
@@ -2813,7 +2828,7 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                                          "evidence": v["evidence"], "confidence": v.get("confidence"), "tiers": trail}
                     if not v["keep"]:
                         f["verification"]["counter_evidence"] = v.get("counter_evidence", "")
-                    if v["keep"] or not CITED_RX.search(v.get("counter_evidence") or ""):
+                    if v["keep"] or not cited(v.get("counter_evidence")):
                         if not v["keep"]:              # a "no" that cites nothing is a doubt: kept, with the doubt shown
                             f["verification"]["status"] = "disputed"
                             vb["disputed"] += 1
