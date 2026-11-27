@@ -183,7 +183,7 @@ diff --git a/test/fixtures/keys.js b/test/fixtures/keys.js
                 "src/net/stun_tests.rs": "medium", "src/net/tests.rs": "medium", "tests.rs": "medium"}
         for path, sev in want.items():
             diff = (f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -0,0 +1,1 @@\n"
-                    '+    let key = "AKIAIOSFODNN7EXAMPLE1";\n')
+                    '+    let key = "AKIA' 'IOSFODNN7EXAMPLE1";\n')  # split so this file holds no key
             hits = [h for h in D.scan(D.parse(diff)) if h["title"] == "Possible secret in added line"]
             self.assertEqual([(h["severity"], h["reachable_in_real_use"]) for h in hits], [(sev, sev == "critical")], path)
 
@@ -297,6 +297,12 @@ class TestReadiness(unittest.TestCase):
         self.assertEqual(R.tests_touched(["src/a.rs", "src/net/tests.rs"])["status"], "pass")
         self.assertEqual(R.tests_touched(["src/a.rs", "src/contests.rs"])["status"], "fail")
         self.assertEqual(ok([rs("src/lib.rs", "    #[rstest]")]), "pass")
+        self.assertEqual(ok([rs("src/lib.rs", "    #[test_log::test]")]), "pass")
+        self.assertEqual(ok([rs("src/lib.rs", '#[cfg(all(test, feature = "x"))]')]), "pass")
+        self.assertEqual(ok([rs("src/lib.rs", "#[cfg(any(test, fuzzing))]")]), "pass")
+        self.assertEqual(ok([rs("src/lib.rs", "#[cfg(not(test))]")]), "fail")
+        self.assertEqual(ok([rs("src/lib.rs", "#[cfg(all(not(test), unix))]")]), "fail")
+        self.assertEqual(ok([rs("src/lib.rs", "#[cfg(testing)]")]), "fail")
         # the real readiness run goes through evaluate(), which must hand the parsed files on
         d = make_repo({"src/lib.rs": "fn f() {}\n"}, {"src/lib.rs": "fn f() {}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n"})
         base = U.git(d, "merge-base", "main", "HEAD")
