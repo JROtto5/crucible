@@ -16,6 +16,7 @@ The reviewer judges each line; nothing here is a finding.
 import os
 import re
 
+from .diff import _git_path
 from .util import TEST_PATH_RX, git
 from .docrefs import COMMENT_RX
 
@@ -50,8 +51,8 @@ NOT_PATH_RX = re.compile(r"^(?:application|text|image|audio|video|font|multipart
                          r"^[\w.-]+/[\w.-]+@|^@[\w-]+/[\w-]+$", re.I)
 MAX_VALUES = 12           # values searched per pass, most specific (longest) first
 MAX_IDS_PER_FORMAT = 2    # COMP-001 .. COMP-020: the format is one value; two samples find its readers
-MAX_PER_VALUE = 5         # a value used more often than this is shared vocabulary: say how often, not where
-MAX_VALUE_FILES = 8       # ... and one in more files than this isn't one flaw's reader at all: left out
+MAX_PER_VALUE = 5         # a value used more often than this is shared vocabulary: say how often and in how many
+                          # files, not where (a moved file named everywhere still gets its count)
 MAX_MISSING = 10
 MAX_LINES = 40
 LINE_CHARS = 160
@@ -85,7 +86,7 @@ def moves(f):
     so the parser leaves old_path unset; the rename header carries it."""
     m = re.search(r"^rename from (.+)$", f.get("text") or "", re.M)
     if m:
-        return m.group(1), f.get("path")
+        return _git_path(m.group(1)), f.get("path")     # C-quoted when the name has non-ASCII bytes
     if f.get("deleted"):
         return f.get("path"), None
     return None
@@ -131,7 +132,8 @@ def changed_values(files, all_files=None):
 def _grep(repo, values):
     if not values:
         return []
-    args = ["grep", "-n", "-I", "-F", "--no-color"]
+    # quotePath off: a non-ASCII file name comes back as itself, so it matches the change's own paths
+    args = ["-c", "core.quotePath=false", "grep", "-n", "-I", "-F", "--no-color"]
     for v in values:
         args += ["-e", v]
     try:
@@ -147,9 +149,21 @@ def _grep(repo, values):
     return out
 
 
+# what may stand before a root-relative path: a checkout root ($REPO_ROOT/, ${DIR}/, $(ROOT)/) or ./ and ../
+ROOT_PREFIX_RX = re.compile(r"(?:\$\{?\w+\}?|\$\(\w+\)|(?:^|(?<=[^\w/.]))\.{1,2})/$")
+
+
 def _bounded(v, t):
-    """v appears in t as a whole value, not inside a longer path or id: COMP-001 isn't COMP-0012, a/b isn't a/bc."""
-    return re.search(rf"(?<![\w/.-]){re.escape(v)}(?![\w-]|/?\w|\.\w)", t) is not None
+    """v appears in t as a whole value, not inside a longer path or id: COMP-001 isn't COMP-0012, a/b isn't a/bc,
+    scripts/x.sh isn't pkg/scripts/x.sh. A root-relative path may follow a root prefix: $REPO_ROOT/scripts/x.sh and
+    ./scripts/x.sh name scripts/x.sh."""
+    for m in re.finditer(rf"{re.escape(v)}(?![\w-]|/?\w|\.\w)", t):
+        before = t[:m.start()]
+        if not before or not re.search(r"[\w/.-]$", before):
+            return True
+        if not v.startswith("/") and ROOT_PREFIX_RX.search(before):
+            return True
+    return False
 
 
 def readers(repo, values, changed_lines=None):
@@ -168,8 +182,6 @@ def readers(repo, values, changed_lines=None):
     out, common = [], []
     for v in picked:
         hs = by_value[v]
-        if len({p for p, *_ in hs}) > MAX_VALUE_FILES:
-            continue
         if len(hs) > MAX_PER_VALUE:
             common.append(f"{v} ({len(hs)} lines in {len({p for p, *_ in hs})} files)")
             continue
@@ -184,7 +196,7 @@ def readers(repo, values, changed_lines=None):
 
 def _tracked(repo):
     try:
-        return [p for p in git(repo, "ls-files", check=False).splitlines() if p]
+        return [p for p in git(repo, "-c", "core.quotePath=false", "ls-files", check=False).splitlines() if p]
     except Exception:
         return []
 

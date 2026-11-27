@@ -2113,13 +2113,16 @@ If the seat and this arm both pass stage 2 alone, a stacked arm is its own pre-r
 
 **What it is.** `crucible/mentions.py`, called as `mentions_note` beside `callers_note`, `fields_note` and `docs_note`
 in each `--nits` pass; $0 (git grep, git ls-files), no model call. Two lists: (1) **readers of a changed value**: a
-path or route string, an id in a fixed format (`[A-Z]{2,10}-\d{2,}`, two samples per format) or a moved or deleted
+path or route string, an id in a fixed format (`ID_RX` = `[A-Z][A-Z0-9]{1,9}-\d{2,}`, two samples per format) or a moved or deleted
 file's old path, taken from the pass's removed lines when no added line of the whole change still carries it; every
-line of the checkout that still uses it (whole value, not a prefix), outside the change's added lines; at most 12
-values, 5 lines each, a value in more than 8 files left out; (2) **missing repo paths**: a path on an added line, or
+line of the checkout that still uses it (whole value, not inside a longer path; a root-relative path may follow
+`$VAR/`, `${VAR}/`, `$(VAR)/`, `./` or `../`), outside the change's added lines; at most 12 values, 5 lines each, a
+value with more lines only counted (lines and files); (2) **missing repo paths**: a path on an added line, or
 on any line of a file the change adds or moves, whose top directory is tracked at HEAD but which is neither a file, a
 directory nor a module stem, from the root or from the naming file's directory. A `$VAR/` root counts only when the
-variable names the checkout (`REPO_ROOT`, `GITHUB_WORKSPACE`), not a temp, home, runner or build root. Left out:
+variable's name matches `root|repo|workspace|project|src|source|top` and not `te?mp|home|cache|runner|tool|out|build|
+dist` (`REPO_ROOT`, `PROJECT_DIR`, `GITHUB_WORKSPACE` count; `RUNNER_TEMP`, `BUILD_DIR` don't). git runs with
+`core.quotePath=false`, so non-ASCII names match. Left out:
 imports, relative and system paths, keys (5+ case switches), MIME types, `XXXX` placeholders, test files (fake
 paths, fixture strings), docs and ignore files (example and planned paths), comment lines, a path built at runtime
 (`src/pack-$V.bin`, `$(...)`). **Off by default** (`CRUCIBLE_MENTIONS=1` on): the seat's and recall-first's
@@ -2134,23 +2137,30 @@ definitions fixed before the run):
 | variant | lines on TRAIN (PRs firing) | on missed high | other tagged | none | 1,017 commits |
 |---|---|---|---|---|---|
 | first cut | 82 (19 of 60), max 15/PR | 1 (AO #17) | tp-missed 2, golden-fp 10, tp-covered 2 | 67 | not run |
-| **shipped: + noise rules** | **37 (8 of 60), max 9/PR** | **2 (AO #4 ao-update.sh:61, AO #17 ao-doctor.sh:325)** | tp-missed 1 (catwalk neuralwatt.json:35), golden-fp 2 | 32 | **14 commits fire, 42 lines** |
+| + noise rules (0124e42) | 37 (8 of 60), max 9/PR | 2 (AO #4 ao-update.sh:61, AO #17 ao-doctor.sh:325) | tp-missed 1 (catwalk neuralwatt.json:35), golden-fp 2 | 32 | 14 commits fire, 42 lines |
+| **shipped: + self-review round 1 fixes** | **39 (8 of 60), max 9/PR, 5 count-only summaries** | **2 (same)** | tp-missed 1, golden-fp 2 | 34 | **12 commits fire, 38 lines** |
 - **agent-orchestrator #4 and #17** (high, a moved script still runs `$REPO_ROOT/packages/agent-orchestrator/bin/ao.js`):
   both listed at their exact lines. The first cut lost #4 to a per-path dedupe; it is now once per naming file.
 - **entebus #32** (high, the dashboard link now passes the raw id; pages compare with `COMP-001`): evidence only, not
   at the golden line. The note lists `src/lib/dummy-data.ts:347 companyId: 'COMP-002'` and summarizes `COMP-001 (57
   lines in 1 file)`: the old format's readers, not the comparing page the golden item names.
 - All three were missed in both stored TRAIN rounds (r8base and r8train, checked from the scoring files). The research
-  bar for an arm (≥ 2 of the 5 never-raised NF items reached, lines per PR under the cap) is **met: 2 at the line, 1
-  by evidence**. ia-dev #28 (golden fixtures not updated), Maui #3 and swarmbase #43 aren't value changes; not reached.
+  bar for an arm (≥ 2 of the 5 NF items, the "no finding in the file" row of 2026-11-24: Maui #3, AO #4, AO #17,
+  entebus #32, swarmbase #43; lines per PR under the cap) is **met: 2 at the line (AO #4, #17), 1 by evidence (entebus
+  #32)**. Maui #3 and swarmbase #43 (never raised in r8base; r8train credited #43 through a first-pass finding) aren't
+  value changes: not reached. Outside the NF row, ia-dev #28 (golden fixtures not updated) isn't reached either.
 - The 1,017 ordinary commits are the TRAIN repos' own recent history (the stored clones are partial, so only commits
-  whose blobs are local check out; `commits.py`, 60 repos walked until 1,000 checked out). 14 fire. Read by hand:
+  whose blobs are local check out; `commits.py`, 60 repos walked until 1,000 checked out). 14 fired on 0124e42, 12 on the shipped code. Read by hand:
   most are real stale mentions (docs and `.cursorrules` naming a deleted `log_setup.py`, a Dockerfile naming a moved
   JSON); it also fires on agent-orchestrator c2358798, the commit that first left the stale path. The noise rules
   for the AWS example key, `XXXX` placeholders and a path with a space came from this read (in the table's shipped row).
 - Eval: the note fires on **0 of the 41 eval cases** (each case's base..change built as `evalrun` builds it), so with
   the knob on every eval prompt is byte-identical: no eval run.
-- Tests 570 -> 578, every rule mutation-checked (23 mutations, all killed; 3 survived the first test set and got cases).
+- Tests 570 -> 579, every rule mutation-checked (26 mutations, all killed; 4 survived a first test set and got cases).
+- Self-review round 1 (0124e42): NOT_GREEN, 2 medium + 5 low, all verified, all fixed: a root-prefixed reader
+  (`$REPO_ROOT/scripts/x.sh`, `./scripts/x.sh`) of a moved path was dropped; non-ASCII names came back C-quoted; a
+  value in more than 8 files vanished (now counted); bar (b) had no noise allowance and (a) runs on tuned data (both
+  above); the NF count, the id regex and the root-variable rule were misstated here.
 
 **Pre-registered arm (bars fixed now, before any run; one round; after the seat's stage 1 and the recall-first arm's
 stage 1, never in the same run; after the 11-29/11-30 resets).** Image `crucible-rb:r9mn` = r8c's harness on this
@@ -2159,7 +2169,11 @@ R8-train run (`runs/r8train`, fb540f5) on the same PRs, not a re-run (COST RULE)
 since fb540f5 (the seat and recall-first are off by default). PRs: the 8 TRAIN PRs where the note fires (agent-
 orchestrator, entebus, catwalk, burglekitt, caasi, swarmbase, arolariu, tile-ai; ≈ $22 + judge). The 6 without a
 targeted item are the false-alarm check; on the other 52 the prompt is byte-identical, so they aren't run.
-**Pass, all of:** (a) ≥ 2 of AO #4, AO #17, entebus #32 credited; (b) none of R8-train's credited high items on the 8
-lost (entebus #0/#22/#27/#28, swarmbase #43); (c) 0 high-view false positives on the 8; (d) mean ≤ R8-train's mean
+**Caveat, stated before the run:** the noise rules were fitted on these same TRAIN PRs and on commits of the TRAIN
+repos, so (a) is a smoke test that the model acts on a listed line, not evidence of a gain on unseen PRs; that comes
+only from the held-out 50. **Pass, all of:** (a) ≥ 2 of AO #4, AO #17, entebus #32 credited (in practice AO #4 and #17:
+entebus is listed by evidence only); (b) at most 1 of R8-train's credited high items on the 8 lost (entebus
+#0/#22/#27/#28, swarmbase #43), and a lost item counts only if that PR, re-run once, loses it again (one round's
+variance is the size of a lever's gain: 2026-11-24 lost 3 untouched high items in one round); (c) 0 high-view false positives on the 8; (d) mean ≤ R8-train's mean
 on the 8 + $0.15. Reported, not a bar: which kept items cite a listed line, nits kept on the 6. Pass → TRAIN-60 with
 the seat plan's bars, then the held-out 50 once, totals only; only then on by default.

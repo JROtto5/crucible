@@ -9305,9 +9305,28 @@ class TestMentions(unittest.TestCase):
     def test_a_moved_file_lists_what_still_names_its_old_path(self):
         script = "#!/bin/sh\necho ok\n"
         _, _, note = self._note({"scripts/ao-doctor.sh": script, "docs/guide.html": "<li>scripts/ao-doctor.sh</li>\n",
-                                 "pkg/cli/index.ts": "x\n"},
+                                 "pkg/cli/index.ts": "x\n", "ci.env": "bash $REPO_ROOT/scripts/ao-doctor.sh\n",
+                                 "Makefile": "doctor:\n\tbash $(ROOT)/scripts/ao-doctor.sh\n\t./scripts/ao-doctor.sh\n",
+                                 "vendorish.txt": "see other/scripts/ao-doctor.sh\n"},
                                 {"scripts/ao-doctor.sh": None, "pkg/cli/assets/ao-doctor.sh": script})
         self.assertIn("docs/guide.html:1: <li>scripts/ao-doctor.sh</li>  [scripts/ao-doctor.sh]", note)
+        self.assertIn("ci.env:1: bash $REPO_ROOT/scripts/ao-doctor.sh", note)    # under a checkout root
+        self.assertIn("Makefile:2: bash $(ROOT)/scripts/ao-doctor.sh", note)
+        self.assertIn("Makefile:3: ./scripts/ao-doctor.sh", note)
+        self.assertNotIn("vendorish.txt", note)                                   # another directory's scripts/
+
+    def test_non_ascii_names_are_read_unquoted(self):
+        from crucible import mentions
+        script = "#!/bin/sh\necho ok\n"
+        d = make_repo({"docs/caf\u00e9.md": "x\n", "scripts/caf\u00e9.sh": script, "docs/gu\u00efde.html": "scripts/caf\u00e9.sh\n"},
+                      {"scripts/caf\u00e9.sh": None, "tools/caf\u00e9.sh": script,
+                       "tools/run.sh": 'cat "docs/caf\u00e9.md"\ncat "docs/gone.md"\n'})
+        files = D.parse(sh(d, "git", "diff", "-M", "main..fix") + "\n")
+        self.assertIn("scripts/caf\u00e9.sh", mentions.changed_values(files))   # the rename header, unquoted
+        lines, _ = mentions.readers(d, mentions.changed_values(files))
+        self.assertEqual(lines, ["docs/gu\u00efde.html:1: scripts/caf\u00e9.sh  [scripts/caf\u00e9.sh]"])
+        got = mentions.missing_paths(d, files, lambda p: V.git_blob(d, "fix", p))
+        self.assertEqual(got, ['tools/run.sh:2: cat "docs/gone.md"  [docs/gone.md]'])
 
     def test_a_moved_script_naming_a_missing_repo_path_is_listed_in_each_file(self):
         body = 'if [ ! -f "$REPO_ROOT/packages/old-name/bin/ao.js" ]; then exit 1; fi\nnode "$REPO_ROOT/packages/ao/bin/ao.js"\n'
@@ -9360,12 +9379,13 @@ class TestMentions(unittest.TestCase):
 
     def test_reader_caps(self):
         from crucible import mentions
-        many = {f"m{i}/f.ts": "go('/route/one')\n" for i in range(9)}           # 9 files: not one flaw's readers
+        many = {f"m{i}/f.ts": "go('/route/one')\n" for i in range(9)}
         some = {f"s{i}.ts": "go('/route/two')\n" * 2 for i in range(3)}        # 6 lines in 3 files: summarized
         d = make_repo(dict(many, **some, **{"r.ts": "go('/route/three/x')\n"}), {"z.ts": "y\n"})
         lines, picked = mentions.readers(d, {"/route/one": "", "/route/two": "", "/route/three": ""})
         self.assertEqual(lines, ["(used too often to list; search them if the change alters what they mean: "
-                                 "/route/two (6 lines in 3 files))"])            # /route/three/x isn't /route/three
+                                 "/route/one (9 lines in 9 files), /route/two (6 lines in 3 files))"])
+        # /route/three/x isn't /route/three; a value read everywhere is still counted, never silently left out
         self.assertEqual(set(picked), {"/route/one", "/route/two", "/route/three"})
 
     def test_switch_and_failure_leave_the_note_out(self):
