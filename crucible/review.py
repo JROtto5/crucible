@@ -2461,10 +2461,13 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
             sweep_chunks.append(ch); sweep_notes.append(docs)
             summaries.append(out["summary"])
             if recall and len(out["findings"]) > RECALL_FINDINGS_MAX:
+                # the guard drops the least severe, whatever order the model wrote them in (stable within a grade)
+                out["findings"] = sorted(out["findings"], key=lambda f: SEV.index(f["severity"])
+                                         if f.get("severity") in SEV else len(SEV))
                 over = len(out["findings"]) - RECALL_FINDINGS_MAX
                 record["recall_first"]["cut_passes"] += 1
                 record["recall_first"]["cut_findings"] += over
-                log(f"  note: a pass raised {len(out['findings'])} findings; the last {over} are left out "
+                log(f"  note: a pass raised {len(out['findings'])} findings; the {over} least severe are left out "
                     f"(RECALL_FINDINGS_MAX {RECALL_FINDINGS_MAX})")
             for f in out["findings"][:RECALL_FINDINGS_MAX if recall else 10]:
                 f = cite_draft(dict(f, source="review", **({"seat": 1} if n_seats > 1 else {})), dlabel, repo, tracked)
