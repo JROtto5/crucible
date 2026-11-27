@@ -9999,13 +9999,16 @@ class TestVerifyBatch(unittest.TestCase):
 
     def test_citation_rule(self):
         for text in ("a.py:3 sets timeout=5", "see src/x/y.ts:120", "ran `python3 -c 'import a'`: prints 5",
-                     "`npx vitest run a.test.ts` passed", "the probe exited with exit code 0",
-                     "could not run it, but a.py:3 sets timeout=5"):          # a cited line stands on its own
-            self.assertTrue(V.cited(text), text)
-        # the doubts the prompt names, and bare words that only sound like a run
+                     "Ran `npx vitest run a.test.ts`: 3 passed", "`$ grep -rn fetch_all src`: no output, no callers",
+                     "ran `grep -rn fetch_all src`: no output, so nothing calls it",
+                     "the probe exited with exit code 0", "could not run it, but a.py:3 sets timeout=5"):
+            self.assertTrue(V.cited(text), text)                       # a cited line stands on its own
+        # the doubts the prompt names, bare words that only sound like a run, and a backticked name alone
         for text in (None, "", "Could not reproduce.", "Other handlers do the same; predates this change.", "unlikely",
                      "could not run anything", "Could not run the test suite", "no output", "Unable to run it",
-                     "I did not run it", "couldn't run `pytest` here", "e.g.:5", "it ran fine", "the output looks right"):
+                     "I did not run it", "couldn't run `pytest` here", "e.g.:5", "it ran fine", "the output looks right",
+                     "Other handlers do the same (see `handlers`), predates this change", "`fetch` already handles it",
+                     "`foo` is pre-existing", "ran `pytest a.py`; could not reproduce the failure"):
             self.assertFalse(V.cited(text), text)
 
     def test_a_short_answer_is_not_cached(self):
@@ -10036,6 +10039,13 @@ class TestVerifyBatch(unittest.TestCase):
             with mock.patch.object(V, "claude", full):
                 V.verify_batched(items, ".", U.Budget(None), "m2"); V.verify_batched(items, ".", U.Budget(None), "m2")
             self.assertEqual(seen, [1])
+            # a short answer already in the cache (written before it stopped being cached) is asked again
+            seen.clear()
+            V.cache_put("vb-" + __import__("hashlib").sha256(("m3" + V.batch_verify_prompt(items)).encode()).hexdigest()[:32],
+                        {"verdicts": [self._v(0, True)]})
+            with mock.patch.object(V, "claude", full):
+                out = V.verify_batched(items, ".", U.Budget(None), "m3")
+            self.assertEqual((seen, [v is None for _, v, _ in out]), ([1], [False, False]))
 
     def test_audit_model_and_stored_reviews(self):
         from unittest import mock
