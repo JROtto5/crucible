@@ -2091,11 +2091,18 @@ def previous_review(repo, project, sha, base, no_exec=False):
 # A title that says something is missing. Such a finding cites the code it is about, but the fix lands elsewhere
 # (usually a test file), so its own lines never change and the line-based carry kept it after the fix (seen 4 times
 # in crucible's self-reviews, e.g. "No test for the new recheck guard" carried 2 rounds after its test landed).
+# A false match only costs a re-verify; a miss carries a fixed finding. Falsifiers (test_absence_rx_falsifiers) pin one
+# title per word, part and bound, most of them real. Must match: "has no tests", "lacks an attribution comment", "lacking
+# tests", "No StateView/@view coverage" (a 16-char gap), "untested", "isn't  covered" (two spaces), "never covers",
+# "don't exercise", "never asserted", "not documented". Must not: "Mono test runner" (no inside a word), "not
+# regenerated for the changed docs" (no as a prefix), "no lock when the latest" (test inside a word), "no longer a
+# docstring" (doc as a prefix), "not testable", "untestable", "no network, which is true only for the existing tests" (past the 40-char
+# gap), "no longer excuse ...; the comment" and "no value. The comment" (the gap stops at ; and .).
 ABSENCE_RX = re.compile(
     r"\b(?:no|missing|lacks?|lacking|without|omits?)\b[^.;]{0,40}?\b(?:tests?|coverage|changelog|docs?|documentation"
-    r"|readme|comments?|entry|note)\b|\buntested\b|\bnever (?:exercised|tested|covered|asserted)\b"
+    r"|readme|comments?|entry|note)\b|untested"
     r"|\b(?:not|never|isn't|aren't|don't|doesn't|only partly)\s+(?:tested|test|covered|covers?|exercised|exercises?"
-    r"|documented)\b", re.I)
+    r"|asserted|documented)\b", re.I)
 
 
 def absence_anchor(f):

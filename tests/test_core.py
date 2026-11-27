@@ -1810,6 +1810,39 @@ class TestIncremental(unittest.TestCase):
                   "unit test", "New test only fails without the fix under git's default quotepath",
                   "Docstring says both diffs have 3 context lines, but ours is parsed with --unified=5"]:
             self.assertIsNone(V.absence_anchor({"title": t}), t)
+        # one title per word, optional s and bound of ABSENCE_RX, so dropping any of them fails (2026-11-27 mutation
+        # pass: 16 of 55 killed before these). Real titles from ~/.crucible/reviews unless marked (made up).
+        for t in ["Collection-setter reorder has no test", "Array/Set paths named in the comment have no tests",
+                  "New ValueError from public `branch_path` is missing from the changelog",
+                  "TwoSum comparison lacks an attribution comment, and the 'why' is dense",
+                  "Retry path lacking tests",  # (made up)
+                  "New prompt and spend path without a CHANGELOG line or eval/cost evidence",
+                  "Changelog entry omits the test count the previous entries carry",
+                  "No StateView/@view coverage for the new sort fallback and restate paths",  # a 16-char gap
+                  "No falsifier for the docs/ exemption leaking into agent or prompt files",
+                  "New flag has no documentation", "No README line for the new env var",  # (made up)
+                  "No release-notes entry for the removed option",  # (made up)
+                  "Large new logic with no comments",
+                  "Full eval shows false blocking rising from 0 to 1, with no note or rerun",
+                  "Comment stripping in the signature is untested", "Detached-superproject fallback is not tested",
+                  "Copy matrix never covers SharedArrayBuffer-backed geometry",
+                  "Reaper test does not cover the reaper itself being signalled",
+                  "Sub-worker failure path (WorkerPool onerror) is not covered by the new test",
+                  "Retry claim in the test comment isn't exercised end-to-end",
+                  "Benchmark numbers don't exercise the changed code and imply a speedup that is noise",
+                  "Error paths aren't tested", "Suite doesn't exercise the Windows branch",  # (made up)
+                  "Fixture setup does not test the cleanup path", "Return value is never asserted",  # (made up)
+                  "New exit code is not documented", "Fallback isn't  covered"]:  # (made up; two spaces)
+            self.assertIsNotNone(V.absence_anchor({"title": t}), t)
+        for t in ["Mono test runner leaks a thread on timeout",  # (made up) "no" inside a word
+                  "API.md not regenerated for the changed docs and new option",  # "no" as a prefix
+                  "Returns early with no lock when the latest version is cached",  # (made up) "test" inside a word
+                  "New tests were inserted above the class docstring, so it is no longer a docstring",
+                  "Lock order is not testable from the public API", "Global state makes the parser untestable",  # (made up)
+                  "Test note ties the master failures to having no network, which is true only for the existing tests",
+                  "Generator version bumps no longer excuse a hand-edit warning; the comment above still says they do",
+                  "Returns no value. The comment above it says it returns the count"]:  # (made up)
+            self.assertIsNone(V.absence_anchor({"title": t}), t)
         self.assertEqual(V.absence_anchor({"title": "x", "anchor_files": ["t.py", "", 3]}), ["t.py"])
 
     def test_previous_review_same_base_complete_and_still_present(self):
