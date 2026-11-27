@@ -303,7 +303,8 @@ class TestReadiness(unittest.TestCase):
         self.assertEqual(ok([rs("src/lib.rs", "#[cfg( all( feature = \"x\" , test ) )]")]), "pass")
         for line in ("#[cfg(any(test, fuzzing))]", "#[cfg(not(test))]", "#[cfg(all(not(test), unix))]",
                      "#[cfg(all(unix, not(test)))]", "#[cfg(testing)]", '#[cfg(all(feature = "test"))]',
-                     "#[cfg(all(unix, testing))]", "#[cfg(all(no_test))]"):
+                     "#[cfg(all(unix, testing))]", "#[cfg(all(no_test))]",
+                     "#[cfg(all(not(windows), test))]"):  # the last is a known miss, pinned so a fix is seen
             self.assertEqual(ok([rs("src/lib.rs", line)]), "fail", line)
         # the real readiness run goes through evaluate(), which must hand the parsed files on
         d = make_repo({"src/lib.rs": "fn f() {}\n"}, {"src/lib.rs": "fn f() {}\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n}\n"})
