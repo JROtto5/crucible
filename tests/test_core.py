@@ -9315,6 +9315,16 @@ class TestMentions(unittest.TestCase):
         self.assertIn("Makefile:3: ./scripts/ao-doctor.sh", note)
         self.assertNotIn("vendorish.txt", note)                                   # another directory's scripts/
 
+    def test_nested_and_braced_roots_name_a_moved_path(self):
+        script = "#!/bin/sh\necho ok\n"
+        _, _, note = self._note({"scripts/ao-doctor.sh": script, "pkg/x.ts": "x\n",
+                                 "tools/ci/run.sh": "bash ../../scripts/ao-doctor.sh\nsh ${REPO_ROOT}/scripts/ao-doctor.sh\n"
+                                                    "cp $HOME/scripts/ao-doctor.sh .\n"},
+                                {"scripts/ao-doctor.sh": None, "pkg/ao-doctor.sh": script})
+        self.assertIn("tools/ci/run.sh:1: bash ../../scripts/ao-doctor.sh", note)
+        self.assertIn("tools/ci/run.sh:2: sh ${REPO_ROOT}/scripts/ao-doctor.sh", note)
+        self.assertNotIn("tools/ci/run.sh:3", note)                               # $HOME isn't the checkout
+
     def test_non_ascii_names_are_read_unquoted(self):
         from crucible import mentions
         script = "#!/bin/sh\necho ok\n"

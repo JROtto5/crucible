@@ -2116,7 +2116,7 @@ in each `--nits` pass; $0 (git grep, git ls-files), no model call. Two lists: (1
 path or route string, an id in a fixed format (`ID_RX` = `[A-Z][A-Z0-9]{1,9}-\d{2,}`, two samples per format) or a moved or deleted
 file's old path, taken from the pass's removed lines when no added line of the whole change still carries it; every
 line of the checkout that still uses it (whole value, not inside a longer path; a root-relative path may follow
-`$VAR/`, `${VAR}/`, `$(VAR)/`, `./` or `../`), outside the change's added lines; at most 12 values, 5 lines each, a
+a root variable `$VAR/`, `${VAR}/`, `$(VAR)/` by the name rule below, or a run of `./` and `../`), outside the change's added lines; at most 12 values, 5 lines each, a
 value with more lines only counted (lines and files); (2) **missing repo paths**: a path on an added line, or
 on any line of a file the change adds or moves, whose top directory is tracked at HEAD but which is neither a file, a
 directory nor a module stem, from the root or from the naming file's directory. A `$VAR/` root counts only when the
@@ -2131,14 +2131,16 @@ pre-registered arms are built from main and must not carry it. Off, prompts are 
 **Why this lever.** TRAIN's never-raised high misses (2026-11-24) include value changes that no existing note sees:
 callers_note fires on a signature, fields_note on a field name, docs_note on a definition's name.
 
-**Replay** (`~/rb-work/tmp/ment/replay.py r8base`, the shipped functions on each TRAIN PR's stored `diff.patch`, a
+**Replay** (`eval/replays/mentions_train.py r8base` on blaze-3; `mentions_commits.py 150` for the commits column;
+`mentions_evalcases.py` for the eval cases; the shipped functions on each TRAIN PR's stored `diff.patch`, a
 shared clone checked out at the PR head; a line "reaches" a golden item at the same file within its span ±3; reach
 definitions fixed before the run):
 | variant | lines on TRAIN (PRs firing) | on missed high | other tagged | none | 1,017 commits |
 |---|---|---|---|---|---|
 | first cut | 82 (19 of 60), max 15/PR | 1 (AO #17) | tp-missed 2, golden-fp 10, tp-covered 2 | 67 | not run |
 | + noise rules (0124e42) | 37 (8 of 60), max 9/PR | 2 (AO #4 ao-update.sh:61, AO #17 ao-doctor.sh:325) | tp-missed 1 (catwalk neuralwatt.json:35), golden-fp 2 | 32 | 14 commits fire, 42 lines |
-| **shipped: + self-review round 1 fixes** | **39 (8 of 60), max 9/PR, 5 count-only summaries** | **2 (same)** | tp-missed 1, golden-fp 2 | 34 | **12 commits fire, 38 lines** |
+| + self-review round 1 fixes (28b91cf) | 39 (8 of 60), max 9/PR, 5 count-only summaries | 2 (same) | tp-missed 1, golden-fp 2 | 34 | 12 commits fire, 38 lines |
+| **shipped: + round 2 (chained `../`, one root-variable rule)** | **39 (same)** | **2 (same)** | same | 34 | **13 commits fire, 39 lines** |
 - **agent-orchestrator #4 and #17** (high, a moved script still runs `$REPO_ROOT/packages/agent-orchestrator/bin/ao.js`):
   both listed at their exact lines. The first cut lost #4 to a per-path dedupe; it is now once per naming file.
 - **entebus #32** (high, the dashboard link now passes the raw id; pages compare with `COMP-001`): evidence only, not
@@ -2150,17 +2152,23 @@ definitions fixed before the run):
   #32)**. Maui #3 and swarmbase #43 (never raised in r8base; r8train credited #43 through a first-pass finding) aren't
   value changes: not reached. Outside the NF row, ia-dev #28 (golden fixtures not updated) isn't reached either.
 - The 1,017 ordinary commits are the TRAIN repos' own recent history (the stored clones are partial, so only commits
-  whose blobs are local check out; `commits.py`, 60 repos walked until 1,000 checked out). 14 fired on 0124e42, 12 on the shipped code. Read by hand:
+  whose blobs are local check out; `commits.py`, 60 repos walked until 1,000 checked out). 14 fired on 0124e42, 13 on the shipped code. Read by hand:
   most are real stale mentions (docs and `.cursorrules` naming a deleted `log_setup.py`, a Dockerfile naming a moved
   JSON); it also fires on agent-orchestrator c2358798, the commit that first left the stale path. The noise rules
   for the AWS example key, `XXXX` placeholders and a path with a space came from this read (in the table's shipped row).
 - Eval: the note fires on **0 of the 41 eval cases** (each case's base..change built as `evalrun` builds it), so with
   the knob on every eval prompt is byte-identical: no eval run.
-- Tests 570 -> 579, every rule mutation-checked (26 mutations, all killed; 4 survived a first test set and got cases).
+- Tests 570 -> 580, every rule mutation-checked (28 mutations, all killed on a green baseline; 4 survived a first test
+  set and got cases).
 - Self-review round 1 (0124e42): NOT_GREEN, 2 medium + 5 low, all verified, all fixed: a root-prefixed reader
   (`$REPO_ROOT/scripts/x.sh`, `./scripts/x.sh`) of a moved path was dropped; non-ASCII names came back C-quoted; a
   value in more than 8 files vanished (now counted); bar (b) had no noise allowance and (a) runs on tuned data (both
   above); the NF count, the id regex and the root-variable rule were misstated here.
+- Round 2 (28b91cf): NOT_GREEN, 2 low, both verified, both fixed: `../../scripts/x.sh` didn't match and the readers
+  took any `$VAR/` (`$HOME/`) as a root while missing paths used a name rule (now one rule, `_root_var`, and a run of
+  `./`/`../`; tests for `../../`, `${REPO_ROOT}/`, `$HOME/`); the replay drivers weren't in the repo (now
+  `eval/replays/`, re-run from there: same TRAIN numbers).
+- blaze-3 suite: 579 tests, one run with 1 failure (not shown by `-q`; not reproduced in the next 3 runs, all OK).
 
 **Pre-registered arm (bars fixed now, before any run; one round; after the seat's stage 1 and the recall-first arm's
 stage 1, never in the same run; after the 11-29/11-30 resets).** Image `crucible-rb:r9mn` = r8c's harness on this

@@ -149,8 +149,14 @@ def _grep(repo, values):
     return out
 
 
-# what may stand before a root-relative path: a checkout root ($REPO_ROOT/, ${DIR}/, $(ROOT)/) or ./ and ../
-ROOT_PREFIX_RX = re.compile(r"(?:\$\{?\w+\}?|\$\(\w+\)|(?:^|(?<=[^\w/.]))\.{1,2})/$")
+# what may stand before a root-relative path: a checkout root variable ($REPO_ROOT/, ${PROJECT_DIR}/, $(ROOT)/, by
+# the same name rule as missing_paths) or a run of ./ and ../ (../../scripts/x.sh from a nested file)
+ROOT_PREFIX_RX = re.compile(r"\$(?:\{(\w+)\}|\((\w+)\)|(\w+))/$|(?:^|(?<=[^\w/.]))(?:\.\.?/)+$")
+
+
+def _root_var(var):
+    """A $VAR/ root that names the checkout, not a temp, home, cache or build root."""
+    return bool(ROOT_VAR_RX.search(var)) and not NOT_ROOT_VAR_RX.search(var)
 
 
 def _bounded(v, t):
@@ -161,7 +167,8 @@ def _bounded(v, t):
         before = t[:m.start()]
         if not before or not re.search(r"[\w/.-]$", before):
             return True
-        if not v.startswith("/") and ROOT_PREFIX_RX.search(before):
+        m2 = None if v.startswith("/") else ROOT_PREFIX_RX.search(before)
+        if m2 and (not any(m2.groups()) or _root_var(next(g for g in m2.groups() if g))):
             return True
     return False
 
@@ -238,7 +245,7 @@ def missing_paths(repo, files, read_new, tracked=None):
             for m in REPO_PATH_RX.finditer(t):
                 var, c = m.group(1), m.group(2).rstrip(".,;:")
                 top = c.split("/", 1)[0]
-                if var and (not ROOT_VAR_RX.search(var) or NOT_ROOT_VAR_RX.search(var)):
+                if var and not _root_var(var):
                     continue
                 if (top not in tops or c in seen or SKIP_PATH_RX.search(c) or NOT_PATH_RX.match(c)
                         or PLACEHOLDER_RX.search(c) or there(c)
