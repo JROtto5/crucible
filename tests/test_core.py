@@ -302,6 +302,7 @@ class TestReadiness(unittest.TestCase):
         self.assertEqual(ok([rs("src/lib.rs", "#[cfg(all(unix, test))]")]), "pass")
         self.assertEqual(ok([rs("src/lib.rs", '#[cfg(all(not(target_os = "windows"), test))]')]), "pass")
         self.assertEqual(ok([rs("src/lib.rs", "    #[wasm_bindgen_test]")]), "pass")
+        self.assertEqual(ok([rs("src/lib.rs"), rs("src/net/mocks.rs", "#![cfg(test)]")]), "pass")
         self.assertEqual(ok([rs("src/lib.rs", "#[cfg( all( feature = \"x\" , test ) )]")]), "pass")
         for line in ("#[cfg(any(test, fuzzing))]", "#[cfg(not(test))]", "#[cfg(all(not(test), unix))]",
                      "#[cfg(all(unix, not(test)))]", "#[cfg(testing)]", '#[cfg(all(feature = "test"))]',
