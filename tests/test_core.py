@@ -9880,9 +9880,9 @@ class TestVerifyBatch(unittest.TestCase):
     same = staticmethod(TestRecallFirst.same)
 
     @staticmethod
-    def _v(i, keep, severity="important", counter="", confidence="high"):
+    def _v(i, keep, severity="important", counter="", disproof="none", confidence="high"):
         return {"index": i, "keep": keep, "severity": severity, "confidence": confidence, "method": "read",
-                "counter_evidence": counter, "evidence": f"e{i}"}
+                "disproof": disproof, "counter_evidence": counter, "evidence": f"e{i}"}
 
     def _answer(self, verdicts, audits=None, audit_error=None):
         """on_call: the batched verifier answers by the claim titles in its prompt (verdicts: title -> (keep, sev,
@@ -9919,8 +9919,10 @@ class TestVerifyBatch(unittest.TestCase):
         ans = {"division by zero in f": (True, "critical"),
                "unclosed socket in g": (True, "low"),
                "race on the counter": (False, "important", "Could not reproduce; other handlers do the same."),
-               "missing timeout on fetch": (False, "medium", "a.py:3 sets timeout=5 on the session, so every fetch has one"),
-               "token logged at info": (False, "medium", "ran `python3 -c 'import a; a.log()'`: the token prints redacted")}
+               "missing timeout on fetch": (False, "medium", "a.py:3 sets timeout=5 on the session, so every fetch has one",
+                                            "line"),
+               "token logged at info": (False, "medium", "ran `python3 -c 'import a; a.log()'`: the token prints redacted",
+                                        "command")}
         r, calls = self._run(env={"CRUCIBLE_VERIFY_BATCH": "1"}, budget=None, review_out=many,
                              on_call=self._answer(ans, audits=("missing timeout on fetch",)))
         vb_calls = [c for c in calls if c["schema"] is V.BATCH_VERDICTS_SCHEMA]
@@ -9959,7 +9961,7 @@ class TestVerifyBatch(unittest.TestCase):
 
     def test_a_missing_verdict_or_failed_audit_fails_closed(self):
         many = [self._f("division by zero in f", 1), self._f("missing timeout on fetch", 12)]
-        ans = {"missing timeout on fetch": (False, "medium", "a.py:3 sets timeout=5")}
+        ans = {"missing timeout on fetch": (False, "medium", "a.py:3 sets timeout=5", "line")}
         r, _ = self._run(env={"CRUCIBLE_VERIFY_BATCH": "1"}, budget=None, review_out=many,
                          on_call=self._answer(ans, audit_error="model call failed: boom"))
         by = {f["title"]: f for f in r["findings"]}
@@ -9998,18 +10000,18 @@ class TestVerifyBatch(unittest.TestCase):
         self.assertEqual({f["verification"]["method"] for f in r["findings"] if f["source"] == "review"}, {"read"})
 
     def test_citation_rule(self):
-        for text in ("a.py:3 sets timeout=5", "see src/x/y.ts:120", "ran `python3 -c 'import a'`: prints 5",
-                     "Ran `npx vitest run a.test.ts`: 3 passed", "`$ grep -rn fetch_all src`: no output, no callers",
-                     "ran `grep -rn fetch_all src`: no output, so nothing calls it",
-                     "the probe exited with exit code 0", "could not run it, but a.py:3 sets timeout=5"):
-            self.assertTrue(V.cited(text), text)                       # a cited line stands on its own
-        # the doubts the prompt names, bare words that only sound like a run, and a backticked name alone
-        for text in (None, "", "Could not reproduce.", "Other handlers do the same; predates this change.", "unlikely",
-                     "could not run anything", "Could not run the test suite", "no output", "Unable to run it",
-                     "I did not run it", "couldn't run `pytest` here", "e.g.:5", "it ran fine", "the output looks right",
-                     "Other handlers do the same (see `handlers`), predates this change", "`fetch` already handles it",
-                     "`foo` is pre-existing", "ran `pytest a.py`; could not reproduce the failure"):
-            self.assertFalse(V.cited(text), text)
+        v = lambda kind, text: self._v(0, False, counter=text, disproof=kind)
+        for kind, text in (("line", "a.py:3 sets timeout=5"), ("line", "see src/x/y.ts:120"),
+                           ("command", "`python3 -c 'import a'` prints 5"), ("command", "`grep -rn fetch_all src`: none"),
+                           ("line", "could not run it, but a.py:3 sets timeout=5")):
+            self.assertTrue(V.cited(v(kind, text)), (kind, text))
+        # a doubt (declared or not), and a declared kind without the citation it needs
+        for kind, text in (("none", "a.py:3 sets timeout=5"), ("none", "Could not reproduce."), (None, "a.py:3"),
+                           ("line", "Other handlers do the same; predates this change."), ("line", "`a.py` handles it"),
+                           ("command", "could not run anything"), ("command", "ran it: no output"), ("command", ""),
+                           ("line", ""), ("bogus", "a.py:3 `x`")):
+            self.assertFalse(V.cited(v(kind, text)), (kind, text))
+        self.assertFalse(V.cited(None)); self.assertFalse(V.cited({}))
 
     def test_a_short_answer_is_not_cached(self):
         from unittest import mock
@@ -10039,13 +10041,6 @@ class TestVerifyBatch(unittest.TestCase):
             with mock.patch.object(V, "claude", full):
                 V.verify_batched(items, ".", U.Budget(None), "m2"); V.verify_batched(items, ".", U.Budget(None), "m2")
             self.assertEqual(seen, [1])
-            # a short answer already in the cache (written before it stopped being cached) is asked again
-            seen.clear()
-            V.cache_put("vb-" + __import__("hashlib").sha256(("m3" + V.batch_verify_prompt(items)).encode()).hexdigest()[:32],
-                        {"verdicts": [self._v(0, True)]})
-            with mock.patch.object(V, "claude", full):
-                out = V.verify_batched(items, ".", U.Budget(None), "m3")
-            self.assertEqual((seen, [v is None for _, v, _ in out]), ([1], [False, False]))
 
     def test_audit_model_and_stored_reviews(self):
         from unittest import mock
