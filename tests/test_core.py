@@ -9435,7 +9435,7 @@ class TestSecondSeat(unittest.TestCase):
                 "caused_by_this_change": True, "reachable_in_real_use": True, "wrong_if": "w", "fix": "x"}
 
     def _run(self, seat2_out=(), env=None, budget=None, nits=None, passes=1, seat2_cost=0.0, seat2_error=None,
-             review_cost=0.0, repo_files=None, review_out=None, draft=None):
+             review_cost=0.0, repo_files=None, review_out=None, draft=None, on_call=None, no_exec=False):
         """-> (review.json, calls). The first seat raises "division by zero in f" (a.py:1) and "unclosed socket in g"
         (a.py:5); the second seat raises `seat2_out`. Each call costs what it says, cut at its budget like the CLI."""
         from unittest import mock
@@ -9452,9 +9452,13 @@ class TestSecondSeat(unittest.TestCase):
 
         def fake(prompt, model, schema, cwd, budget=None, *a, **kw):
             kind = kw.get("kind")
-            calls.append({"kind": kind, "model": model, "schema": schema, "prompt": prompt})
+            calls.append({"kind": kind, "model": model, "schema": schema, "prompt": prompt, "tools": kw.get("tools", "default")})
             if budget and budget.exhausted():
                 raise U.Failed(U.BUDGET_EXHAUSTED)
+            if on_call is not None:                    # a test's own answer for this call, or None for the default
+                got = on_call(prompt, model, schema, kind)
+                if got is not None:
+                    return got[0], spend(budget, got[1])
             if kind == "seat2":
                 if seat2_error:
                     raise U.Failed(seat2_error)
@@ -9486,7 +9490,8 @@ class TestSecondSeat(unittest.TestCase):
                 mock.patch.object(V.diff_mod, "chunk", chunk), \
                 mock.patch.dict(os.environ, dict(base_env, **(env or {}))):
             for k in ("CRUCIBLE_SEATS", "CRUCIBLE_SEAT2_MODEL", "CRUCIBLE_SEAT2_ORDER", "CRUCIBLE_SEAT2_SHARE",
-                      "CRUCIBLE_REVIEW_MODEL", "CRUCIBLE_BUG_SWEEP", "CRUCIBLE_RECALL_FIRST"):
+                      "CRUCIBLE_REVIEW_MODEL", "CRUCIBLE_BUG_SWEEP", "CRUCIBLE_RECALL_FIRST", "CRUCIBLE_VERIFY_BATCH",
+                      "CRUCIBLE_DROP_AUDIT_MODEL"):
                 if k not in (env or {}):
                     os.environ.pop(k, None)
             dpath = None
@@ -9495,7 +9500,7 @@ class TestSecondSeat(unittest.TestCase):
                 with open(dpath, "w", encoding="utf-8") as fh:
                     fh.write(draft)
             d = V.run_review(repo, "main", budget_usd=budget, offline=True, skip_checks=True, log=lambda *_: None,
-                             nits=nits, draft=dpath)
+                             nits=nits, draft=dpath, no_exec=no_exec)
             return U.read_json(os.path.join(d, "review.json")), calls
 
     def test_same_claim_is_the_union_rule(self):
@@ -9865,6 +9870,156 @@ class TestRecallFirst(unittest.TestCase):
         long = V.review_prompt(*args, recall=True, spec="x" * (V.RECALL_SPEC_CHARS + 500))
         self.assertIn("x" * V.RECALL_SPEC_CHARS, long); self.assertNotIn("x" * (V.RECALL_SPEC_CHARS + 1), long)
         self.assertEqual(V.review_prompt(*args), V.review_prompt(*args, spec="ignored when recall is off"))
+
+
+class TestVerifyBatch(unittest.TestCase):
+    """CRUCIBLE_VERIFY_BATCH=1 (focus item d): the review's findings are verified a batch per call and kept unless
+    disproved with cited code; a second model audits the drops and restores the ones that rest on a doubt."""
+    _f = staticmethod(TestSecondSeat._f)
+    _run = TestSecondSeat._run
+    same = staticmethod(TestRecallFirst.same)
+
+    @staticmethod
+    def _v(i, keep, severity="important", counter="", confidence="high"):
+        return {"index": i, "keep": keep, "severity": severity, "confidence": confidence, "method": "read",
+                "counter_evidence": counter, "evidence": f"e{i}"}
+
+    def _answer(self, verdicts, audits=None, audit_error=None):
+        """on_call: the batched verifier answers by the claim titles in its prompt (verdicts: title -> (keep, sev,
+        counter)); the drop audit restores the titles in `audits`."""
+        def on_call(prompt, model, schema, kind):
+            if schema is V.AUDIT_SCHEMA:
+                if audit_error:
+                    raise U.Failed(audit_error)
+                rows = re.findall(r"^\[(\d+)\] (.*?) \(at ", prompt, re.M)
+                return {"audits": [{"index": int(i), "restore": t in (audits or ()), "reason": f"doubt {t}"}
+                                   for i, t in rows]}, 0.02
+            if schema in (V.BATCH_VERDICTS_SCHEMA, V.BATCH_VERDICTS_SITES_SCHEMA):
+                rows = re.findall(r"^\[(\d+)\] (.*?) \(at ", prompt, re.M)
+                return {"verdicts": [self._v(int(i), *verdicts[t]) for i, t in rows if t in verdicts]}, 0.05
+            return None
+        return on_call
+
+    def test_off_by_default_nothing_changes(self):
+        r0, c0 = self._run(budget=5.0, nits=True)
+        r1, c1 = self._run(env={"CRUCIBLE_VERIFY_BATCH": "0"}, budget=5.0, nits=True)
+        self.assertEqual([self.same(c) for c in c0], [self.same(c) for c in c1])
+        for r, calls in ((r0, c0), (r1, c1)):
+            self.assertNotIn("verify_batch", r); self.assertNotIn("verify_batch", r["inputs"])
+            self.assertFalse([c for c in calls if c["schema"] in (V.BATCH_VERDICTS_SCHEMA, V.AUDIT_SCHEMA)])
+            self.assertEqual(sum(c["kind"] == "verify" for c in calls), 2)           # one per finding, as before
+            self.assertNotIn("kept unless disproved", V.report(r, {}))
+
+    def test_on_keeps_unless_disproved_and_audits_the_drops(self):
+        many = [self._f("division by zero in f", 1, problem="the reviewer's long argument"),
+                self._f("unclosed socket in g", 5, "medium"),
+                self._f("race on the counter", 9),
+                self._f("missing timeout on fetch", 12),
+                self._f("token logged at info", 15, "medium")]
+        ans = {"division by zero in f": (True, "critical"),
+               "unclosed socket in g": (True, "low"),
+               "race on the counter": (False, "important", "Could not reproduce; other handlers do the same."),
+               "missing timeout on fetch": (False, "medium", "a.py:3 sets timeout=5 on the session, so every fetch has one"),
+               "token logged at info": (False, "medium", "ran python3 -c ... output shows the token is redacted")}
+        r, calls = self._run(env={"CRUCIBLE_VERIFY_BATCH": "1"}, budget=None, review_out=many,
+                             on_call=self._answer(ans, audits=("missing timeout on fetch",)))
+        vb_calls = [c for c in calls if c["schema"] is V.BATCH_VERDICTS_SCHEMA]
+        self.assertEqual(len(vb_calls), 1)                                   # five claims, one call
+        self.assertFalse([c for c in calls if c["kind"] == "verify" and c not in vb_calls])
+        p = vb_calls[0]["prompt"]
+        self.assertEqual((vb_calls[0]["model"], vb_calls[0]["tools"]), (U.MODELS["sonnet"], U.TOOLS_RUN))
+        self.assertIn("keep = false only when you found concrete counter-evidence", p)
+        self.assertNotIn("the reviewer's long argument", p)                  # claim and test only, as one per call
+        self.assertIn("[4] token logged at info (at a.py:15", p)
+        by = {f["title"]: f for f in r["findings"]}
+        self.assertEqual((by["division by zero in f"]["severity"], by["division by zero in f"]["verification"]["status"]),
+                         ("critical", "verified"))
+        self.assertEqual(by["unclosed socket in g"]["severity"], "low")       # its honest severity
+        race = by["race on the counter"]["verification"]                      # a "no" that cites nothing: a doubt
+        self.assertEqual((race["status"], race["counter_evidence"]), ("disputed", ans["race on the counter"][2]))
+        self.assertNotIn("audit", race)
+        audit = [c for c in calls if c["schema"] is V.AUDIT_SCHEMA]
+        self.assertEqual(len(audit), 1)
+        self.assertEqual((audit[0]["model"], audit[0]["tools"], audit[0]["kind"]), (U.MODELS["opus"], None, "drop_audit"))
+        self.assertIn("missing timeout on fetch", audit[0]["prompt"]); self.assertNotIn("race on the counter", audit[0]["prompt"])
+        restored = by["missing timeout on fetch"]
+        self.assertEqual((restored["verification"]["status"], restored["severity"]), ("disputed", "medium"))
+        self.assertEqual(restored["verification"]["audit"], {"model": U.MODELS["opus"], "reason": "doubt missing timeout on fetch"})
+        self.assertEqual([f["title"] for f in r["dropped"]], ["token logged at info"])
+        self.assertEqual(r["dropped"][0]["verification"]["status"], "dropped")
+        vb = r["verify_batch"]
+        self.assertEqual({k: vb[k] for k in ("model", "calls", "verified", "disputed", "dropped", "unverified")},
+                         {"model": U.MODELS["sonnet"], "calls": 1, "verified": 2, "disputed": 2, "dropped": 1, "unverified": 0})
+        self.assertEqual({k: vb["audit"][k] for k in ("model", "audited", "restored")}, {"model": U.MODELS["opus"], "audited": 2, "restored": 1})
+        self.assertAlmostEqual(vb["cost_usd"], 0.07); self.assertAlmostEqual(vb["audit"]["cost_usd"], 0.02)
+        self.assertTrue(r["inputs"]["verify_batch"])
+        self.assertIn("Verified in batches, kept unless disproved (claude-sonnet-5-5, 1 call(s)): 2 verified, 2 disputed "
+                      "(kept), 1 dropped, 0 unverified; drop audit (claude-opus-5-5): 1 of 2 restored", V.report(r, {}))
+        self.assertFalse([f for f in r["findings"] if V.verify_failed(f)])     # nothing here needs a re-run
+
+    def test_a_missing_verdict_or_failed_audit_fails_closed(self):
+        many = [self._f("division by zero in f", 1), self._f("missing timeout on fetch", 12)]
+        ans = {"missing timeout on fetch": (False, "medium", "a.py:3 sets timeout=5")}
+        r, _ = self._run(env={"CRUCIBLE_VERIFY_BATCH": "1"}, budget=None, review_out=many,
+                         on_call=self._answer(ans, audit_error="model call failed: boom"))
+        by = {f["title"]: f for f in r["findings"]}
+        v = by["division by zero in f"]["verification"]                       # no verdict for it: kept, retryable
+        self.assertEqual((v["status"], v["reason"]), ("unverified", "no verdict returned for this claim"))
+        self.assertTrue(V.verify_retryable(by["division by zero in f"]))
+        self.assertEqual([f["title"] for f in r["dropped"]], ["missing timeout on fetch"])   # the audit failed: drop stands
+        self.assertIn("boom", r["verify_batch"]["audit"]["error"])
+        self.assertEqual(r["verify_batch"]["unverified"], 1)
+        self.assertIn("(failed: model call failed: boom)", V.report(r, {}))
+
+    def test_batches_of_six_blocking_first_under_a_limit(self):
+        many = [self._f(f"distinct flaw {chr(97 + i)}{i} in handler{i}", 3 * i + 1, "important" if i % 2 else "medium")
+                for i in range(9)]
+        ans = {f["title"]: (True, f["severity"]) for f in many}
+        r, calls = self._run(env={"CRUCIBLE_VERIFY_BATCH": "1"}, budget=5.0, review_out=many, on_call=self._answer(ans))
+        vb = [c["prompt"] for c in calls if c["schema"] is V.BATCH_VERDICTS_SCHEMA]
+        self.assertEqual(len(vb), 2)                                           # 4 important, 5 medium: apart
+        self.assertEqual([len(re.findall(r"^\[\d+\] ", p, re.M)) for p in vb], [4, 5])
+        self.assertIn("proposed severity important", vb[0]); self.assertNotIn("proposed severity medium", vb[0])
+        self.assertEqual(r["verify_batch"]["calls"], 2)
+        self.assertEqual(len(r["findings"]), 9)
+        r2, calls2 = self._run(env={"CRUCIBLE_VERIFY_BATCH": "1"}, budget=None, review_out=many, on_call=self._answer(ans))
+        self.assertEqual(sorted(len(re.findall(r"^\[\d+\] ", c["prompt"], re.M)) for c in calls2   # run in parallel
+                                if c["schema"] is V.BATCH_VERDICTS_SCHEMA), [3, 6])   # no limit: by file and line only
+
+    def test_no_exec_reads_only_and_a_claimed_run_is_a_read(self):
+        def on_call(prompt, model, schema, kind):
+            if schema is V.BATCH_VERDICTS_SCHEMA:
+                return {"verdicts": [dict(self._v(i, True), method="executed") for i in range(2)]}, 0.0
+            return None
+        r, calls = self._run(env={"CRUCIBLE_VERIFY_BATCH": "1"}, budget=None, on_call=on_call, no_exec=True)
+        c = next(c for c in calls if c["schema"] is V.BATCH_VERDICTS_SCHEMA)
+        self.assertEqual(c["tools"], U.TOOLS_READ)
+        self.assertIn(V.NO_EXEC_NOTE, c["prompt"]); self.assertNotIn("npx vitest", c["prompt"])
+        self.assertEqual({f["verification"]["method"] for f in r["findings"] if f["source"] == "review"}, {"read"})
+
+    def test_citation_rule(self):
+        for text in ("a.py:3 sets timeout=5", "see src/x/y.ts:120", "I ran pytest and it passed", "exit code 0"):
+            self.assertTrue(V.CITED_RX.search(text), text)
+        for text in ("", "Could not reproduce.", "Other handlers do the same; predates this change.", "unlikely"):
+            self.assertFalse(V.CITED_RX.search(text), text)
+
+    def test_audit_model_and_stored_reviews(self):
+        from unittest import mock
+        with mock.patch.dict(os.environ, {"CRUCIBLE_DROP_AUDIT_MODEL": ""}):
+            self.assertEqual(V.audit_model(U.MODELS["opus"], U.MODELS["sonnet"]), U.MODELS["opus"])
+            self.assertEqual(V.audit_model(U.MODELS["sonnet"], U.MODELS["sonnet"]), U.MODELS["opus"])
+            self.assertEqual(V.audit_model(U.MODELS["sonnet"], U.MODELS["sonnet"], {U.MODELS["opus"]}), U.MODELS["fable"])
+        with mock.patch.dict(os.environ, {"CRUCIBLE_DROP_AUDIT_MODEL": "haiku"}):
+            self.assertEqual(V.audit_model(U.MODELS["opus"], U.MODELS["sonnet"]), U.MODELS["haiku"])
+        with mock.patch.dict(os.environ, {"CRUCIBLE_VERIFY_BATCH": "0"}):
+            off = V.review_inputs(".", "b", lens=True)
+        with mock.patch.dict(os.environ, {"CRUCIBLE_VERIFY_BATCH": "1"}):
+            on = V.review_inputs(".", "b", lens=True)
+        self.assertNotIn("verify_batch", off)
+        done = lambda inp: {"status": "done", "inputs": inp}
+        self.assertIn("CRUCIBLE_VERIFY_BATCH=1", V.stale_inputs(done(off), on))
+        self.assertIn("CRUCIBLE_VERIFY_BATCH=0", V.stale_inputs(done(on), off))
+        self.assertIsNone(V.stale_inputs(done(on), dict(on)))
 
 
 if __name__ == "__main__":
