@@ -2191,3 +2191,14 @@ entebus is listed by evidence only); (b) at most 1 of R8-train's credited high i
 variance is the size of a lever's gain: 2026-11-24 lost 3 untouched high items in one round); (c) 0 high-view false positives on the 8; (d) mean ≤ R8-train's mean
 on the 8 + $0.15. Reported, not a bar: which kept items cite a listed line, nits kept on the 6. Pass → TRAIN-60 with
 the seat plan's bars, then the held-out 50 once, totals only; only then on by default.
+
+### 2026-11-27 · which p75 STYLE.md shows (BLAZE's percentile falsifier, $0)
+
+BLAZE (11-27 note, technique 1) found its "p90" meant two rules in two reports. crucible's STYLE.md p75 of PR-body words
+is `statistics.quantiles(w, n=4)[2]`, the exclusive (interpolating) method, and the line didn't say so. Falsifier on
+crucible's own data: the 33 learned projects under `~/.crucible/projects`, each one's sample rebuilt as `learn_style`
+builds it (recent merged PRs, repeat authors first, 20), since style.json keeps only the result. 21 have n ≥ 10
+(all n = 20); exclusive, inclusive and nearest-rank (ceil(0.75 n)-th) **disagree on 20 of 21**, by 0 to 62 words
+(tox-dev/tox 304 / 262 / 242, colyseus 384 / 353 / 338, atuin 53 / 53 / 53 the only tie). The samples are today's,
+not the ones learned earlier. Fix: both p75 lines in STYLE.md read `(p75 N, interpolated, exclusive)` (`P75_RULE`,
+tested). No check compares against p75 (the length check uses the outside median), so no verdict changes.

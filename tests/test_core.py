@@ -1287,8 +1287,10 @@ class TestLearnStyleSources(unittest.TestCase):
         m = S.learn_style(self.c, "o/r", "o__r_outside", log=lambda *_: None)
         self.assertEqual(m["body"]["median_words"], 12)  # the regulars' sample is unchanged
         self.assertEqual((m["body"]["outside_median_words"], m["body"]["outside_prs"]), (142, 6))
-        self.assertIn("from outside contributors (6 merged PRs): median 142 words",
-                      open(os.path.join(S.project_dir("o__r_outside"), "STYLE.md")).read())
+        style_md = open(os.path.join(S.project_dir("o__r_outside"), "STYLE.md")).read()
+        self.assertIn("from outside contributors (6 merged PRs): median 142 words (p75 144, interpolated, exclusive)",
+                      style_md)
+        self.assertIn("median 12 words (p75 12, interpolated, exclusive)", style_md)   # every p75 names its rule
         self.assertEqual(S.ai_tells("word " * 183, m), [])
         tells = dict(S.ai_tells("word " * 400, m))  # falsifier: well past the outside norm still reads as long
         self.assertEqual(tells.get("length"), "400 words vs median 142 of 6 merged PRs from outside contributors")

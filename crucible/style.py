@@ -188,6 +188,12 @@ def comment_density(text):
     return round(100.0 * c / len(lines), 1)
 
 
+# how p75 is computed, named wherever one is shown: statistics.quantiles' default (exclusive) interpolates between
+# samples. On 21 learned projects' 20-PR samples it differed from the inclusive and nearest-rank rules on 20
+# (tox: 304 / 262 / 242 words; eval/NOTES 2026-11-27), so the number means little without its rule.
+P75_RULE = "interpolated, exclusive"
+
+
 def body_stats(bodies):
     bodies = [re.sub(r"<!--.*?-->", "", b or "", flags=re.S) for b in bodies]
     heads = collections.Counter(h.strip().lower() for b in bodies for h in HEADING_RX.findall(b))
@@ -316,11 +322,11 @@ def learn_style(repo, slug, project, n=20, model="claude-sonnet-5-5", budget_usd
     L = [f"# House style: {slug}", "", f"Measured from {len(sample)} recently merged PRs (repeat contributors first).", "",
          "## PR title", f"- median length {t['median_chars']} chars; formats: " + ", ".join(f"{k} ({v})" for k, v in t["formats"]),
          f"- ends with a period: {t['ends_with_period_pct']}%", "", "## PR body",
-         f"- median {b['median_words']} words (p75 {b['p75_words']}); headings in {b['pct_with_headings']}% "
+         f"- median {b['median_words']} words (p75 {b['p75_words']}, {P75_RULE}); headings in {b['pct_with_headings']}% "
          f"(common: {b['common_headings'] or 'none'}); tables {b['pct_with_tables']}%; screenshots {b['pct_with_images']}%; "
          f"emoji {b['pct_with_emoji']}%",
          *([f"- from outside contributors ({b['outside_prs']} merged PRs): median {b['outside_median_words']} words "
-            f"(p75 {b['outside_p75_words']}); the length check uses this"] if b.get("outside_median_words") else []),
+            f"(p75 {b['outside_p75_words']}, {P75_RULE}); the length check uses this"] if b.get("outside_median_words") else []),
          f"- issue references: {b['issue_ref_forms'] or 'none observed'}", "", "## Commits",
          f"- median subject {c['median_subject_chars']} chars; with body {c['pct_with_body']}%; formats: "
          + ", ".join(f"{k} ({v})" for k, v in c["formats"]), "",
