@@ -2351,6 +2351,9 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         prev_sha, prev_rev = (None, None) if full else previous_review(repo, project, sha, base, no_exec)
         if prev_rev is not None and bool(prev_rev.get("lens")) != lens:   # a plain round's draft findings can't carry into a lens
             prev_sha, prev_rev = None, None
+        # nor across the recall-first knob: the other brief's findings would be carried and only the delta re-read
+        if prev_rev is not None and bool((prev_rev.get("inputs") or {}).get("recall_first")) != recall_first():
+            prev_sha, prev_rev = None, None
         carried, carried_dropped, reverify = [], [], []
         if prev_sha:
             delta = git(repo, "diff", "--unified=5", "--no-color", f"{prev_sha}..HEAD")
@@ -2398,8 +2401,9 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
         schema = FINDINGS_NITS_SCHEMA if nits else FINDINGS_SCHEMA
         if recall:
             schema = _uncapped(schema)
-            record["recall_first"] = True
-            log("  recall-first reporting (CRUCIBLE_RECALL_FIRST=1): no findings cap, the description checked as a spec"
+            record["recall_first"] = {"cut_passes": 0, "cut_findings": 0}   # passes over RECALL_FINDINGS_MAX
+            log("  recall-first reporting (CRUCIBLE_RECALL_FIRST=1): no findings cap in the prompt, the description "
+                "checked as a spec"
                 + ("" if draft_text.strip() else "; no description to check"))
         def run_pass(i, ch, pbudget):
             """One review pass -> (ch, docs, out | None, cost, status). Runs in a worker thread for passes 2..n."""
@@ -2456,6 +2460,12 @@ def run_review(repo, base_ref=None, force=False, budget_usd=None, author=None, d
                 continue
             sweep_chunks.append(ch); sweep_notes.append(docs)
             summaries.append(out["summary"])
+            if recall and len(out["findings"]) > RECALL_FINDINGS_MAX:
+                over = len(out["findings"]) - RECALL_FINDINGS_MAX
+                record["recall_first"]["cut_passes"] += 1
+                record["recall_first"]["cut_findings"] += over
+                log(f"  note: a pass raised {len(out['findings'])} findings; the last {over} are left out "
+                    f"(RECALL_FINDINGS_MAX {RECALL_FINDINGS_MAX})")
             for f in out["findings"][:RECALL_FINDINGS_MAX if recall else 10]:
                 f = cite_draft(dict(f, source="review", **({"seat": 1} if n_seats > 1 else {})), dlabel, repo, tracked)
                 if f["file"] == dlabel and draft_path:

@@ -9610,7 +9610,7 @@ class TestRecallFirst(unittest.TestCase):
 
     def test_on_lifts_the_cap_and_checks_the_spec_in_every_pass(self):
         r, calls = self._run(env={"CRUCIBLE_RECALL_FIRST": "1"}, budget=5.0, nits=True, passes=2, draft=self.DRAFT)
-        self.assertTrue(r["recall_first"])
+        self.assertEqual(r["recall_first"], {"cut_passes": 0, "cut_findings": 0})
         rev = [c for c in calls if c["kind"] == "review"]
         self.assertEqual(len(rev), 2)
         for c in rev:
@@ -9635,6 +9635,31 @@ class TestRecallFirst(unittest.TestCase):
         r_on, _ = self._run(env={"CRUCIBLE_RECALL_FIRST": "1"}, budget=None, review_out=many, repo_files=self.BIG)
         self.assertEqual(n(r_off), 10)
         self.assertEqual(n(r_on), V.RECALL_FINDINGS_MAX)
+        self.assertEqual(r_on["recall_first"], {"cut_passes": 1, "cut_findings": 5})    # the cut is on record
+
+    def test_an_incremental_round_does_not_carry_across_the_knob(self):
+        from unittest import mock
+        repo = make_repo({"a.py": "x = 1\n"}, {"a.py": "x = 2\n"})
+        home = tempfile.mkdtemp(prefix="crucible-home-")
+
+        def fake(prompt, model, schema, cwd, budget=None, *a, **kw):
+            if kw.get("kind") == "review":
+                return {"summary": "s", "findings": [self._f("division by zero in f", 1)]}, 0.0
+            return {"keep": True, "severity": "important", "method": "read", "actions": "", "evidence": "e",
+                    "confidence": "high"}, 0.0
+
+        def run(knob):
+            with mock.patch.dict(os.environ, {"CRUCIBLE_RECALL_FIRST": knob, "CRUCIBLE_CACHE": os.path.join(home, "c")}):
+                d = V.run_review(repo, "main", offline=True, skip_checks=True, log=lambda *_: None)
+            return U.read_json(os.path.join(d, "review.json"))
+        with mock.patch.object(V, "HOME", home), mock.patch.object(U, "HOME", home), mock.patch.object(V, "claude", fake):
+            run("0")
+            for knob, carried in (("0", True), ("1", False), ("1", True), ("0", False)):
+                with open(os.path.join(repo, "a.py"), "a") as fh:
+                    fh.write(f"y = '{knob}{carried}'\n")
+                U.git(repo, "commit", "-qam", "more")
+                r = run(knob)
+                self.assertEqual(bool((r.get("incremental") or {}).get("from")), carried, (knob, carried))
 
     BIG = ({"a.py": "x = 1\n"}, {"a.py": "".join(f"y{i} = {i}\n" for i in range(200))})
 
