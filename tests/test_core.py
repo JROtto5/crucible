@@ -750,6 +750,45 @@ class TestDraftSplit(unittest.TestCase):
         d = R.split_draft("## Title\nfix: timestamps\n\n## Summary\nFixes #1.\n")
         self.assertEqual((d["title"], d["body"]), ("fix: timestamps", "## Summary\nFixes #1."))
 
+    def test_heading_level_bounds_in_split_draft(self):
+        # `#{1,4}` in BODY/TITLE/NOTES_HEAD_RX: levels 1 and 4 are headings, 5 and an indented bare word aren't
+        # (off line 1: a leading `# Body` would also pass as a `# Title` line with the same body after it)
+        for body, want in (("pre\n# Body\nx\n", "x"), ("#### Body\nx\n", "x"),
+                           ("##### Body\nx\n", "##### Body\nx"), (" Body\nx\n", " Body\nx")):
+            self.assertEqual(R.split_draft(body)["body"], want, body)
+        for draft, want in (("# Title\nfix: y\n\nB.\n", "fix: y"), ("#### Title\nfix: y\n\nB.\n", "fix: y"),
+                            ("##### Title\nfix: y\n\nB.\n", ""), (" Title\nfix: y\n\nB.\n", "")):
+            self.assertEqual(R.split_draft(draft)["title"], want, draft)
+        for head, notes in (("# Explain it to me", True), ("#### Explain it to me", True),
+                            ("##### Explain it to me", False), (" Explain it to me", False)):
+            self.assertEqual(R.split_draft(f"# T\n\nb\n\n{head}\nn\n")["notes"], f"{head}\nn" if notes else "", head)
+
+    def test_heading_level_bounds_in_template_and_style(self):
+        txt = "# One\n\n#### Four\n\n##### Five\n\n Zero\n"
+        self.assertEqual(R.template_headings(make_repo({".github/PULL_REQUEST_TEMPLATE.md": txt}))[1], ["One", "Four"])
+        self.assertEqual(S.HEADING_RX.findall(txt), ["One", "Four"])   # learn's common_headings and ai_tells read it
+
+    def test_polish_drops_the_title_block_at_heading_levels_1_to_4_only(self):
+        # style.polish strips the `#{1,4} Title` block it already put on top from the carried notes
+        cases = (("# Title\nfix a\n\n## Body\nFixes #1.\n", None),
+                 ("#### Title\nfix a\n\n## Body\nFixes #1.\n", None),
+                 ("# fix a\n\nFixes #1.\n\n## Explain it to me\n##### Title\nfix a\n", "##### Title\nfix a"),
+                 ("# fix a\n\nFixes #1.\n\n## Explain it to me\n Title\nfix a\n", " Title\nfix a"))
+        orig = S.claude
+        S.claude = lambda *a, **k: ({"title": "fix a", "body": "Fixes #1.", "removed": [], "kept_facts": []}, 0.0)
+        try:
+            for draft, kept in cases:
+                d = make_repo({"a.js": "1\n"})
+                open(os.path.join(d, "PR_DRAFT.md"), "w").write(draft)
+                S.polish(d, "t__polish_hbound", log=lambda *_: None)
+                txt = open(os.path.join(d, "PR_DRAFT.polished.md")).read()
+                if kept is None:
+                    self.assertNotIn("Title", txt.split("\n", 1)[1], draft)
+                else:
+                    self.assertIn(kept, txt, draft)
+        finally:
+            S.claude = orig
+
     def test_notes_dont_drive_findings(self):
         style = {"body": {"median_words": 60, "pct_with_emoji": 50, "pct_with_headings": 60,
                           "common_headings": ["description"]}}
