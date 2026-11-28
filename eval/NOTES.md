@@ -2253,3 +2253,38 @@ verification $ isn't printed by `eval`, so the batching saving itself is not mea
 and py-race, missed in the recall-first run, are caught here. That is one round, and both have flipped between rounds
 before, so the 1.0 is not a gain of this arm. What the run says is that keeping disputed findings put no false
 blocking on the clean cases. **Passes: the arm may go on ReviewBench, in its pre-registered place in the queue.**
+
+### 2026-11-28 · verifier drops vs TRAIN's missed high items: 0 of 25 restorable ($0, focus item d's target)
+
+**Question.** `CRUCIBLE_VERIFY_BATCH`'s ReviewBench gain was to be "high items kept that the per-claim verifier dropped"
+(entry above). Before that arm costs anything: in the stored TRAIN rounds, how many missed high items did the first pass
+raise and the verifier drop? `eval/replays/drops_train.py <run>` (blaze-3, refuses sealed keys) lists, for each high
+golden TP item a run's judge output leaves uncovered, every finding or nit that run's verifier dropped **in the same
+file** (the matcher is file-scoped). Same claim or not is read by hand. TRAIN only; no held-out or FINAL file opened.
+
+| | r8base (8a5d035) | r8train (fb540f5) |
+|---|---|---|
+| high items missed | 13 | 12 |
+| drops in the run (findings / nits) | 36 / 199 | 45 / 231 |
+| drops in a missed item's file | 11 (on 4 items) | 4 (on 1 item) |
+| **of those, the missed item's own claim** | **0** | **0** |
+
+Read by hand:
+- agent-orchestrator #4 (r8base): the drop is "default `REPO_ROOT` is wrong after the move" at `ao-update.sh:43`; the
+  item is the stale `packages/agent-orchestrator/bin/ao.js` path in `run_smoke_tests` (:59-64). Neighbouring, not the
+  same claim. Its verdict confirmed the mechanism and dropped on reachability, which the batch verifier would keep as
+  disputed (no line or command disproof). **Upper bound 1**, if a judge matched it loosely.
+- katana #31: the drop is about `item_type` values at :141; the item is the uncached `get_by_sku()` at :541. Different.
+- ia-dev-environment #28 (both rounds; 4 + 4 drops): the item is golden fixtures not updated for a new core skill;
+  the drops are about the skill text itself (allowed-tools, placeholders, phases). Different.
+- swarmbase #43: 5 nits left unverified by the nit budget, none about the snapshot path not firing update handlers.
+
+**Reading.** On TRAIN as crucible runs today, the verifier cost **0 of 25** missed high-item instances (bound 1), so
+the batch verifier's stated gain has nothing to restore here: the misses are never raised (or raised elsewhere), as the
+11-24 split already said (9 of 13). It can only matter on claims a recall lever newly raises (seat, recall-first), and
+stored runs can't show that. Proposal for the queue (the main session's call; the arm's place stays as pre-registered
+unless it says otherwise): don't spend a stand-alone ~$25 TRAIN stage on `CRUCIBLE_VERIFY_BATCH` for high recall. Run
+it, if at all, as a cost and precision check (verification $ per PR, false alarms on the 3 clean PRs) or on the image
+of whichever recall lever passes its stage 1, as that lever's next arm. Falsifier for this reading: a stage-1 run of
+the seat or recall-first in which a high item is raised in the right file and then dropped by the per-claim verifier
+without a cited disproof. Check every stage-1 run's drops with this script before deciding.
