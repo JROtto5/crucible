@@ -1,11 +1,14 @@
 """drops_train.py <run> : $0 read of a ReviewBench run's stored verifier drops against the high items it missed
-(eval/NOTES 2026-11-28). TRAIN only: refuses any key of the sealed held-out 50 or FINAL 84. For each high golden TP item
-the run's judge output leaves uncovered, prints the item and every finding or nit dropped in the same file (the matcher
-is file-scoped, so a drop in another file can't be credited), with the stored verdict; ones the budget left unverified
-are counted apart. Same-claim is then read by hand. RB: the ReviewBench checkout (default ~/rb-work/ReviewBench); review.json is read from .try-agent-<run>."""
+(eval/NOTES 2026-11-28). TRAIN only: refuses any key of the sealed held-out 50 or FINAL 84. For each high golden TP
+item the run's judge output leaves uncovered, prints the item and every finding or nit dropped in the same file (the
+matcher is file-scoped, so a drop in another file can't be credited), with the stored verdict; ones the budget left
+unverified are counted apart. Same-claim is then read by hand. RB: the ReviewBench checkout (default
+~/rb-work/ReviewBench); review.json is read from .try-agent-<run>."""
 import json, os, sys
 B = os.path.expanduser(os.environ.get("RB", "~/rb-work/ReviewBench")); run = sys.argv[1]; work = f"{B}/.try-agent-{run}"
-sealed = set(json.load(open(f"{B}/corpus/heldout50/SEAL.json"))["keys"]) | set(json.load(open(f"{B}/corpus/final84/SEAL.json"))["keys"])
+sealed = set()
+for name in ("heldout50", "final84"):
+    sealed |= set(json.load(open(f"{B}/corpus/{name}/SEAL.json"))["keys"])
 cov = {}
 for p in json.load(open(f"{B}/runs/{run}/scoring/results.details.json")):
     assert p["pr_key"] not in sealed, p["pr_key"]
@@ -36,5 +39,7 @@ for k in sorted(cov):
                 else:
                     ndrop += 1
                 print(f"   DROP[{kind}] {y.get('severity')} {y['file']}:{y.get('line')} {(y.get('title') or '')[:120]}")
-                print(f"      {v.get('status')} {v.get('method')} conf={v.get('confidence')} :: {(v.get('evidence') or '')[:500]}")
-print(f"\n{run}: high missed {nmiss}, same-file verifier drops {ndrop} (+{nunver} left unverified), missed-item PRs with no review.json {noreview}")
+                why = (v.get("evidence") or "")[:500]
+                print(f"      {v.get('status')} {v.get('method')} conf={v.get('confidence')} :: {why}")
+print(f"\n{run}: high missed {nmiss}, same-file verifier drops {ndrop} (+{nunver} left unverified), "
+      f"missed-item PRs with no review.json {noreview}")

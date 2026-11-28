@@ -2256,11 +2256,12 @@ blocking on the clean cases. **Passes: the arm may go on ReviewBench, in its pre
 
 ### 2026-11-28 · verifier drops vs TRAIN's missed high items: 0 of 25 restorable, bound 1 ($0, focus item d's target)
 
-**Question.** `CRUCIBLE_VERIFY_BATCH`'s ReviewBench gain was to be "high items kept that the per-claim verifier dropped"
-(entry above). Before that arm costs anything: in the stored TRAIN rounds, how many missed high items did the first pass
-raise and the verifier drop? `eval/replays/drops_train.py <run>` (blaze-3, refuses sealed keys) lists, for each high
-golden TP item a run's judge output leaves uncovered, every finding or nit that run's verifier dropped **in the same
-file** (the matcher is file-scoped). Same claim or not is read by hand. TRAIN only: of the held-out and FINAL sets only their SEAL key lists are read, to refuse those keys.
+**Question.** `CRUCIBLE_VERIFY_BATCH`'s ReviewBench gain was to be "high items kept that the per-claim verifier
+dropped" (entry above). Before that arm costs anything: in the stored TRAIN rounds, how many missed high items did the
+first pass raise and the verifier drop? `eval/replays/drops_train.py <run>` (blaze-3, refuses sealed keys) lists, for
+each high golden TP item a run's judge output leaves uncovered, every finding or nit that run's verifier dropped **in
+the same file** (the matcher is file-scoped). Same claim or not is read by hand. TRAIN only: of the held-out and FINAL
+sets only their SEAL key lists are read, to refuse those keys.
 
 | | r8base (8a5d035) | r8train (fb540f5) |
 |---|---|---|
