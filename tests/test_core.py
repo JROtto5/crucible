@@ -9513,6 +9513,21 @@ class TestMentions(unittest.TestCase):
                        "git", "diff", "main..fix") + "\n")
         self.assertEqual(mentions.changed_values(t), {})                         # a test's fixture string
 
+    def test_quantifier_bounds_are_pinned(self):
+        """STR_RX's {3,200} (each quote kind) and ID_RX's {1,9} prefix and \\d{2,} digits, at the bound and one past."""
+        from crucible import mentions
+        for q in "'\"`":
+            self.assertEqual(mentions._strings(f"x({q}abc{q}, {q}ab{q})"), ["abc"])           # 3 in, 2 out
+            p200, p201 = "src/" + "x" * 196, "src/" + "x" * 197
+            self.assertEqual(mentions._strings(f"a = {q}{p200}{q}; b = {q}{p201}{q}"), [p200])
+        # through changed_values: no value is shorter than 5 (AB-01), so STR_RX's lower bound is only seen above
+        ids = ["AB-01", "A-01", "ABCDEFGHIJ-01", "ABCDEFGHIJK-01", "ABCDE-1",
+               "src/" + "y" * 196, "src/" + "y" * 197]
+        old = "".join(f"v{i} = '{s}'\n" for i, s in enumerate(ids))
+        f = D.parse(sh(make_repo({"src/a.py": old}, {"src/a.py": "v = 1\n"}), "git", "diff", "main..fix") + "\n")
+        # a 2- and a 10-letter prefix with 2 digits; not a 1- or 11-letter prefix, nor 1 digit; a 200-char path, not 201
+        self.assertEqual(sorted(mentions.changed_values(f)), sorted(["AB-01", "ABCDEFGHIJ-01", "src/" + "y" * 196]))
+
     def test_reader_caps(self):
         from crucible import mentions
         many = {f"m{i}/f.ts": "go('/route/one')\n" for i in range(9)}
